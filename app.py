@@ -595,35 +595,6 @@ def index():
     return render_template('index.html')
 
 
-@app.route('/morning', methods=['GET', 'POST'])
-def morning_page():
-    rows = db.watchlist_list()
-    symbols_csv = ", ".join(r["symbol"] for r in reversed(rows))
-    if request.method == 'POST':
-        symbols_raw = request.form.get('symbols', '')
-        ok, msg = db.watchlist_set(symbols_raw)
-        if ok:
-            return redirect(url_for('morning_page', msg=msg))
-        return redirect(url_for('morning_page', error=msg, symbols=symbols_raw))
-    if request.args.get('symbols'):
-        symbols_csv = request.args.get('symbols', symbols_csv)
-    snapshots = decide.build_morning_scan()
-    flagged = sum(1 for s in snapshots if s.get('flags'))
-    return render_template(
-        'morning.html',
-        snapshots=snapshots,
-        symbols_csv=symbols_csv,
-        flagged_count=flagged,
-        message=request.args.get('msg'),
-        error=request.args.get('error'),
-    )
-
-
-@app.route('/api/morning')
-def morning_api():
-    return jsonify({"snapshots": decide.build_morning_scan()})
-
-
 @app.route('/health')
 def health():
     return jsonify({"status": "ok"}), 200
@@ -2116,7 +2087,7 @@ def analytics_page():
     data['gex'] = gex['stats'] if gex else None
 
     trade_type = request.args.get('trade_type', 'long_stock')
-    if trade_type not in db.WATCHLIST_TRADE_TYPES:
+    if trade_type not in decide.TRADE_TYPES:
         trade_type = 'long_stock'
     data['checklist'] = decide.build_checklist(ticker, data, trade_type)
 
@@ -2194,7 +2165,7 @@ def analytics_page():
 def checklist_api(ticker):
     ticker = ticker.strip().upper()
     trade_type = request.args.get('trade_type', 'long_stock')
-    if trade_type not in db.WATCHLIST_TRADE_TYPES:
+    if trade_type not in decide.TRADE_TYPES:
         trade_type = 'long_stock'
     data = compute_analytics(ticker)
     if data is None:

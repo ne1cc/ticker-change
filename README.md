@@ -29,20 +29,15 @@ forecasts. See [What we don't claim](#what-we-dont-claim).
 
 ## How you'll use it
 
-Two modes, one app:
-
-| When | Question | Flow |
-| --- | --- | --- |
-| **Morning** | What deserves attention today? | Scan → pick 1–3 names |
-| **Pre-trade** | Is this swing worth taking? | Deep dive → go or pass |
+One mode, one app: **Pre-trade** — is this swing worth taking? Enter a
+ticker, deep dive, go or pass.
 
 ```
-/morning watchlist  →  Morning flags  →  Six views per ticker  →  Checklist on /analytics
+Enter a ticker  →  Six views  →  Checklist on /analytics
 ```
 
-**Workflow:** add symbols on [`/morning`](https://ticker-change.fly.dev/morning) → scan flags → open **Check** → pre-trade checklist on `/analytics`.
-
-See [`docs/PRODUCT_STRATEGY.md`](docs/PRODUCT_STRATEGY.md) for roadmap (trade journal deferred).
+**Workflow:** enter a symbol → work through the six views → pre-trade
+checklist on `/analytics`.
 
 ---
 
@@ -52,7 +47,7 @@ Everything maps to one of three layers:
 
 ```
 ┌─────────────────────────────────────────┐
-│  DECIDE  — watchlist, morning scan, pre-trade checklist │  built
+│  DECIDE  — pre-trade checklist          │  built
 ├─────────────────────────────────────────┤
 │  UNDERSTAND — GEX, IV, momentum, risk   │  built ← current strength
 ├─────────────────────────────────────────┤
@@ -69,7 +64,6 @@ symbol across every page.
 
 | View | Route | Purpose |
 | --- | --- | --- |
-| **Morning scan** | `/morning` | Watchlist + alert flags (earnings, IV, momentum, insider, extension) |
 | **Price Table** | `/stock` | Multi-period change, candlestick chart, fundamentals glance |
 | **Risk Analytics** | `/analytics` | Volatility, VaR, GEX, Monte Carlo, **pre-trade checklist**, Buyer Signals |
 | **Market Positioning** | `/positioning` | Valuation, analyst ratings, insider activity, 13F holders |
@@ -132,18 +126,11 @@ Every metric has an `(i)` tooltip linking to [`/glossary`](/glossary).
 
 ### Decide — go/no-go support
 
-**`/morning`**
-- SQLite watchlist (up to 25 symbols) with trade type and note
-- Compact scan table: 1D/5D change, momentum rank, alert flags
-- Flags: earnings ≤5d, IV rank >70, momentum extremes, insider net sell, >2 ATR extension
-
 **`/analytics` (checklist card)**
 - Six pass / warn / fail checks: trend, momentum, IV, earnings, GEX, extension
-- One-line verdict summary; linked from morning **Check** action
+- One-line verdict summary
 
-**API:** `GET /api/morning`, `GET /api/checklist/<ticker>`
-
-Trade journal — deferred. Details: [`docs/PRODUCT_STRATEGY.md`](docs/PRODUCT_STRATEGY.md)
+**API:** `GET /api/checklist/<ticker>`
 
 ---
 
@@ -210,7 +197,6 @@ JSON twins of every view, plus health and config:
 
 | Endpoint | Returns |
 | --- | --- |
-| `GET /api/morning` | Watchlist scan with alert flags |
 | `GET /api/checklist/<ticker>` | Pre-trade checklist (`?trade_type=long_stock`) |
 | `GET /api/stock/<ticker>` | Price, period changes, chart metadata |
 | `GET /api/analytics/<ticker>` | Risk stats and metrics |
@@ -259,7 +245,7 @@ Fly.io mounts a persistent volume at `/data` for `stocks.db`. Also ships with
 ## Project structure
 
 ```
-decide.py         Morning scan flags and pre-trade checklist
+decide.py       Pre-trade checklist
 app.py          Routes, analytics, charts, options pricing, momentum backtest
 providers.py    Finnhub / FMP / SEC / AI clients (fail gracefully)
 db.py           SQLite: prices, api_cache, settings
@@ -290,7 +276,6 @@ delayed data.
 | Doc | Contents |
 | --- | --- |
 | [`docs/PRODUCT_IDENTITY.md`](docs/PRODUCT_IDENTITY.md) | Category, positioning, principles, vocabulary |
-| [`docs/PRODUCT_STRATEGY.md`](docs/PRODUCT_STRATEGY.md) | Personas, watchlist roadmap, first sprint |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | DuckDB / dbt analytics pipeline (separate track) |
 | [`CLAUDE.md`](CLAUDE.md) | Architecture guide for contributors |
 
