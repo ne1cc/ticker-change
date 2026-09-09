@@ -169,6 +169,11 @@ are suppressed.
 All keys optional; every layer degrades gracefully. Settings-page values
 override environment variables.
 
+**`SETTINGS_PASSWORD`** gates the `/settings` page itself (HTTP Basic
+Auth) — required, since every key saved there is global to the app
+instance, not scoped per visitor. Without it, `/settings` refuses to
+serve rather than falling back to open access.
+
 ### Market data
 
 | Env var | Provider | Powers |
