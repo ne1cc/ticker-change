@@ -2680,8 +2680,8 @@ def compute_momentum(ticker: str) -> dict:
     }
 
 
-@app.route('/momentum')
-def momentum_page():
+@app.route('/strategies')
+def strategies_page():
     COST_BPS = 7.5
     tab = request.args.get('tab', 'universe')
     symbol = request.args.get('symbol', '').upper().strip()
@@ -2692,7 +2692,7 @@ def momentum_page():
         rows = conn.execute("SELECT DISTINCT symbol FROM daily_prices").fetchall()
     symbols = [r["symbol"] for r in rows if r["symbol"] not in MOMENTUM_BENCHMARK_ETFS]
     if not symbols:
-        return render_template('momentum.html', data=None, error="No stock price data available in the database. Please visit the homepage and search for tickers first.")
+        return render_template('strategies.html', data=None, error="No stock price data available in the database. Please visit the homepage and search for tickers first.")
 
     # Sort symbols for the dropdown list
     available_symbols = sorted(symbols)
@@ -2704,7 +2704,7 @@ def momentum_page():
             
         if symbol not in available_symbols:
             return render_template(
-                'momentum.html',
+                'strategies.html',
                 data=None,
                 tab='ticker',
                 available_symbols=available_symbols,
@@ -2716,7 +2716,7 @@ def momentum_page():
         df = db.get_prices(symbol)
         if df is None or len(df) < 273:  # 252 + 21
             return render_template(
-                'momentum.html',
+                'strategies.html',
                 data=None,
                 tab='ticker',
                 available_symbols=available_symbols,
@@ -2995,7 +2995,7 @@ def momentum_page():
         }
 
         return render_template(
-            'momentum.html',
+            'strategies.html',
             data=data,
             tab='ticker',
             header_badge=f"{symbol} · Rank #{rank} of {len(universe_scores)}",
@@ -3020,7 +3020,7 @@ def momentum_page():
 
         if not prices:
             return render_template(
-                'momentum.html',
+                'strategies.html',
                 data=None,
                 tab='screener',
                 error="No stock data available in database.",
@@ -3032,7 +3032,7 @@ def momentum_page():
         price_df = pd.DataFrame(prices)
         if len(price_df) < 273:
             return render_template(
-                'momentum.html',
+                'strategies.html',
                 data=None,
                 tab='screener',
                 error="Insufficient price history in database to run screener.",
@@ -3103,7 +3103,7 @@ def momentum_page():
         }
 
         return render_template(
-            'momentum.html',
+            'strategies.html',
             data=data,
             tab='screener',
             header_badge=f"Screened {len(screened_results)} Tickers",
@@ -3122,7 +3122,7 @@ def momentum_page():
             prices[t] = df["close"]
     
     if not prices:
-        return render_template('momentum.html', data=None, error="Failed to load price data.")
+        return render_template('strategies.html', data=None, error="Failed to load price data.")
 
     price_df = pd.DataFrame(prices)
     
@@ -3131,7 +3131,7 @@ def momentum_page():
     exclude_days = 21
     
     if len(price_df) < momentum_lookback + 2:
-        return render_template('momentum.html', data=None, error=f"Insufficient history in database. Need at least {momentum_lookback} daily bars.")
+        return render_template('strategies.html', data=None, error=f"Insufficient history in database. Need at least {momentum_lookback} daily bars.")
         
     daily_rets = price_df.pct_change()
 
@@ -3304,7 +3304,7 @@ def momentum_page():
     }
 
     return render_template(
-        'momentum.html',
+        'strategies.html',
         data=data,
         tab='universe',
         header_badge=f"Sharpe {strat_stats['sharpe']} · IR {rel_spy['info_ratio']} vs SPY",
