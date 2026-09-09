@@ -33,43 +33,14 @@ import api_docs
 import decide
 from glossary import GLOSSARY
 
-# --- yfinance custom session with browser headers to prevent Cloud IP blocking ---
-_YF_SESSION = None
-_YF_SESSION_LOCK = threading.Lock()
-
-def _get_yf_session():
-    global _YF_SESSION
-    if _YF_SESSION is not None:
-        return _YF_SESSION
-    with _YF_SESSION_LOCK:
-        if _YF_SESSION is not None:
-            return _YF_SESSION
-        import requests
-        from requests.adapters import HTTPAdapter
-        from urllib3.util import Retry
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "*/*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Origin": "https://finance.yahoo.com",
-            "Referer": "https://finance.yahoo.com",
-        })
-        retries = Retry(
-            total=3,
-            backoff_factor=0.6,
-            status_forcelist=[429, 500, 502, 503, 504],
-            raise_on_status=False
-        )
-        adapter = HTTPAdapter(max_retries=retries)
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
-        _YF_SESSION = session
-    return _YF_SESSION
-
 def _get_yf_ticker(symbol: str) -> yf.Ticker:
-    """Return a yfinance Ticker instance configured with a custom, browser-like requests session."""
-    return yf.Ticker(symbol.upper(), session=_get_yf_session())
+    """Return a yfinance Ticker instance.
+
+    yfinance manages its own curl_cffi session (with browser TLS/header
+    impersonation) internally as of the 1.x line; passing a plain
+    requests.Session raises "Yahoo API requires curl_cffi session".
+    """
+    return yf.Ticker(symbol.upper())
 
 app = Flask(__name__)
 CORS(app)
