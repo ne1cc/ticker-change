@@ -68,7 +68,7 @@ symbol across every page.
 | **Risk Analytics** | `/analytics` | Volatility, VaR, GEX, Monte Carlo, **pre-trade checklist**, Buyer Signals |
 | **Market Positioning** | `/positioning` | Valuation, analyst ratings, insider activity, 13F holders |
 | **Live & Options** | `/live` | Trades feed, option chain + Greeks, IV rank, strategy posture |
-| **Momentum** | `/momentum` | Cross-sectional rank, screener, single-ticker backtest |
+| **Strategies** | `/strategies` | Cross-sectional relative-strength rank, screener, single-ticker backtest |
 | **AI Report** | `/ai-summary` | LLM desk note synthesising metrics (optional; needs AI key) |
 
 Also: [`/glossary`](https://ticker-change.fly.dev/glossary) (metric reference),
@@ -113,8 +113,8 @@ SEC EDGAR panels work with **no API keys**.
 - IV rank / percentile, expected move, max pain, put-call ratios
 - Strategy posture suggestions based on IV vs HV
 
-**`/momentum`**
-- Universe momentum leaderboard (12-1 month rank)
+**`/strategies`**
+- Universe relative-strength leaderboard (12-1 month rank) with rotation backtest vs SPY/QQQ
 - Cross-sectional screener with minimum momentum filters
 - Single-ticker trend backtest with alpha/beta vs SPY
 
