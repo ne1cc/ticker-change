@@ -1,11 +1,8 @@
 {% if checklist %}
 <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 sm:p-5 mb-6 shadow-sm">
-  <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
-    <div>
-      <h2 class="text-xs font-semibold uppercase tracking-widest text-zinc-900 dark:text-zinc-100">Pre-trade checklist</h2>
-      <p class="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">{{ checklist.trade_label }} · {{ checklist.ticker }}</p>
-    </div>
-    <a href="/morning" class="text-[11px] text-amber-600 dark:text-amber-400 hover:underline">Morning scan →</a>
+  <div class="mb-3">
+    <h2 class="text-xs font-semibold uppercase tracking-widest text-zinc-900 dark:text-zinc-100">Pre-trade checklist</h2>
+    <p class="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">{{ checklist.trade_label }} · {{ checklist.ticker }}</p>
   </div>
   <ul class="space-y-1.5">
     {% for c in checklist.checks %}
