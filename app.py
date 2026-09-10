@@ -7,6 +7,7 @@ from flask_cors import CORS
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -173,27 +174,48 @@ def _close_n_sessions_ago(df, n_sessions, *, live_mode=False):
 
 
 def calculate_date_periods():
-    """Calculate the date periods for comparison (calendar-based; 1D–5D handled separately)."""
+    """Calculate calendar-based comparison dates for 1W through 5Y and YTD."""
     today = datetime.now()
-    
-    # include a richer set of short-term periods: days 1-5 and weeks 1-4
-    periods = {
-        '1W': today - timedelta(weeks=1),
-        '2W': today - timedelta(weeks=2),
-        '3W': today - timedelta(weeks=3),
-        '1M': today - timedelta(days=30),
-        '2M': today - timedelta(days=60),
-        '3M': today - timedelta(days=90),
-        '6M': today - timedelta(days=180),
-        '1Y': today - timedelta(days=365),
-        '2Y': today - timedelta(days=365*2),
-        '3Y': today - timedelta(days=365*3),
-        '4Y': today - timedelta(days=365*4),
-        '5Y': today - timedelta(days=365*5),
-        'YTD': datetime(today.year, 1, 1)
+    return {
+        '1W':  today - timedelta(weeks=1),
+        '2W':  today - timedelta(weeks=2),
+        '3W':  today - timedelta(weeks=3),
+        '1M':  today - relativedelta(months=1),
+        '2M':  today - relativedelta(months=2),
+        '3M':  today - relativedelta(months=3),
+        '6M':  today - relativedelta(months=6),
+        '1Y':  today - relativedelta(years=1),
+        '2Y':  today - relativedelta(years=2),
+        '3Y':  today - relativedelta(years=3),
+        '4Y':  today - relativedelta(years=4),
+        '5Y':  today - relativedelta(years=5),
+        'YTD': datetime(today.year, 1, 1),
     }
-    
-    return periods
+
+
+def _find_closest_trading_price(
+    df: pd.DataFrame, target_date, max_tolerance_days: int = 30
+) -> tuple[float | None, str | None]:
+    """Find the historical close price on the trading day closest to target_date.
+
+    Handles weekends, holidays, and boundaries at the start of the historical series.
+    Returns (historical_price, matched_date_str) or (None, None) if outside tolerance.
+    """
+    if df is None or df.empty:
+        return None, None
+
+    target_ts = pd.to_datetime(target_date).tz_localize(None).normalize()
+    df_idx = pd.to_datetime(df.index).tz_localize(None).normalize()
+
+    sec_diff = np.abs((df_idx - target_ts).total_seconds())
+    closest_pos = int(sec_diff.argmin())
+    closest_date = df_idx[closest_pos]
+    diff_days = abs((closest_date - target_ts).days)
+
+    if diff_days <= max_tolerance_days:
+        price = float(df['close'].iloc[closest_pos])
+        return price, closest_date.strftime('%Y-%m-%d')
+    return None, None
 
 def get_current_price_yfinance(ticker, retries=3):
     """Get current price using yfinance with retry logic and extended hours (pre-market 4am / after-hours)."""
@@ -479,8 +501,15 @@ def get_chart_data_json(ticker, start_date=None, end_date=None):
         }
     }
 
-def _append_period_change(percentage_data, net_change_data, period_name, current_price, historical_price):
-    if historical_price and not np.isnan(historical_price) and historical_price != 0:
+def _append_period_change(
+    percentage_data,
+    net_change_data,
+    period_name,
+    current_price,
+    historical_price,
+    matched_date=None,
+):
+    if historical_price is not None and not np.isnan(historical_price) and historical_price != 0:
         net_change = current_price - historical_price
         pct_change = ((current_price - historical_price) / historical_price) * 100
         percentage_data.append({
@@ -488,16 +517,18 @@ def _append_period_change(percentage_data, net_change_data, period_name, current
             "value": round(pct_change, 2),
             "raw_value": pct_change,
             "is_positive": pct_change > 0,
+            "matched_date": matched_date,
         })
         net_change_data.append({
             "period": period_name,
             "value": round(net_change, 2),
             "raw_value": net_change,
             "is_positive": net_change > 0,
+            "matched_date": matched_date,
         })
     else:
-        percentage_data.append({"period": period_name, "value": "N/A"})
-        net_change_data.append({"period": period_name, "value": "N/A"})
+        percentage_data.append({"period": period_name, "value": "N/A", "matched_date": None})
+        net_change_data.append({"period": period_name, "value": "N/A", "matched_date": None})
 
 
 def _append_weekend_placeholder(percentage_data, net_change_data, period_name):
@@ -520,37 +551,32 @@ def get_stock_data(ticker):
     live_mode = live_price is not None and not _is_weekend()
     current_price = live_price if live_mode else db_latest_close
     periods = calculate_date_periods()
-    today_is_weekend = _is_weekend()
 
     percentage_data = [{"period": "Current Price", "value": f"${current_price:.2f}"}]
     net_change_data = [{"period": "Current Price", "value": f"${current_price:.2f}"}]
 
     for period_name in list(SHORT_DAY_PERIODS.keys()) + list(periods.keys()):
         if period_name in SHORT_DAY_PERIODS:
-            if today_is_weekend:
-                _append_weekend_placeholder(percentage_data, net_change_data, period_name)
-                continue
             n_sessions = SHORT_DAY_PERIODS[period_name]
             historical_price = _close_n_sessions_ago(df, n_sessions, live_mode=live_mode)
+            session_date = None
+            if len(df) >= n_sessions:
+                latest_bar = pd.to_datetime(df.index[-1]).normalize()
+                today_norm = pd.Timestamp.now().normalize()
+                hist_idx = -n_sessions if (live_mode and latest_bar < today_norm) else -(n_sessions + 1)
+                if len(df) >= abs(hist_idx):
+                    session_date = pd.to_datetime(df.index[hist_idx]).strftime('%Y-%m-%d')
             _append_period_change(
-                percentage_data, net_change_data, period_name, current_price, historical_price
+                percentage_data, net_change_data, period_name, current_price, historical_price, session_date
             )
             continue
 
         target_date = periods[period_name]
-        target_ts = pd.to_datetime(target_date).tz_localize(None)
-        valid = df[df.index <= target_ts]
-        if valid.empty:
-            historical_price = None
-        else:
-            historical_price = float(valid['close'].iloc[-1])
-
-        if _is_weekend(target_date):
-            _append_weekend_placeholder(percentage_data, net_change_data, period_name)
-        else:
-            _append_period_change(
-                percentage_data, net_change_data, period_name, current_price, historical_price
-            )
+        tolerance = 30 if ('Y' in period_name and period_name != 'YTD') else 14
+        historical_price, matched_date = _find_closest_trading_price(df, target_date, max_tolerance_days=tolerance)
+        _append_period_change(
+            percentage_data, net_change_data, period_name, current_price, historical_price, matched_date
+        )
 
     chart_result = generate_stock_chart(ticker)
     return {
@@ -638,11 +664,12 @@ def stock_page():
         def _lookback_result(target_date, label_type, label_count):
             if df_cached is None or df_cached.empty:
                 return {'error': 'No price data available'}
-            target_ts = pd.to_datetime(target_date).tz_localize(None)
-            valid = df_cached[df_cached.index <= target_ts]
-            if valid.empty:
+            tolerance = 30 if (label_count >= 365) else 14
+            historical_price, matched_dt = _find_closest_trading_price(
+                df_cached, target_date, max_tolerance_days=tolerance
+            )
+            if historical_price is None:
                 return {'error': f'Could not retrieve price for {label_count} {label_type} ago'}
-            historical_price = float(valid['close'].iloc[-1])
             current_price = data['current_price']
             net_change = current_price - historical_price
             pct_change = ((current_price - historical_price) / historical_price) * 100
@@ -652,7 +679,7 @@ def stock_page():
             return {
                 'type': label_type,
                 'days': label_count,
-                'target_date': target_date.strftime('%Y-%m-%d'),
+                'target_date': matched_dt or target_date.strftime('%Y-%m-%d'),
                 'historical_price': round(historical_price, 2),
                 'current_price': round(current_price, 2),
                 'net_change': round(net_change, 2),
