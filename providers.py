@@ -334,7 +334,11 @@ def yfinance_insider_transactions(symbol: str, limit: int = 15):
     """Fetch insider transactions from yfinance (keyless secondary feed)."""
     try:
         import yfinance as yf
-        stock = yf.Ticker(symbol.upper(), session=_SESSION)
+        # yfinance manages its own curl_cffi session internally as of 1.x;
+        # passing _SESSION (a plain requests.Session, shared with the
+        # Finnhub/FMP calls elsewhere in this module) raises "Yahoo API
+        # requires curl_cffi session".
+        stock = yf.Ticker(symbol.upper())
         df = getattr(stock, "insider_transactions", None)
         if df is None or df.empty:
             df = getattr(stock, "insider_roster_holders", None)
