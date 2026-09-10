@@ -28,18 +28,23 @@ TOP_N = 5
 REBALANCE_FREQ = 21
 
 STRATEGIES = {
-    "relative_strength": "Relative Strength (12-1 Momentum)",
-    "dual_momentum": "Dual Momentum (Relative + Absolute)",
-    "sma_trend": "SMA 50/200 Golden Cross",
+    "relative_strength": {"label": "12-1 Relative Strength (Top-5 Rotation)",
+                          "family": "momentum", "hurdle": None},
+    "dual_momentum":     {"label": "Dual Momentum (Relative + Absolute Filter)",
+                          "family": "momentum", "hurdle": RF_ANNUAL},
+    "sma_trend":         {"label": "SMA Trend Following (50/200 Golden Cross)",
+                          "family": "sma",      "hurdle": None},
 }
 
 
 def absolute_hurdle(strategy_id: str) -> float | None:
     """Annualised risk-free hurdle scaled to the 11-month momentum window
-    (t-252 to t-21), or None for strategies with no absolute-return gate."""
-    if strategy_id != "dual_momentum":
+    (t-252 to t-21), or None for strategies with no absolute-return gate
+    (including an unrecognized `strategy_id`)."""
+    raw = STRATEGIES.get(strategy_id, {}).get("hurdle")
+    if raw is None:
         return None
-    return (1 + RF_ANNUAL) ** ((MOMENTUM_LOOKBACK - MOMENTUM_EXCLUDE) / 252) - 1
+    return (1 + raw) ** ((MOMENTUM_LOOKBACK - MOMENTUM_EXCLUDE) / 252) - 1
 
 
 @dataclass
@@ -283,7 +288,8 @@ def backtest_rotation(price_df: pd.DataFrame, symbols: list[str],
     daily_rets = price_df.pct_change(fill_method=None)
     start_idx = MOMENTUM_LOOKBACK + 1
     hurdle = absolute_hurdle(strategy_id)
-    is_sma = strategy_id == "sma_trend"
+    family = STRATEGIES.get(strategy_id, {}).get("family", "momentum")
+    is_sma = family == "sma"
 
     active_portfolio: list[str] = []
     prev_weights: dict[str, float] = {}
@@ -357,8 +363,9 @@ def backtest_timeseries(close: pd.Series, strategy_id: str = "relative_strength"
     absolute hurdle (0.0 for strategies with no hurdle).
     """
     daily_rets = close.pct_change(fill_method=None)
+    family = STRATEGIES.get(strategy_id, {}).get("family", "momentum")
 
-    if strategy_id == "sma_trend":
+    if family == "sma":
         raw_signal = sma_spread(close) > 0
     else:
         hurdle = absolute_hurdle(strategy_id) or 0.0

@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 
 from momentum_engine import (
+    RF_ANNUAL,
+    STRATEGIES,
     absolute_hurdle,
     backtest_rotation,
     backtest_timeseries,
@@ -228,8 +230,28 @@ class TestBacktestTimeseries(unittest.TestCase):
         hurdle = absolute_hurdle("dual_momentum")
         self.assertIsNotNone(hurdle)
         self.assertGreater(hurdle, 0.0)
+        # 11-month scaling of a 12-month rate must be strictly smaller.
+        self.assertLess(hurdle, RF_ANNUAL)
         self.assertIsNone(absolute_hurdle("relative_strength"))
         self.assertIsNone(absolute_hurdle("sma_trend"))
+
+
+class TestStrategiesRegistry(unittest.TestCase):
+    def test_registry_shape(self):
+        self.assertEqual(set(STRATEGIES.keys()),
+                          {"relative_strength", "dual_momentum", "sma_trend"})
+        for strategy_id, entry in STRATEGIES.items():
+            self.assertEqual(set(entry.keys()), {"label", "family", "hurdle"})
+            self.assertIsInstance(entry["label"], str)
+            self.assertIn(entry["family"], {"momentum", "sma"})
+
+    def test_unknown_strategy_id_is_defensible(self):
+        # absolute_hurdle and the family dispatch must not raise on a bad id.
+        self.assertIsNone(absolute_hurdle("bogus"))
+        idx = _bidx(400)
+        close = pd.Series(100.0 + np.arange(400, dtype=float), index=idx)
+        result = backtest_timeseries(close, strategy_id="bogus")
+        self.assertEqual(len(result.strategy_returns), len(close) - 253)
 
 
 if __name__ == "__main__":
