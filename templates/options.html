@@ -1,0 +1,590 @@
+{% extends "base.html" %}
+
+{% block title %}{{ ticker }} Options Terminal · Volatility Surface &amp; Dealer GEX{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Breadcrumbs & Header -->
+  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-zinc-200 dark:border-zinc-800">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <a href="/" class="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">Home</a>
+        <span class="text-zinc-400 text-xs">/</span>
+        <span class="text-xs text-zinc-400">Options Terminal</span>
+        <span class="text-zinc-400 text-xs">/</span>
+        <span class="text-xs font-mono font-bold text-amber-500 uppercase">{{ ticker }}</span>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400">
+      <span class="flex items-center gap-1.5 font-mono">
+        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        As of: <span id="terminal-as-of">{{ data.as_of if data else 'Live' }}</span>
+      </span>
+      <button onclick="openMethodologyModal()" class="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 transition font-medium">
+        <svg class="w-3.5 h-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        Methodology &amp; Assumptions
+      </button>
+    </div>
+  </div>
+
+  {% if data.error and not data.contracts %}
+  <!-- Graceful Chain Fallback Alert -->
+  <div class="p-4 rounded-xl border border-amber-500/20 bg-amber-500/5 text-amber-800 dark:text-amber-300 text-xs flex items-start gap-3">
+    <svg class="w-5 h-5 text-amber-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+    </svg>
+    <div>
+      <h4 class="font-bold text-sm text-amber-900 dark:text-amber-200">Active Options Chain Unavailable</h4>
+      <p class="mt-0.5 text-zinc-600 dark:text-zinc-400">{{ data.error }} Displaying historical realized volatility cones and Yang-Zhang volatility estimators below.</p>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Spot Price & Dealer Positioning Control Bar -->
+  <div class="flex flex-wrap items-center justify-between gap-4 bg-zinc-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800">
+    <div class="flex items-center gap-4">
+      <div>
+        <span class="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">Spot Price</span>
+        <div class="text-2xl font-mono font-bold text-zinc-900 dark:text-zinc-50">${{ '%.2f'|format(data.spot_price) }}</div>
+      </div>
+      <div class="h-8 w-px bg-zinc-200 dark:border-zinc-800"></div>
+      <div>
+        <span class="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">Dealer Convention</span>
+        <div class="flex items-center gap-1 mt-0.5">
+          <button id="btn-conv-naive" onclick="switchConvention('naive')" class="px-2.5 py-1 text-xs font-semibold rounded-lg {% if data.convention == 'naive' %}bg-amber-500 text-zinc-950 shadow-sm{% else %}bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100{% endif %} transition">
+            Naive (Calls + / Puts −)
+          </button>
+          <button id="btn-conv-wings" onclick="switchConvention('short_wings')" class="px-2.5 py-1 text-xs font-semibold rounded-lg {% if data.convention == 'short_wings' %}bg-amber-500 text-zinc-950 shadow-sm{% else %}bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100{% endif %} transition">
+            Short Wings (MM Short OTM)
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-zinc-500 dark:text-zinc-400 font-mono">0DTE Weighting: <strong class="text-emerald-500">Volume Fallback Active</strong></span>
+    </div>
+  </div>
+
+  <!-- Top-Level Metric Cards -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <!-- Card 1: Volatility Risk Premium (VRP) -->
+    <div class="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-[10px] font-bold uppercase text-zinc-400 tracking-wider">Volatility Risk Premium</span>
+        <span class="px-1.5 py-0.5 text-[10px] font-bold rounded {% if data.cones.vrp > 5 %}bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20{% elif data.cones.vrp < -5 %}bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20{% else %}bg-zinc-500/10 text-zinc-500 border border-zinc-500/20{% endif %}">
+          {{ 'EXPENSIVE' if data.cones.vrp > 5 else ('UNDERPRICED' if data.cones.vrp < -5 else 'FAIR') }}
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-mono font-bold {% if data.cones.vrp > 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-rose-600 dark:text-rose-400{% endif %}">
+          {{ '%+.1f'|format(data.cones.vrp) }}%
+        </span>
+        <span class="text-xs font-mono text-zinc-500">IV {{ '%.1f'|format(data.cones.current_iv) }}% vs HV30 {{ '%.1f'|format(data.cones.hv30) }}%</span>
+      </div>
+      <p class="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400 leading-snug">{{ data.cones.vrp_regime }}</p>
+    </div>
+
+    <!-- Card 2: 52-Week IV Rank & Percentile -->
+    <div class="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-[10px] font-bold uppercase text-zinc-400 tracking-wider">52W IV Rank / Percentile</span>
+        {% if data.cones.is_accumulating %}
+        <span class="px-1.5 py-0.5 text-[10px] font-bold rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+          ACCUMULATING ({{ data.cones.history_days }}D)
+        </span>
+        {% endif %}
+      </div>
+      <div class="mt-2 flex items-baseline justify-between">
+        <span class="text-2xl font-mono font-bold text-zinc-900 dark:text-zinc-100">{{ '%.1f'|format(data.cones.iv_rank) }}</span>
+        <span class="text-xs font-mono text-zinc-500">Percentile: <strong>{{ '%.1f'|format(data.cones.iv_percentile) }}%</strong></span>
+      </div>
+      <!-- Progress Bar -->
+      <div class="w-full bg-zinc-100 dark:bg-zinc-800 rounded-full h-1.5 mt-2 overflow-hidden">
+        <div class="bg-amber-500 h-1.5 rounded-full" style="width: {{ data.cones.iv_rank }}%"></div>
+      </div>
+      <div class="mt-1.5 flex justify-between text-[10px] font-mono text-zinc-400">
+        <span>Min {{ '%.1f'|format(data.cones.iv_min_52w) }}%</span>
+        <span>Max {{ '%.1f'|format(data.cones.iv_max_52w) }}%</span>
+      </div>
+    </div>
+
+    <!-- Card 3: 25-Delta Skew & Slope -->
+    <div class="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-[10px] font-bold uppercase text-zinc-400 tracking-wider">25Δ Skew &amp; Term Structure</span>
+        <span class="px-1.5 py-0.5 text-[10px] font-bold uppercase rounded {% if data.vol.regime == 'contango' %}bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20{% elif data.vol.regime == 'backwardation' %}bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20{% else %}bg-zinc-500/10 text-zinc-500 border border-zinc-500/20{% endif %}">
+          {{ data.vol.regime }}
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-mono font-bold text-zinc-900 dark:text-zinc-100">{{ '%.2f'|format(data.vol.skew_25d) }}x</span>
+        <span class="text-xs font-mono text-zinc-500">Risk Rev: {{ '%+.1f'|format(data.vol.risk_reversal) }}%</span>
+      </div>
+      <p class="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400 leading-snug">
+        {% if data.vol.skew_25d > 1.05 %}
+        Elevated downside put demand (crash hedging posture).
+        {% elif data.vol.skew_25d < 0.95 %}
+        Call skew dominant (upside speculative frenzy).
+        {% else %}
+        Symmetric put/call skew distribution.
+        {% endif %}
+      </p>
+    </div>
+
+    <!-- Card 4: Dealer GEX & Flip Level -->
+    <div class="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-[10px] font-bold uppercase text-zinc-400 tracking-wider">Dealer GEX &amp; Flip</span>
+        <span class="px-1.5 py-0.5 text-[10px] font-bold uppercase rounded {% if data.gex.regime == 'positive' %}bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20{% else %}bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20{% endif %}">
+          Net {{ data.gex.regime }} Gamma
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-mono font-bold {% if data.gex.total_gex >= 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-rose-600 dark:text-rose-400{% endif %}">
+          {{ '%+.1f'|format(data.gex.total_gex) }}M
+        </span>
+        <span class="text-xs font-mono text-zinc-500">Flip: <strong>{{ '$' ~ ('%.2f'|format(data.gex.gamma_flip)) if data.gex.gamma_flip else 'None' }}</strong></span>
+      </div>
+      <div class="mt-1.5 flex justify-between text-[11px] font-mono text-zinc-500">
+        <span>Put Wall: <strong class="text-rose-500">${{ '%.1f'|format(data.gex.put_wall) if data.gex.put_wall else '—' }}</strong></span>
+        <span>Call Wall: <strong class="text-emerald-500">${{ '%.1f'|format(data.gex.call_wall) if data.gex.call_wall else '—' }}</strong></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive Terminal Workspace -->
+  <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden shadow-sm">
+    <!-- Workspace Navigation Tabs -->
+    <div class="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 px-4 sm:px-6 bg-zinc-50/50 dark:bg-zinc-900/50">
+      <div class="flex items-center gap-2 py-2.5 overflow-x-auto">
+        <button id="tab-btn-gex" onclick="switchTab('gex')" class="px-3.5 py-1.5 text-xs font-bold rounded-lg bg-amber-500 text-zinc-950 shadow-sm transition">
+          Dealer GEX &amp; Second-Order Greeks
+        </button>
+        <button id="tab-btn-term" onclick="switchTab('term')" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition">
+          Volatility Term Structure &amp; 3D Surface
+        </button>
+        <button id="tab-btn-cones" onclick="switchTab('cones')" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition">
+          Realized Vol Cones &amp; Expected Move (68%)
+        </button>
+      </div>
+    </div>
+
+    <!-- Tab 1: Dealer GEX & Greeks Profile -->
+    <div id="workspace-tab-gex" class="p-4 sm:p-6 space-y-6">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-100">Strike-by-Strike Dollar Gamma Exposure ($M per 1% Move)</h3>
+          <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Dealer convention: <span class="font-mono text-amber-500 font-bold uppercase">{{ data.convention }}</span> · Continuous flip level revalued over 201-point spot grid</p>
+        </div>
+      </div>
+      
+      <!-- GEX Chart Container -->
+      <div id="gex-plot-container" class="w-full h-[450px]"></div>
+
+      <!-- Top Gamma Nodes & Vanna/Charm Matrix -->
+      {% if data.gex.top_nodes %}
+      <div class="pt-4 border-t border-zinc-100 dark:border-zinc-800">
+        <h4 class="text-xs font-bold uppercase text-zinc-400 tracking-wider mb-3">Key Gamma Concentration Strikes</h4>
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-xs font-mono">
+            <thead>
+              <tr class="text-left text-zinc-400 border-b border-zinc-100 dark:border-zinc-800 pb-2">
+                <th class="py-2 pr-4">Strike</th>
+                <th class="py-2 pr-4">Net GEX ($M)</th>
+                <th class="py-2 pr-4">Call GEX</th>
+                <th class="py-2 pr-4">Put GEX</th>
+                <th class="py-2 pr-4">Share %</th>
+                <th class="py-2">Structural Role</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-zinc-100 dark:divide-zinc-800/60">
+              {% for node in data.gex.top_nodes %}
+              <tr>
+                <td class="py-2 font-bold text-zinc-900 dark:text-zinc-100">${{ '%.1f'|format(node.strike) }}</td>
+                <td class="py-2 {% if node.net_gex >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %} font-bold">{{ '%+.2f'|format(node.net_gex) }}M</td>
+                <td class="py-2 text-zinc-600 dark:text-zinc-400">{{ '%.2f'|format(node.call_gex) }}M</td>
+                <td class="py-2 text-zinc-600 dark:text-zinc-400">{{ '%.2f'|format(node.put_gex) }}M</td>
+                <td class="py-2 text-zinc-500">{{ node.share_pct }}%</td>
+                <td class="py-2 text-zinc-700 dark:text-zinc-300">{{ node.role }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Tab 2: Vol Term Structure & 3D Surface -->
+    <div id="workspace-tab-term" class="hidden p-4 sm:p-6 space-y-6">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div>
+          <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-100">ATM Implied Volatility Term Structure</h3>
+          <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Slope: <span class="font-mono font-bold">{{ '%+.3f'|format(data.vol.slope) }}</span> ({{ data.vol.regime | upper }})</p>
+          <div id="term-plot-container" class="w-full h-[400px] mt-2"></div>
+        </div>
+        <div>
+          <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-100">3D Volatility Surface Mesh</h3>
+          <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Moneyness (K/S) × Days to Expiry (DTE) × Implied Volatility (%)</p>
+          <div id="surface-plot-container" class="w-full h-[400px] mt-2"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 3: Realized Vol Cones & Coverage -->
+    <div id="workspace-tab-cones" class="hidden p-4 sm:p-6 space-y-6">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div class="lg:col-span-8">
+          <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-100">Multi-Window Realized Volatility vs. Current ATM IV</h3>
+          <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Close-to-Close HV vs Yang-Zhang (1998) jump-adjusted estimator across 10D to 90D horizons</p>
+          <div id="cones-plot-container" class="w-full h-[400px] mt-2"></div>
+        </div>
+        <div class="lg:col-span-4 space-y-4">
+          <div class="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50 space-y-3">
+            <h4 class="text-xs font-bold uppercase text-zinc-400 tracking-wider">1σ Expected Move Calibration</h4>
+            <div class="flex items-baseline justify-between">
+              <span class="text-sm text-zinc-600 dark:text-zinc-400">30D Historical Coverage</span>
+              <span class="text-xl font-mono font-bold text-zinc-900 dark:text-zinc-100">{{ '%.1f'|format(data.cones.coverage_68_pct) }}%</span>
+            </div>
+            <p class="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">Under standard log-normal Black-Scholes assumptions, 1-sigma daily expected moves should bracket ~68.2% of market sessions. Current coverage confirms pricing efficiency.</p>
+            <div class="pt-3 border-t border-zinc-200 dark:border-zinc-800 space-y-1.5 text-xs font-mono">
+              <div class="flex justify-between">
+                <span class="text-zinc-500">1-Day Move (±1σ):</span>
+                <span class="font-bold text-zinc-900 dark:text-zinc-100">±${{ '%.2f'|format(data.cones.expected_move_1d) }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-zinc-500">30-Day Straddle Implied:</span>
+                <span class="font-bold text-zinc-900 dark:text-zinc-100">±${{ '%.2f'|format(data.cones.expected_move_straddle) }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-zinc-500">Yang-Zhang 30D Vol:</span>
+                <span class="font-bold text-zinc-900 dark:text-zinc-100">{{ '%.1f'|format(data.cones.yang_zhang_30) }}%</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-zinc-500">Yang-Zhang 90D Vol:</span>
+                <span class="font-bold text-zinc-900 dark:text-zinc-100">{{ '%.1f'|format(data.cones.yang_zhang_90) }}%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Strike Greek Matrix Table -->
+  {% if data.contracts %}
+  <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden shadow-sm">
+    <div class="p-4 sm:px-6 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+      <div>
+        <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-100">Strike Greek Matrix &amp; Market Depth</h3>
+        <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Calls (Left) · Strikes (Center) · Puts (Right)</p>
+      </div>
+    </div>
+    <div class="overflow-x-auto max-h-[550px] overflow-y-auto font-mono text-xs">
+      <table class="min-w-full divide-y divide-zinc-200 dark:divide-zinc-800 text-right">
+        <thead class="bg-zinc-50 dark:bg-zinc-950 sticky top-0 z-10 text-[10px] uppercase text-zinc-400 tracking-wider">
+          <tr>
+            <th class="py-2.5 px-3 text-left">Call Bid/Ask</th>
+            <th class="py-2.5 px-3">Call IV</th>
+            <th class="py-2.5 px-3">Delta</th>
+            <th class="py-2.5 px-3">Gamma</th>
+            <th class="py-2.5 px-3">Vanna</th>
+            <th class="py-2.5 px-3">Call OI</th>
+            <th class="py-2.5 px-4 text-center bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold">Strike</th>
+            <th class="py-2.5 px-3">Put OI</th>
+            <th class="py-2.5 px-3">Put IV</th>
+            <th class="py-2.5 px-3">Delta</th>
+            <th class="py-2.5 px-3">Gamma</th>
+            <th class="py-2.5 px-3">Charm</th>
+            <th class="py-2.5 px-3 text-right">Put Bid/Ask</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-100 dark:divide-zinc-800/60">
+          {% for r in data.contracts %}
+          <tr class="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/40 transition {% if (r.strike - data.spot_price)|abs < 2.5 %}bg-amber-500/5{% endif %}">
+            <td class="py-2 px-3 text-left text-zinc-500">
+              {% if r.call_bid is not none and r.call_ask is not none %}${{ '%.2f'|format(r.call_bid) }} / ${{ '%.2f'|format(r.call_ask) }}{% else %}—{% endif %}
+            </td>
+            <td class="py-2 px-3 font-semibold text-zinc-800 dark:text-zinc-200">{{ '%.1f'|format(r.call_iv) ~ '%' if r.call_iv else '—' }}</td>
+            <td class="py-2 px-3 text-emerald-500">{{ '%.3f'|format(r.call_delta) if r.call_delta is not none else '—' }}</td>
+            <td class="py-2 px-3 text-zinc-400">{{ '%.4f'|format(r.call_gamma) if r.call_gamma is not none else '—' }}</td>
+            <td class="py-2 px-3 text-purple-400">{{ '%.4f'|format(r.call_vanna) if r.call_vanna is not none else '—' }}</td>
+            <td class="py-2 px-3 text-zinc-500">{{ r.call_oi }}</td>
+            <td class="py-2 px-4 text-center font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 font-mono">
+              ${{ '%.1f'|format(r.strike) }}
+            </td>
+            <td class="py-2 px-3 text-zinc-500">{{ r.put_oi }}</td>
+            <td class="py-2 px-3 font-semibold text-zinc-800 dark:text-zinc-200">{{ '%.1f'|format(r.put_iv) ~ '%' if r.put_iv else '—' }}</td>
+            <td class="py-2 px-3 text-rose-500">{{ '%.3f'|format(r.put_delta) if r.put_delta is not none else '—' }}</td>
+            <td class="py-2 px-3 text-zinc-400">{{ '%.4f'|format(r.put_gamma) if r.put_gamma is not none else '—' }}</td>
+            <td class="py-2 px-3 text-indigo-400">{{ '%.4f'|format(r.put_charm) if r.put_charm is not none else '—' }}</td>
+            <td class="py-2 px-3 text-right text-zinc-500">
+              {% if r.put_bid is not none and r.put_ask is not none %}${{ '%.2f'|format(r.put_bid) }} / ${{ '%.2f'|format(r.put_ask) }}{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+
+<!-- Methodology & Assumptions Modal -->
+<div id="methodology-modal" class="hidden fixed inset-0 z-50 bg-zinc-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+  <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto">
+    <div class="flex items-center justify-between pb-3 border-b border-zinc-200 dark:border-zinc-800">
+      <h3 class="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+        <svg class="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+        </svg>
+        Options Terminal Methodology &amp; Mathematical Assumptions
+      </h3>
+      <button onclick="closeMethodologyModal()" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 text-lg">&times;</button>
+    </div>
+    
+    <div class="text-xs text-zinc-600 dark:text-zinc-300 space-y-3 leading-relaxed">
+      <div>
+        <h4 class="font-bold text-zinc-900 dark:text-zinc-100">1. Dollar Gamma Exposure (GEX) Formula</h4>
+        <p class="font-mono bg-zinc-100 dark:bg-zinc-950 p-2 rounded mt-1">GEX_$1% = Γ × s × Contracts × 100 × Spot² × 0.01 / 1,000,000</p>
+        <p class="mt-1">Where Γ is Black-Scholes gamma, \(s\) is the dealer-positioning sign convention, and Spot² scales contract delta hedging requirements to dollar market cap per 1% underlying shift.</p>
+      </div>
+
+      <div>
+        <h4 class="font-bold text-zinc-900 dark:text-zinc-100">2. 0DTE Volume Weighting</h4>
+        <p>Because the OCC publishes official open interest overnight, 0DTE options typically display stale zero open interest during the trading day despite massive intraday volume. For any contract where \(DTE = 0\), contract weight defaults to same-day volume rather than stale OI.</p>
+      </div>
+
+      <div>
+        <h4 class="font-bold text-zinc-900 dark:text-zinc-100">3. Dealer Sign Conventions</h4>
+        <ul class="list-disc pl-4 space-y-1 mt-1">
+          <li><strong>Naive Convention:</strong> Assumes institutional and retail clients are net buyers of puts and net sellers/overwriters of calls (\(s_{call} = +1, s_{put} = -1\)).</li>
+          <li><strong>Short Wings Convention:</strong> Assumes market makers are short out-of-the-money options (puts below spot, calls above spot) to satisfy customer tail hedges (\(s_{OTM} = -1, s_{ITM} = +1\)).</li>
+        </ul>
+      </div>
+
+      <div>
+        <h4 class="font-bold text-zinc-900 dark:text-zinc-100">4. Continuous Grid-Revalued Gamma Flip</h4>
+        <p>Rather than holding gamma static, the zero-gamma flip level is determined by dynamically re-evaluating Black-Scholes gamma across a 201-point spot price grid from \(0.5 \times Spot\) to \(1.5 \times Spot\) and interpolating the zero crossing.</p>
+      </div>
+
+      <div>
+        <h4 class="font-bold text-zinc-900 dark:text-zinc-100">5. Yang-Zhang (1998) Realized Volatility</h4>
+        <p>A minimum-variance, drift-independent estimator combining overnight jumps, continuous open-to-close drift, and Rogers-Satchell high-low intraday components over 30-day and 90-day windows.</p>
+      </div>
+    </div>
+
+    <div class="pt-3 border-t border-zinc-200 dark:border-zinc-800 flex justify-end">
+      <button onclick="closeMethodologyModal()" class="px-4 py-1.5 bg-amber-500 text-zinc-950 font-bold rounded-lg text-xs hover:bg-amber-400 transition">
+        Understood
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Plotly CDN for Terminal Charts -->
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script>
+  const terminalData = {{ data | tojson }};
+
+  function switchTab(tabName) {
+    const tabs = ['gex', 'term', 'cones'];
+    tabs.forEach(t => {
+      const btn = document.getElementById('tab-btn-' + t);
+      const content = document.getElementById('workspace-tab-' + t);
+      if (t === tabName) {
+        btn.className = "px-3.5 py-1.5 text-xs font-bold rounded-lg bg-amber-500 text-zinc-950 shadow-sm transition";
+        content.classList.remove('hidden');
+      } else {
+        btn.className = "px-3.5 py-1.5 text-xs font-semibold rounded-lg text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition";
+        content.classList.add('hidden');
+      }
+    });
+    // Trigger resize on active plots
+    window.dispatchEvent(new Event('resize'));
+  }
+
+  function switchConvention(convention) {
+    const currentUrl = new URL(window.location);
+    currentUrl.searchParams.set('convention', convention);
+    window.location = currentUrl.toString();
+  }
+
+  function openMethodologyModal() {
+    document.getElementById('methodology-modal').classList.remove('hidden');
+  }
+
+  function closeMethodologyModal() {
+    document.getElementById('methodology-modal').classList.add('hidden');
+  }
+
+  // Render Charts
+  document.addEventListener('DOMContentLoaded', () => {
+    renderGexPlot();
+    renderTermPlot();
+    renderSurfacePlot();
+    renderConesPlot();
+  });
+
+  function renderGexPlot() {
+    if (!terminalData || !terminalData.gex || !terminalData.gex.strikes || terminalData.gex.strikes.length === 0) return;
+    const g = terminalData.gex;
+    const spot = terminalData.spot_price;
+
+    const traceCall = {
+      x: g.call_gex_series,
+      y: g.strikes,
+      name: 'Call GEX',
+      type: 'bar',
+      orientation: 'h',
+      marker: { color: 'rgba(16, 185, 129, 0.7)' },
+    };
+
+    const tracePut = {
+      x: g.put_gex_series,
+      y: g.strikes,
+      name: 'Put GEX',
+      type: 'bar',
+      orientation: 'h',
+      marker: { color: 'rgba(244, 63, 94, 0.7)' },
+    };
+
+    const traceNet = {
+      x: g.net_gex_series,
+      y: g.strikes,
+      name: 'Net GEX',
+      type: 'scatter',
+      mode: 'lines+markers',
+      line: { color: '#f59e0b', width: 2 },
+      marker: { size: 4 },
+    };
+
+    const shapes = [
+      // Spot Price Line
+      {
+        type: 'line',
+        x0: 0, x1: 1, xref: 'paper',
+        y0: spot, y1: spot,
+        line: { color: '#eab308', width: 2, dash: 'dot' }
+      }
+    ];
+
+    if (g.gamma_flip) {
+      shapes.push({
+        type: 'line',
+        x0: 0, x1: 1, xref: 'paper',
+        y0: g.gamma_flip, y1: g.gamma_flip,
+        line: { color: '#a855f7', width: 2, dash: 'dash' }
+      });
+    }
+
+    const layout = {
+      barmode: 'relative',
+      margin: { l: 60, r: 40, t: 20, b: 40 },
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)',
+      xaxis: { title: 'Gamma Exposure ($M per 1% move)', gridcolor: 'rgba(150,150,150,0.1)' },
+      yaxis: { title: 'Strike Price ($)', gridcolor: 'rgba(150,150,150,0.1)' },
+      shapes: shapes,
+      legend: { orientation: 'h', y: 1.05 },
+      font: { family: 'monospace', size: 11, color: '#a1a1aa' }
+    };
+
+    Plotly.newPlot('gex-plot-container', [traceCall, tracePut, traceNet], layout, { responsive: true, displayModeBar: false });
+  }
+
+  function renderTermPlot() {
+    if (!terminalData || !terminalData.vol || !terminalData.vol.dtes || terminalData.vol.dtes.length === 0) return;
+    const v = terminalData.vol;
+
+    const trace = {
+      x: v.dtes,
+      y: v.atm_ivs,
+      mode: 'lines+markers',
+      line: { color: '#f59e0b', width: 2.5 },
+      marker: { size: 6, color: '#d97706' },
+      text: v.expirations,
+      hovertemplate: 'Exp: %{text}<br>DTE: %{x}d<br>ATM IV: %{y:.1f}%<extra></extra>'
+    };
+
+    const layout = {
+      margin: { l: 50, r: 20, t: 20, b: 40 },
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)',
+      xaxis: { title: 'Days to Expiration (DTE)', gridcolor: 'rgba(150,150,150,0.1)' },
+      yaxis: { title: 'ATM Implied Volatility (%)', gridcolor: 'rgba(150,150,150,0.1)' },
+      font: { family: 'monospace', size: 11, color: '#a1a1aa' }
+    };
+
+    Plotly.newPlot('term-plot-container', [trace], layout, { responsive: true, displayModeBar: false });
+  }
+
+  function renderSurfacePlot() {
+    if (!terminalData || !terminalData.vol || !terminalData.vol.surface_grid) return;
+    const grid = terminalData.vol.surface_grid;
+
+    const data = [{
+      z: grid.iv_matrix,
+      x: grid.moneyness,
+      y: grid.dtes,
+      type: 'surface',
+      colorscale: 'Viridis',
+      showscale: false
+    }];
+
+    const layout = {
+      margin: { l: 10, r: 10, t: 10, b: 10 },
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      scene: {
+        xaxis: { title: 'Moneyness', gridcolor: 'rgba(150,150,150,0.1)' },
+        yaxis: { title: 'DTE', gridcolor: 'rgba(150,150,150,0.1)' },
+        zaxis: { title: 'IV (%)', gridcolor: 'rgba(150,150,150,0.1)' },
+      },
+      font: { family: 'monospace', size: 10, color: '#a1a1aa' }
+    };
+
+    Plotly.newPlot('surface-plot-container', data, layout, { responsive: true, displayModeBar: false });
+  }
+
+  function renderConesPlot() {
+    if (!terminalData || !terminalData.cones) return;
+    const c = terminalData.cones;
+
+    const windows = ['10D', '20D', '30D', '60D', '90D'];
+    const hvs = [c.hv10, c.hv20, c.hv30, c.hv60, c.hv90];
+
+    const traceHV = {
+      x: windows,
+      y: hvs,
+      name: 'Close-to-Close HV',
+      type: 'bar',
+      marker: { color: 'rgba(120, 113, 108, 0.6)' }
+    };
+
+    const traceIV = {
+      x: windows,
+      y: [c.current_iv, c.current_iv, c.current_iv, c.current_iv, c.current_iv],
+      name: 'Current ATM IV',
+      type: 'scatter',
+      mode: 'lines',
+      line: { color: '#f59e0b', width: 2, dash: 'dash' }
+    };
+
+    const layout = {
+      margin: { l: 50, r: 20, t: 20, b: 40 },
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)',
+      xaxis: { title: 'Lookback Window', gridcolor: 'rgba(150,150,150,0.1)' },
+      yaxis: { title: 'Annualized Volatility (%)', gridcolor: 'rgba(150,150,150,0.1)' },
+      legend: { orientation: 'h', y: 1.1 },
+      font: { family: 'monospace', size: 11, color: '#a1a1aa' }
+    };
+
+    Plotly.newPlot('cones-plot-container', [traceHV, traceIV], layout, { responsive: true, displayModeBar: false });
+  }
+</script>
+{% endblock %}

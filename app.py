@@ -28,6 +28,8 @@ import event_study
 import sec_8k
 import microstructure
 import macro_engine
+import options
+from options import compute_options_terminal, calculate_greeks
 import derivatives_alpha
 import backtest_engine
 import api_docs
@@ -2493,6 +2495,112 @@ def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045):
         return None
 
 
+def get_full_option_chain_df(
+    ticker: str,
+    stock=None,
+    current_price: Optional[float] = None,
+    max_expirations: int = 8,
+) -> pd.DataFrame:
+    """Aggregate cached option chains across expirations into a single normalized DataFrame."""
+    try:
+        stock = stock or _get_yf_ticker(ticker)
+        expirations = get_cached_expirations(ticker, stock)
+        if not expirations:
+            return pd.DataFrame()
+
+        today = datetime.now()
+        selected = []
+        for exp in expirations:
+            try:
+                exp_dt = datetime.strptime(exp, '%Y-%m-%d')
+            except ValueError:
+                continue
+            dte = (exp_dt - today).days
+            if dte < 0:
+                continue
+            selected.append((exp, exp_dt, dte))
+            if len(selected) >= max_expirations:
+                break
+
+        if not selected:
+            return pd.DataFrame()
+
+        def _fetch(exp_tuple):
+            try:
+                return exp_tuple, get_cached_chain(ticker, exp_tuple[0], stock=stock, spot_hint=current_price)
+            except Exception:
+                return exp_tuple, None
+
+        with ThreadPoolExecutor(max_workers=min(len(selected), 8)) as pool:
+            fetched = list(pool.map(_fetch, selected))
+
+        rows = []
+        for (exp, exp_dt, dte), chain in fetched:
+            if chain is None:
+                continue
+            calls_df, puts_df, _ = chain
+            for df_side, cp in ((calls_df, 'C'), (puts_df, 'P')):
+                if df_side is None or df_side.empty:
+                    continue
+                for _, r in df_side.iterrows():
+                    strike = r.get('strike')
+                    iv = r.get('impliedVolatility')
+                    if strike is None or iv is None or np.isnan(strike) or np.isnan(iv):
+                        continue
+                    rows.append({
+                        'strike': float(strike),
+                        'cp': cp,
+                        'dte': int(dte),
+                        'expiration': exp,
+                        'bid': float(r.get('bid', 0.0) or 0.0),
+                        'ask': float(r.get('ask', 0.0) or 0.0),
+                        'last_price': float(r.get('lastPrice', 0.0) or 0.0),
+                        'iv': float(iv),
+                        'open_interest': int(r.get('openInterest', 0) or 0),
+                        'volume': int(r.get('volume', 0) or 0),
+                    })
+
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception as e:
+        print(f"[options-terminal] Error assembling full chain for {ticker}: {e}")
+        return pd.DataFrame()
+
+
+@app.route('/options')
+def options_page():
+    ticker = request.args.get('ticker', '').strip().upper()
+    if not ticker:
+        with db.get_conn() as conn:
+            rows = conn.execute("SELECT DISTINCT symbol FROM daily_prices").fetchall()
+        tickers = [r["symbol"] for r in rows]
+        ticker = tickers[0] if tickers else 'SPY'
+
+    convention = request.args.get('convention', 'naive').strip().lower()
+    if convention not in ('naive', 'short_wings'):
+        convention = 'naive'
+
+    current_price = get_current_price_yfinance(ticker)
+    if not current_price:
+        current_price = _spot_price(ticker, _get_yf_ticker(ticker)) or 100.0
+
+    stock = _get_yf_ticker(ticker)
+    chains_df = get_full_option_chain_df(ticker, stock=stock, current_price=current_price)
+    daily_df = get_or_fetch_prices(ticker)
+
+    terminal_res = compute_options_terminal(
+        ticker=ticker,
+        spot=current_price,
+        chain_df=chains_df,
+        daily_df=daily_df,
+        convention=convention,
+    )
+
+    import dataclasses
+    data_dict = dataclasses.asdict(terminal_res)
+
+    return render_template('options.html', ticker=ticker, data=data_dict)
+
+
 @app.route('/live')
 def live_page():
     ticker = request.args.get('ticker', '').strip().upper()
@@ -3537,6 +3645,33 @@ def options_analysis_api(ticker):
     return jsonify(data)
 
 
+@app.route('/api/options-terminal/<ticker>')
+def api_options_terminal(ticker):
+    ticker = ticker.strip().upper()
+    convention = request.args.get('convention', 'naive').strip().lower()
+    if convention not in ('naive', 'short_wings'):
+        convention = 'naive'
+
+    current_price = get_current_price_yfinance(ticker)
+    if not current_price:
+        current_price = _spot_price(ticker, _get_yf_ticker(ticker)) or 100.0
+
+    stock = _get_yf_ticker(ticker)
+    chains_df = get_full_option_chain_df(ticker, stock=stock, current_price=current_price)
+    daily_df = get_or_fetch_prices(ticker)
+
+    terminal_res = compute_options_terminal(
+        ticker=ticker,
+        spot=current_price,
+        chain_df=chains_df,
+        daily_df=daily_df,
+        convention=convention,
+    )
+
+    import dataclasses
+    return jsonify(dataclasses.asdict(terminal_res))
+
+
 @app.route('/api/options-ai-report/<ticker>')
 def options_ai_report_api(ticker):
     expiration = request.args.get('expiration', '')
@@ -3693,6 +3828,16 @@ def _warm_options_cache(force=False):
                         if get_cached_chain(sym, exp, stock=stock, force=force) is not None:
                             chains += 1
                         time.sleep(0.15)  # stay gentle on yfinance rate limits
+
+                    # Persist daily positioning snapshot to options_iv_history
+                    try:
+                        chain_df = get_full_option_chain_df(sym, stock=stock)
+                        daily_df = get_or_fetch_prices(sym)
+                        spot = _spot_price(sym, stock) or 100.0
+                        if not chain_df.empty:
+                            compute_options_terminal(sym, spot, chain_df, daily_df, record_db=True)
+                    except Exception as snap_err:
+                        print(f"[options-cache] snapshot error for {sym}: {snap_err}")
                 except Exception as e:
                     print(f"[options-cache] {sym} failed: {e}")
             print(f"[options-cache] done ({len(symbols)} tickers, {chains} chains)")

@@ -26,6 +26,7 @@ class TestNavigation(unittest.TestCase):
         routes = [
             "/",
             "/stock",
+            "/options",
             "/analytics",
             "/positioning",
             "/live",
@@ -69,6 +70,7 @@ class TestNavigation(unittest.TestCase):
 
         expected_ids = [
             'id="nav-stock"',
+            'id="nav-options"',
             'id="nav-analytics"',
             'id="nav-positioning"',
             'id="nav-live"',
@@ -86,13 +88,14 @@ class TestNavigation(unittest.TestCase):
             )
 
     def test_ticker_sub_navbar_links_present(self):
-        """Verify that the ticker sub-navbar has links for all 6 ticker views."""
+        """Verify that the ticker sub-navbar has links for all ticker views."""
         resp = self.client.get("/glossary")
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
 
         expected_sub_ids = [
             'id="sub-link-stock"',
+            'id="sub-link-options"',
             'id="sub-link-analytics"',
             'id="sub-link-positioning"',
             'id="sub-link-live"',
@@ -114,6 +117,7 @@ class TestNavigation(unittest.TestCase):
 
         expected_mobile_ids = [
             'id="mobile-nav-stock"',
+            'id="mobile-nav-options"',
             'id="mobile-nav-analytics"',
             'id="mobile-nav-positioning"',
             'id="mobile-nav-live"',
