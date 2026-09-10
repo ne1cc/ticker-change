@@ -11,20 +11,11 @@ import pandas as pd
 # Standard boto3 client initialization
 import boto3
 
-# --- yfinance custom session with browser headers ---
-def _get_yf_session():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Origin": "https://finance.yahoo.com",
-        "Referer": "https://finance.yahoo.com",
-    })
-    return session
-
 def _get_yf_ticker(symbol: str) -> yf.Ticker:
-    return yf.Ticker(symbol.upper(), session=_get_yf_session())
+    """yfinance manages its own curl_cffi session internally as of 1.x;
+    passing a plain requests.Session raises "Yahoo API requires curl_cffi
+    session"."""
+    return yf.Ticker(symbol.upper())
 
 def bucket() -> str:
     return os.environ.get("S3_CACHE_BUCKET", "").strip()
