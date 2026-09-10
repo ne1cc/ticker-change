@@ -85,6 +85,95 @@ def _preprocess_markdown_tables(md: str) -> str:
     return md
 
 
+def _preprocess_options_markdown(md: str) -> str:
+    """Clean, structure, and space AI options market report markdown."""
+    import re
+    if not md:
+        return md
+
+    # 1. Run standard table preprocessor
+    md = _preprocess_markdown_tables(md)
+
+    # 2. Fix malformed heading prefixes like "1. ###" -> "### 1."
+    md = re.sub(r'(?m)^\s*(\d+)[\.\)]\s*###\s*', r'### \1. ', md)
+
+    # 3. Standardize main section headers (with or without numbers or hashes)
+    main_sections = [
+        (r'Options Market Regime\s*(?:&|and)\s*Volatility Analysis', '1. Options Market Regime & Volatility Analysis'),
+        (r'Expected Move\s*(?:&|and)\s*(?:Key\s*)?Boundary Levels', '2. Expected Move & Boundary Levels'),
+        (r'Quantitative Strategy Recommendations', '3. Quantitative Strategy Recommendations'),
+        (r'Tail Risk\s*(?:&|and)\s*(?:Risk Management|Defensive Protocols)', '4. Tail Risk & Risk Management'),
+    ]
+    for pat, canonical in main_sections:
+        md = re.sub(
+            rf'(?m)^(?:\d+[\.\)]\s*)?(?:###?\s*)?({pat})[:\s]*$',
+            rf'\n\n### {canonical}\n\n',
+            md,
+            flags=re.IGNORECASE
+        )
+
+    # 4. Standardize subsection headers
+    subsections = [
+        r'Expected Move Analysis',
+        r'Structural Boundaries',
+        r'Defensive Adjustments(?:\s*&?\s*Protocols)?',
+        r'Bull Call Debit Spread\s*(?:\([^)]+\))?',
+        r'Bear Put (?:Debit )?Spread\s*(?:\([^)]+\))?',
+        r'Long Calendar Spread\s*(?:\([^)]+\))?',
+        r'Long Diagonal Spread\s*(?:\([^)]+\))?',
+        r'Iron Condor\s*(?:\([^)]+\))?',
+        r'Strategy\s+\d+[:\s].*',
+    ]
+    for sub in subsections:
+        md = re.sub(
+            rf'(?m)^(?:\d+[\.\)]\s*)?(?:####?\s*)?({sub})[:\s]*$',
+            r'\n\n#### \1\n\n',
+            md,
+            flags=re.IGNORECASE
+        )
+
+    # 5. Bulletize labeled key-value items if not already bulleted
+    labeled_items = [
+        r'Volatility Risk Premium\s*(?:\(VRP\))?',
+        r'IV Rank\s*/\s*Percentile',
+        r'IV Rank',
+        r'IV Percentile',
+        r'Gamma Flip Point',
+        r'Call Wall\s*(?:\(Resistance\))?',
+        r'Put Wall\s*(?:\(Support\))?',
+        r'Max Pain',
+        r'Worst-Case Scenario',
+        r'Stop-Loss',
+        r'Dynamic Delta Hedging',
+        r'Gamma Risk',
+        r'Structure',
+        r'Rationale',
+        r'Target',
+        r'PoP',
+        r'Trade Management',
+        r'Execution & Sizing',
+        r'Execution',
+        r'Profit Target',
+    ]
+    for lbl in labeled_items:
+        md = re.sub(
+            rf'(?m)^(?!\s*[-*]\s*)({lbl}):\s*(.+)$',
+            r'\n- **\1:** \2\n',
+            md,
+            flags=re.IGNORECASE
+        )
+
+    # 6. Ensure headings have proper vertical breathing room
+    md = re.sub(r'(?m)([^\n])\n(#{2,4}\s+)', r'\1\n\n\2', md)
+    md = re.sub(r'(?m)(#{2,4}\s+[^\n]+)\n([^\n#])', r'\1\n\n\2', md)
+
+    # 7. Normalize excessive blank lines (more than 2) to 2
+    md = re.sub(r'\n{3,}', '\n\n', md)
+
+    return md.strip()
+
+
+
 def _to_html(md: str) -> str:
     try:
         import markdown
@@ -327,30 +416,49 @@ OPTIONS_SYSTEM = """You are a premier quantitative derivatives strategist with a
 
 Your task is to write a highly rigorous, actionable Option Chain Analysis and Strategy Report.
 
-Format your response in GitHub-Flavoured Markdown. Use the following structured sections:
-1. ### Options Market Regime & Volatility Analysis:
-   - Compare current ATM Implied Volatility (IV) to 30-day and 90-day Realized Volatility (HV). Discuss the Volatility Risk Premium (VRP).
-   - Evaluate the IV Rank and IV Percentile. Is option premium cheap or expensive relative to the stock's own history?
-2. ### Expected Move & Boundary Levels:
-   - Analyze the Expected Move calculated via Black-Scholes vs Straddle pricing. What does the market imply about the stock's potential trading range by expiration?
-   - Identify structural boundaries: Call Wall (major dealer resistance), Put Wall (dealer support), Max Pain (theoretical magnet pinning), and the Gamma Flip point.
-   - Explain how dealer hedging around these walls might suppress or amplify spot volatility.
-3. ### Quantitative Strategy Recommendations:
-   - Identify whether the environment favors selling premium (high IV Rank / VRP expansion) or buying/defined-risk premium (low IV Rank).
-   - Recommend 2-3 specific, actionable options strategies conforming to professional risk parameters (e.g. 30-45 DTE, optimal strike selection based on delta/expected move, buying power efficiency).
-   - Define exact entry parameters, target probability of profit (PoP), and trade management rules (e.g., managing at 50% max profit or rolling at 21 DTE).
-4. ### Tail Risk & Risk Management:
-   - Outline the worst-case scenario for the recommended strategies.
-   - Specify defensive adjustments (e.g., rolling untested sides, buying protective wings, stop-loss triggers).
+Format your response in GitHub-Flavoured Markdown. Use the following structured sections, in order, using `###` headings:
+### 1. Options Market Regime & Volatility Analysis
+- Compile the volatility profile into a clean Markdown table:
+  | Metric | Value | Comparison / Benchmark | Regime Interpretation |
+  | :--- | :---: | :---: | :--- |
+  Include rows for ATM Implied Volatility (IV), 30-day Realized Volatility (HV30), 90-day Realized Volatility (HV90), IV Rank, and IV Percentile.
+- Provide 2-3 concise, spaced bullet points analyzing the Volatility Risk Premium (VRP) and whether option premium is cheap or rich relative to historical distribution.
 
-Rules:
+### 2. Expected Move & Boundary Levels
+- Analyze the Expected Move calculated via Black-Scholes vs Straddle pricing. What does the market imply about potential trading range by expiration?
+- Compile the dealer structural boundaries into a clean Markdown table:
+  | Key Level | Strike / Price | Dealer Positioning | Market Impact |
+  | :--- | :---: | :--- | :--- |
+  Include rows for Call Wall, Put Wall, Max Pain, Gamma Flip Point, and Current Spot.
+- Explain dealer hedging dynamics around the Gamma Flip and walls (positive gamma dampening vs negative gamma trend acceleration).
+
+### 3. Quantitative Strategy Recommendations
+- State the optimal volatility posture (long gamma/vega vs premium selling).
+- For each recommended strategy (2 setups), use a distinct `#### Strategy [N]: [Strategy Name]` sub-heading, followed by spaced bullet points:
+  * - **Structure:** exact strikes, expirations, and leg types.
+  * - **Rationale:** why this structure matches the current volatility regime and dealer boundaries.
+  * - **Execution & Greeks:** target long-leg delta (e.g. 40-45 delta), capital efficiency, and theta/vega exposure.
+  * - **Trade Management:** profit target (e.g. 50% max profit) and defined invalidation/exit levels.
+
+### 4. Tail Risk & Risk Management
+- Format with clear sub-headings and bullet points:
+  * - **Worst-Case Scenario:** market breakdown or melt-up implications if dealer walls fail.
+  #### Defensive Adjustments
+  * - **Stop-Loss Protocol:** spot price or technical trigger to close the position.
+  * - **Dynamic Delta Hedging:** adjustments if spot moves significantly from target strikes.
+  * - **Gamma & Expiration Risk:** managing short gamma into final trading hours.
+
+CRITICAL FORMATTING RULES:
+- Always leave a blank line before and after EVERY heading, table, paragraph, list, and bullet item.
+- Use GitHub-Flavored Markdown bullet points (`- `) with bold labels (`- **Label:** Details`).
+- Never combine separate items or sections into single run-on paragraphs.
 - Be highly precise and quantitative. Use the exact data points provided.
 - Do not invent any numbers. Mark missing metrics as 'N/A'.
 - Keep your tone analytical, professional, and strategic.
 """
 
 
-def generate_options_report(ticker: str, data: dict) -> tuple[str | None, str | None]:
+def generate_options_report(ticker: str, data: dict, force: bool = False) -> tuple[str | None, str | None]:
     """Return an HTML options analysis report for `ticker` and any error message as a tuple (html, error)."""
     ticker = ticker.upper()
     configured = providers.ai_providers()
@@ -359,9 +467,15 @@ def generate_options_report(ticker: str, data: dict) -> tuple[str | None, str | 
 
     exp_date = data.get("selected_expiration", "default")
     cache_key = f"options_report:{ticker}:{exp_date}"
-    cached = db.cache_get("ai_options_report", cache_key, CACHE_TTL_HOURS)
-    if cached is not None:
-        return cached.get("html"), None
+    if not force:
+        cached = db.cache_get("ai_options_report", cache_key, CACHE_TTL_HOURS)
+        if cached is not None:
+            if isinstance(cached, dict):
+                if cached.get("markdown"):
+                    html = _to_html(_preprocess_options_markdown(cached["markdown"]))
+                    return html, None
+                elif cached.get("html"):
+                    return cached.get("html"), None
 
     user_msg = (
         f"Write the options strategy analysis report for {ticker} from this option chain dataset:\n\n"
@@ -392,6 +506,7 @@ def generate_options_report(ticker: str, data: dict) -> tuple[str | None, str | 
         err_report = "All configured AI providers failed to generate the report:\n- " + "\n- ".join(errors)
         return None, err_report
 
-    html = _to_html(text)
-    db.cache_set("ai_options_report", cache_key, {"html": html, "provider": used})
+    cleaned_md = _preprocess_options_markdown(text)
+    html = _to_html(cleaned_md)
+    db.cache_set("ai_options_report", cache_key, {"html": html, "markdown": text, "provider": used})
     return html, None

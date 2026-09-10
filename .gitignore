@@ -3,6 +3,10 @@ __pycache__/
 *.pyc
 stocks.db
 model.pkl
+.venv
 .venv/
+.venv2
 .venv2/
 .env
+.worktrees/
+

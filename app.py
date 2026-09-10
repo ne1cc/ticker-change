@@ -3512,6 +3512,7 @@ def options_analysis_api(ticker):
 def options_ai_report_api(ticker):
     expiration = request.args.get('expiration', '')
     rf_rate_raw = request.args.get('rf_rate', '0.045')
+    force = request.args.get('force', '').lower() in ('1', 'true', 'yes')
     try:
         rf_rate = float(rf_rate_raw)
     except ValueError:
@@ -3521,7 +3522,7 @@ def options_ai_report_api(ticker):
     if not data:
         return jsonify({"error": f"Could not retrieve options data for {ticker}"}), 404
         
-    report, error = ai.generate_options_report(ticker, data)
+    report, error = ai.generate_options_report(ticker, data, force=force)
     if error:
         return jsonify({"error": error}), 500
         
