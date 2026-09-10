@@ -226,6 +226,7 @@
             </a>
             <div class="hidden md:flex items-center gap-5 lg:gap-6">
               <a id="nav-stock" href="/stock" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Overview</a>
+              <a id="nav-options" href="/options" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Options</a>
               <a id="nav-analytics" href="/analytics" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Analytics</a>
               <a id="nav-positioning" href="/positioning" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Positioning</a>
               <a id="nav-live" href="/live" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Live Microstructure</a>
@@ -275,6 +276,7 @@
             <div class="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 px-2 mb-1">Market Intelligence</div>
             <div class="grid grid-cols-2 gap-1.5">
               <a id="mobile-nav-stock" href="/stock" class="mobile-nav-link">Overview</a>
+              <a id="mobile-nav-options" href="/options" class="mobile-nav-link">Options Terminal</a>
               <a id="mobile-nav-analytics" href="/analytics" class="mobile-nav-link">Risk Analytics</a>
               <a id="mobile-nav-positioning" href="/positioning" class="mobile-nav-link">Positioning &amp; 13F</a>
               <a id="mobile-nav-live" href="/live" class="mobile-nav-link">Microstructure</a>
@@ -313,9 +315,10 @@
         <!-- Links to specific views for this ticker -->
         <div class="mobile-horizontal-scroll order-3 w-full lg:order-none lg:w-auto flex items-center gap-1 sm:gap-2">
           <a id="sub-link-stock" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Price Table</a>
+          <a id="sub-link-options" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Options Terminal</a>
           <a id="sub-link-analytics" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Risk Analytics</a>
           <a id="sub-link-positioning" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Market Positioning</a>
-          <a id="sub-link-live" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Live Microstructure & Options</a>
+          <a id="sub-link-live" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Live Microstructure</a>
           <a id="sub-link-momentum" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Strategy Backtests</a>
           <a id="sub-link-ai-summary" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">AI Strategy Report</a>
         </div>
@@ -491,6 +494,7 @@
           
           const subLinks = {
             'sub-link-stock':       '/stock?ticker=' + ticker,
+            'sub-link-options':     '/options?ticker=' + ticker,
             'sub-link-analytics':   '/analytics?ticker=' + ticker,
             'sub-link-positioning': '/positioning?ticker=' + ticker,
             'sub-link-live':        '/live?ticker=' + ticker,
