@@ -2654,10 +2654,12 @@ def compute_momentum(ticker: str) -> dict:
 
 
 @app.route('/strategies')
+@app.route('/momentum')
 def strategies_page():
     COST_BPS = 7.5
-    tab = request.args.get('tab', 'universe')
-    symbol = request.args.get('symbol', '').upper().strip()
+    raw_symbol = request.args.get('symbol') or request.args.get('ticker') or ''
+    symbol = raw_symbol.upper().strip()
+    tab = request.args.get('tab', 'ticker' if symbol else 'universe')
     period = request.args.get('period', 'all')
 
     # 1. Fetch all symbols in database
