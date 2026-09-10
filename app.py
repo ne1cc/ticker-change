@@ -2,7 +2,7 @@ from __future__ import annotations
 from dotenv import load_dotenv
 load_dotenv()
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
 from flask_cors import CORS
 import yfinance as yf
 import pandas as pd
@@ -43,7 +43,9 @@ def _get_yf_ticker(symbol: str) -> yf.Ticker:
     return yf.Ticker(symbol.upper())
 
 app = Flask(__name__)
-CORS(app)
+# Only the JSON API surface needs cross-origin access; HTML pages (notably
+# /settings, which manages secrets) must not be fetchable from other origins.
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # Expose metric definitions to every template so the `metric` tooltip macro and
 # the /glossary page share a single source of truth.
@@ -3295,8 +3297,36 @@ SETTINGS_FIELDS = (
 ) + providers.AI_SETTING_KEYS
 
 
+def _settings_auth_required():
+    """Gate /settings behind SETTINGS_PASSWORD (HTTP Basic Auth).
+
+    Every stored key is global to the app instance (see app_settings in
+    db.py), so an unauthenticated /settings is a full key-read/overwrite
+    vulnerability on any publicly reachable deployment. Fails closed: with
+    no SETTINGS_PASSWORD configured, the page refuses to serve rather than
+    falling back to the old open behaviour.
+    """
+    expected = os.environ.get('SETTINGS_PASSWORD', '')
+    if not expected:
+        return jsonify({
+            "error": "SETTINGS_PASSWORD is not configured on the server; "
+                     "/settings is disabled until it is set.",
+        }), 503
+    auth = request.authorization
+    if auth is None or not hmac.compare_digest(auth.password or '', expected):
+        return Response(
+            "Authentication required.", 401,
+            {"WWW-Authenticate": 'Basic realm="Settings"'},
+        )
+    return None
+
+
 @app.route('/settings', methods=['GET', 'POST'])
 def settings_page():
+    auth_error = _settings_auth_required()
+    if auth_error is not None:
+        return auth_error
+
     saved = False
     if request.method == 'POST':
         for field in SETTINGS_FIELDS:
