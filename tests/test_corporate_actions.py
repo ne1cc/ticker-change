@@ -27,11 +27,13 @@ from corporate_actions import (
 class TestCorporateActionEngine(unittest.TestCase):
 
     def setUp(self):
+        self.orig_db_path = db.DB_PATH
         self.temp_db = tempfile.NamedTemporaryFile(delete=False)
         db.DB_PATH = self.temp_db.name
         self.engine = CorporateActionEngine()
 
     def tearDown(self):
+        db.DB_PATH = self.orig_db_path
         try:
             os.remove(self.temp_db.name)
         except OSError:

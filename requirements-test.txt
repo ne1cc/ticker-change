@@ -1,0 +1,5 @@
+# Test-only dependencies, on top of requirements.txt. Kept separate so the
+# production image doesn't carry packages only needed to run tests/test_warehouse.py
+# (duckdb powers the not-yet-wired-in warehouse.py analytics module).
+pytest
+duckdb

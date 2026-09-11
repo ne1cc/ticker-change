@@ -162,6 +162,15 @@ python ml.py train AAPL MSFT NVDA SPY ...
 Without `model.pkl`, the ML section is omitted. Predictions older than 30 days
 are suppressed.
 
+### Running tests
+
+```bash
+pip install -r requirements.txt -r requirements-test.txt
+pytest tests/ -v
+```
+
+Runs on every push and pull request via `.github/workflows/tests.yml`.
+
 ---
 
 ## Configuration

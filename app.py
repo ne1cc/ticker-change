@@ -7,6 +7,7 @@ from flask_cors import CORS
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -27,6 +28,8 @@ import event_study
 import sec_8k
 import microstructure
 import macro_engine
+import options
+from options import compute_options_terminal, calculate_greeks
 import derivatives_alpha
 import backtest_engine
 import api_docs
@@ -34,43 +37,14 @@ import decide
 import momentum_engine
 from glossary import GLOSSARY
 
-# --- yfinance custom session with browser headers to prevent Cloud IP blocking ---
-_YF_SESSION = None
-_YF_SESSION_LOCK = threading.Lock()
-
-def _get_yf_session():
-    global _YF_SESSION
-    if _YF_SESSION is not None:
-        return _YF_SESSION
-    with _YF_SESSION_LOCK:
-        if _YF_SESSION is not None:
-            return _YF_SESSION
-        import requests
-        from requests.adapters import HTTPAdapter
-        from urllib3.util import Retry
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "*/*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Origin": "https://finance.yahoo.com",
-            "Referer": "https://finance.yahoo.com",
-        })
-        retries = Retry(
-            total=3,
-            backoff_factor=0.6,
-            status_forcelist=[429, 500, 502, 503, 504],
-            raise_on_status=False
-        )
-        adapter = HTTPAdapter(max_retries=retries)
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
-        _YF_SESSION = session
-    return _YF_SESSION
-
 def _get_yf_ticker(symbol: str) -> yf.Ticker:
-    """Return a yfinance Ticker instance configured with a custom, browser-like requests session."""
-    return yf.Ticker(symbol.upper(), session=_get_yf_session())
+    """Return a yfinance Ticker instance.
+
+    yfinance manages its own curl_cffi session (with browser TLS/header
+    impersonation) internally as of the 1.x line; passing a plain
+    requests.Session raises "Yahoo API requires curl_cffi session".
+    """
+    return yf.Ticker(symbol.upper())
 
 app = Flask(__name__)
 # Only the JSON API surface needs cross-origin access; HTML pages (notably
@@ -203,27 +177,48 @@ def _close_n_sessions_ago(df, n_sessions, *, live_mode=False):
 
 
 def calculate_date_periods():
-    """Calculate the date periods for comparison (calendar-based; 1D–5D handled separately)."""
+    """Calculate calendar-based comparison dates for 1W through 5Y and YTD."""
     today = datetime.now()
-    
-    # include a richer set of short-term periods: days 1-5 and weeks 1-4
-    periods = {
-        '1W': today - timedelta(weeks=1),
-        '2W': today - timedelta(weeks=2),
-        '3W': today - timedelta(weeks=3),
-        '1M': today - timedelta(days=30),
-        '2M': today - timedelta(days=60),
-        '3M': today - timedelta(days=90),
-        '6M': today - timedelta(days=180),
-        '1Y': today - timedelta(days=365),
-        '2Y': today - timedelta(days=365*2),
-        '3Y': today - timedelta(days=365*3),
-        '4Y': today - timedelta(days=365*4),
-        '5Y': today - timedelta(days=365*5),
-        'YTD': datetime(today.year, 1, 1)
+    return {
+        '1W':  today - timedelta(weeks=1),
+        '2W':  today - timedelta(weeks=2),
+        '3W':  today - timedelta(weeks=3),
+        '1M':  today - relativedelta(months=1),
+        '2M':  today - relativedelta(months=2),
+        '3M':  today - relativedelta(months=3),
+        '6M':  today - relativedelta(months=6),
+        '1Y':  today - relativedelta(years=1),
+        '2Y':  today - relativedelta(years=2),
+        '3Y':  today - relativedelta(years=3),
+        '4Y':  today - relativedelta(years=4),
+        '5Y':  today - relativedelta(years=5),
+        'YTD': datetime(today.year, 1, 1),
     }
-    
-    return periods
+
+
+def _find_closest_trading_price(
+    df: pd.DataFrame, target_date, max_tolerance_days: int = 30
+) -> tuple[float | None, str | None]:
+    """Find the historical close price on the trading day closest to target_date.
+
+    Handles weekends, holidays, and boundaries at the start of the historical series.
+    Returns (historical_price, matched_date_str) or (None, None) if outside tolerance.
+    """
+    if df is None or df.empty:
+        return None, None
+
+    target_ts = pd.to_datetime(target_date).tz_localize(None).normalize()
+    df_idx = pd.to_datetime(df.index).tz_localize(None).normalize()
+
+    sec_diff = np.abs((df_idx - target_ts).total_seconds())
+    closest_pos = int(sec_diff.argmin())
+    closest_date = df_idx[closest_pos]
+    diff_days = abs((closest_date - target_ts).days)
+
+    if diff_days <= max_tolerance_days:
+        price = float(df['close'].iloc[closest_pos])
+        return price, closest_date.strftime('%Y-%m-%d')
+    return None, None
 
 def get_current_price_yfinance(ticker, retries=3):
     """Get current price using yfinance with retry logic and extended hours (pre-market 4am / after-hours)."""
@@ -509,8 +504,15 @@ def get_chart_data_json(ticker, start_date=None, end_date=None):
         }
     }
 
-def _append_period_change(percentage_data, net_change_data, period_name, current_price, historical_price):
-    if historical_price and not np.isnan(historical_price) and historical_price != 0:
+def _append_period_change(
+    percentage_data,
+    net_change_data,
+    period_name,
+    current_price,
+    historical_price,
+    matched_date=None,
+):
+    if historical_price is not None and not np.isnan(historical_price) and historical_price != 0:
         net_change = current_price - historical_price
         pct_change = ((current_price - historical_price) / historical_price) * 100
         percentage_data.append({
@@ -518,16 +520,18 @@ def _append_period_change(percentage_data, net_change_data, period_name, current
             "value": round(pct_change, 2),
             "raw_value": pct_change,
             "is_positive": pct_change > 0,
+            "matched_date": matched_date,
         })
         net_change_data.append({
             "period": period_name,
             "value": round(net_change, 2),
             "raw_value": net_change,
             "is_positive": net_change > 0,
+            "matched_date": matched_date,
         })
     else:
-        percentage_data.append({"period": period_name, "value": "N/A"})
-        net_change_data.append({"period": period_name, "value": "N/A"})
+        percentage_data.append({"period": period_name, "value": "N/A", "matched_date": None})
+        net_change_data.append({"period": period_name, "value": "N/A", "matched_date": None})
 
 
 def _append_weekend_placeholder(percentage_data, net_change_data, period_name):
@@ -550,37 +554,32 @@ def get_stock_data(ticker):
     live_mode = live_price is not None and not _is_weekend()
     current_price = live_price if live_mode else db_latest_close
     periods = calculate_date_periods()
-    today_is_weekend = _is_weekend()
 
     percentage_data = [{"period": "Current Price", "value": f"${current_price:.2f}"}]
     net_change_data = [{"period": "Current Price", "value": f"${current_price:.2f}"}]
 
     for period_name in list(SHORT_DAY_PERIODS.keys()) + list(periods.keys()):
         if period_name in SHORT_DAY_PERIODS:
-            if today_is_weekend:
-                _append_weekend_placeholder(percentage_data, net_change_data, period_name)
-                continue
             n_sessions = SHORT_DAY_PERIODS[period_name]
             historical_price = _close_n_sessions_ago(df, n_sessions, live_mode=live_mode)
+            session_date = None
+            if len(df) >= n_sessions:
+                latest_bar = pd.to_datetime(df.index[-1]).normalize()
+                today_norm = pd.Timestamp.now().normalize()
+                hist_idx = -n_sessions if (live_mode and latest_bar < today_norm) else -(n_sessions + 1)
+                if len(df) >= abs(hist_idx):
+                    session_date = pd.to_datetime(df.index[hist_idx]).strftime('%Y-%m-%d')
             _append_period_change(
-                percentage_data, net_change_data, period_name, current_price, historical_price
+                percentage_data, net_change_data, period_name, current_price, historical_price, session_date
             )
             continue
 
         target_date = periods[period_name]
-        target_ts = pd.to_datetime(target_date).tz_localize(None)
-        valid = df[df.index <= target_ts]
-        if valid.empty:
-            historical_price = None
-        else:
-            historical_price = float(valid['close'].iloc[-1])
-
-        if _is_weekend(target_date):
-            _append_weekend_placeholder(percentage_data, net_change_data, period_name)
-        else:
-            _append_period_change(
-                percentage_data, net_change_data, period_name, current_price, historical_price
-            )
+        tolerance = 30 if ('Y' in period_name and period_name != 'YTD') else 14
+        historical_price, matched_date = _find_closest_trading_price(df, target_date, max_tolerance_days=tolerance)
+        _append_period_change(
+            percentage_data, net_change_data, period_name, current_price, historical_price, matched_date
+        )
 
     chart_result = generate_stock_chart(ticker)
     return {
@@ -668,11 +667,12 @@ def stock_page():
         def _lookback_result(target_date, label_type, label_count):
             if df_cached is None or df_cached.empty:
                 return {'error': 'No price data available'}
-            target_ts = pd.to_datetime(target_date).tz_localize(None)
-            valid = df_cached[df_cached.index <= target_ts]
-            if valid.empty:
+            tolerance = 30 if (label_count >= 365) else 14
+            historical_price, matched_dt = _find_closest_trading_price(
+                df_cached, target_date, max_tolerance_days=tolerance
+            )
+            if historical_price is None:
                 return {'error': f'Could not retrieve price for {label_count} {label_type} ago'}
-            historical_price = float(valid['close'].iloc[-1])
             current_price = data['current_price']
             net_change = current_price - historical_price
             pct_change = ((current_price - historical_price) / historical_price) * 100
@@ -682,7 +682,7 @@ def stock_page():
             return {
                 'type': label_type,
                 'days': label_count,
-                'target_date': target_date.strftime('%Y-%m-%d'),
+                'target_date': matched_dt or target_date.strftime('%Y-%m-%d'),
                 'historical_price': round(historical_price, 2),
                 'current_price': round(current_price, 2),
                 'net_change': round(net_change, 2),
@@ -2496,6 +2496,128 @@ def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045):
         return None
 
 
+def get_full_option_chain_df(
+    ticker: str,
+    stock=None,
+    current_price: Optional[float] = None,
+    max_expirations: int = 8,
+) -> pd.DataFrame:
+    """Aggregate cached option chains across expirations into a single normalized DataFrame."""
+    try:
+        stock = stock or _get_yf_ticker(ticker)
+        expirations = get_cached_expirations(ticker, stock)
+        if not expirations:
+            return pd.DataFrame()
+
+        today = datetime.now()
+        selected = []
+        for exp in expirations:
+            try:
+                exp_dt = datetime.strptime(exp, '%Y-%m-%d')
+            except ValueError:
+                continue
+            dte = (exp_dt - today).days
+            if dte < 0:
+                continue
+            selected.append((exp, exp_dt, dte))
+            if len(selected) >= max_expirations:
+                break
+
+        if not selected:
+            return pd.DataFrame()
+
+        def _safe_float(val, default=0.0) -> float:
+            try:
+                if val is None or pd.isna(val):
+                    return default
+                return float(val)
+            except Exception:
+                return default
+
+        def _safe_int(val, default=0) -> int:
+            try:
+                if val is None or pd.isna(val):
+                    return default
+                return int(val)
+            except Exception:
+                return default
+
+        def _fetch(exp_tuple):
+            try:
+                return exp_tuple, get_cached_chain(ticker, exp_tuple[0], stock=stock, spot_hint=current_price)
+            except Exception:
+                return exp_tuple, None
+
+        with ThreadPoolExecutor(max_workers=min(len(selected), 8)) as pool:
+            fetched = list(pool.map(_fetch, selected))
+
+        rows = []
+        for (exp, exp_dt, dte), chain in fetched:
+            if chain is None:
+                continue
+            calls_df, puts_df, _ = chain
+            for df_side, cp in ((calls_df, 'C'), (puts_df, 'P')):
+                if df_side is None or df_side.empty:
+                    continue
+                for _, r in df_side.iterrows():
+                    strike = r.get('strike')
+                    iv = r.get('impliedVolatility')
+                    if strike is None or iv is None or pd.isna(strike) or pd.isna(iv):
+                        continue
+                    rows.append({
+                        'strike': float(strike),
+                        'cp': cp,
+                        'dte': int(dte),
+                        'expiration': exp,
+                        'bid': _safe_float(r.get('bid', 0.0)),
+                        'ask': _safe_float(r.get('ask', 0.0)),
+                        'last_price': _safe_float(r.get('lastPrice', 0.0)),
+                        'iv': float(iv),
+                        'open_interest': _safe_int(r.get('openInterest', 0)),
+                        'volume': _safe_int(r.get('volume', 0)),
+                    })
+
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception as e:
+        print(f"[options-terminal] Error assembling full chain for {ticker}: {e}")
+        return pd.DataFrame()
+
+
+@app.route('/options')
+def options_page():
+    ticker = request.args.get('ticker', '').strip().upper()
+    if not ticker:
+        with db.get_conn() as conn:
+            rows = conn.execute("SELECT DISTINCT symbol FROM daily_prices").fetchall()
+        tickers = [r["symbol"] for r in rows]
+        ticker = tickers[0] if tickers else 'SPY'
+
+    convention = request.args.get('convention', 'naive').strip().lower()
+    if convention not in ('naive', 'short_wings'):
+        convention = 'naive'
+
+    current_price = get_current_price_yfinance(ticker)
+    if not current_price:
+        current_price = _spot_price(ticker, _get_yf_ticker(ticker)) or 100.0
+
+    stock = _get_yf_ticker(ticker)
+    chains_df = get_full_option_chain_df(ticker, stock=stock, current_price=current_price)
+    daily_df = get_or_fetch_prices(ticker)
+
+    terminal_res = compute_options_terminal(
+        ticker=ticker,
+        spot=current_price,
+        chain_df=chains_df,
+        daily_df=daily_df,
+        convention=convention,
+    )
+
+    import dataclasses
+    data_dict = dataclasses.asdict(terminal_res)
+
+    return render_template('options.html', ticker=ticker, data=data_dict)
+
+
 @app.route('/live')
 def live_page():
     ticker = request.args.get('ticker', '').strip().upper()
@@ -3176,9 +3298,14 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
 
 
 @app.route('/strategies')
+@app.route('/momentum')
 def strategies_page():
-    tab = request.args.get('tab', 'universe')
-    symbol = request.args.get('symbol', '').upper().strip()
+    # `ticker` is accepted alongside `symbol` so links from the other pages
+    # (which all carry ?ticker=) land here directly; arriving with a symbol
+    # implies the single-ticker view rather than the universe leaderboard.
+    raw_symbol = request.args.get('symbol') or request.args.get('ticker') or ''
+    symbol = raw_symbol.upper().strip()
+    tab = request.args.get('tab', 'ticker' if symbol else 'universe')
     period = request.args.get('period', 'all')
     strategy_id = _resolve_strategy(request.args.get('strategy', DEFAULT_STRATEGY))
 
@@ -3531,10 +3658,38 @@ def options_analysis_api(ticker):
     return jsonify(data)
 
 
+@app.route('/api/options-terminal/<ticker>')
+def api_options_terminal(ticker):
+    ticker = ticker.strip().upper()
+    convention = request.args.get('convention', 'naive').strip().lower()
+    if convention not in ('naive', 'short_wings'):
+        convention = 'naive'
+
+    current_price = get_current_price_yfinance(ticker)
+    if not current_price:
+        current_price = _spot_price(ticker, _get_yf_ticker(ticker)) or 100.0
+
+    stock = _get_yf_ticker(ticker)
+    chains_df = get_full_option_chain_df(ticker, stock=stock, current_price=current_price)
+    daily_df = get_or_fetch_prices(ticker)
+
+    terminal_res = compute_options_terminal(
+        ticker=ticker,
+        spot=current_price,
+        chain_df=chains_df,
+        daily_df=daily_df,
+        convention=convention,
+    )
+
+    import dataclasses
+    return jsonify(dataclasses.asdict(terminal_res))
+
+
 @app.route('/api/options-ai-report/<ticker>')
 def options_ai_report_api(ticker):
     expiration = request.args.get('expiration', '')
     rf_rate_raw = request.args.get('rf_rate', '0.045')
+    force = request.args.get('force', '').lower() in ('1', 'true', 'yes')
     try:
         rf_rate = float(rf_rate_raw)
     except ValueError:
@@ -3544,7 +3699,7 @@ def options_ai_report_api(ticker):
     if not data:
         return jsonify({"error": f"Could not retrieve options data for {ticker}"}), 404
         
-    report, error = ai.generate_options_report(ticker, data)
+    report, error = ai.generate_options_report(ticker, data, force=force)
     if error:
         return jsonify({"error": error}), 500
         
@@ -3686,6 +3841,16 @@ def _warm_options_cache(force=False):
                         if get_cached_chain(sym, exp, stock=stock, force=force) is not None:
                             chains += 1
                         time.sleep(0.15)  # stay gentle on yfinance rate limits
+
+                    # Persist daily positioning snapshot to options_iv_history
+                    try:
+                        chain_df = get_full_option_chain_df(sym, stock=stock)
+                        daily_df = get_or_fetch_prices(sym)
+                        spot = _spot_price(sym, stock) or 100.0
+                        if not chain_df.empty:
+                            compute_options_terminal(sym, spot, chain_df, daily_df, record_db=True)
+                    except Exception as snap_err:
+                        print(f"[options-cache] snapshot error for {sym}: {snap_err}")
                 except Exception as e:
                     print(f"[options-cache] {sym} failed: {e}")
             print(f"[options-cache] done ({len(symbols)} tickers, {chains} chains)")

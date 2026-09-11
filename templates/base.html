@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Stock Price Tracker{% endblock %}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
     <script>
       tailwind.config = {
@@ -224,16 +224,20 @@
               </svg>
               <span class="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">ticker<span class="text-amber-500">/</span>change</span>
             </a>
-            <div class="hidden md:flex items-center gap-6">
-              <a id="nav-analytics" href="/analytics" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium">Analytics</a>
-              <a id="nav-strategies" href="/strategies" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium">Strategies</a>
-              <a id="nav-live" href="/live" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium">Live Microstructure</a>
-              <a id="nav-apidocs" href="/api/docs" class="text-sm text-amber-500 dark:text-amber-400 hover:text-amber-600 dark:hover:text-amber-300 font-semibold transition-colors">API Docs (Swagger)</a>
+            <div class="hidden md:flex items-center gap-5 lg:gap-6">
+              <a id="nav-stock" href="/stock" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Overview</a>
+              <a id="nav-options" href="/options" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Options</a>
+              <a id="nav-analytics" href="/analytics" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Analytics</a>
+              <a id="nav-positioning" href="/positioning" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Positioning</a>
+              <a id="nav-live" href="/live" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Live Microstructure</a>
+              <a id="nav-momentum" href="/momentum" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Strategies</a>
+              <a id="nav-ai-summary" href="/ai-summary" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">AI Strategy</a>
             </div>
           </div>
           <div class="flex items-center gap-2">
-            <a href="/glossary" class="hidden md:inline text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium mr-2">Glossary</a>
-            <a href="/settings" class="p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors duration-200" title="API key settings" aria-label="Settings">
+            <a id="nav-glossary" href="/glossary" class="hidden md:inline text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium mr-1 border-b-2 border-transparent pb-0.5">Glossary</a>
+            <a id="nav-apidocs" href="/api/docs" class="hidden md:inline text-sm text-amber-500 dark:text-amber-400 hover:text-amber-600 dark:hover:text-amber-300 font-semibold transition-colors mr-2 border-b-2 border-transparent pb-0.5">API Docs</a>
+            <a id="nav-settings" href="/settings" class="p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors duration-200" title="API key settings" aria-label="Settings">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a6.759 6.759 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -267,13 +271,31 @@
             </button>
           </div>
         </div>
-        <div id="mobile-nav-menu" class="hidden md:hidden border-t border-zinc-200 dark:border-zinc-800 py-3">
-          <div class="grid grid-cols-2 gap-2">
-            <a id="mobile-nav-analytics" href="/analytics" class="mobile-nav-link">Analytics</a>
-            <a id="mobile-nav-strategies" href="/strategies" class="mobile-nav-link">Strategies</a>
-            <a id="mobile-nav-live" href="/live" class="mobile-nav-link">Live Market</a>
-            <a id="mobile-nav-apidocs" href="/api/docs" class="mobile-nav-link text-amber-600 dark:text-amber-400 font-semibold">API Docs</a>
-            <a href="/glossary" class="mobile-nav-link">Glossary</a>
+        <div id="mobile-nav-menu" class="hidden md:hidden border-t border-zinc-200 dark:border-zinc-800 py-3 space-y-3">
+          <div>
+            <div class="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 px-2 mb-1">Market Intelligence</div>
+            <div class="grid grid-cols-2 gap-1.5">
+              <a id="mobile-nav-stock" href="/stock" class="mobile-nav-link">Overview</a>
+              <a id="mobile-nav-options" href="/options" class="mobile-nav-link">Options Terminal</a>
+              <a id="mobile-nav-analytics" href="/analytics" class="mobile-nav-link">Risk Analytics</a>
+              <a id="mobile-nav-positioning" href="/positioning" class="mobile-nav-link">Positioning &amp; 13F</a>
+              <a id="mobile-nav-live" href="/live" class="mobile-nav-link">Microstructure</a>
+            </div>
+          </div>
+          <div>
+            <div class="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 px-2 mb-1">Quantitative Models</div>
+            <div class="grid grid-cols-2 gap-1.5">
+              <a id="mobile-nav-momentum" href="/momentum" class="mobile-nav-link">Backtests</a>
+              <a id="mobile-nav-ai-summary" href="/ai-summary" class="mobile-nav-link">AI Strategy</a>
+            </div>
+          </div>
+          <div>
+            <div class="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 px-2 mb-1">Reference &amp; Tools</div>
+            <div class="grid grid-cols-2 gap-1.5">
+              <a id="mobile-nav-glossary" href="/glossary" class="mobile-nav-link">Glossary</a>
+              <a id="mobile-nav-apidocs" href="/api/docs" class="mobile-nav-link text-amber-600 dark:text-amber-400 font-semibold">API Docs</a>
+              <a id="mobile-nav-settings" href="/settings" class="mobile-nav-link">Settings</a>
+            </div>
           </div>
         </div>
       </div>
@@ -293,9 +315,11 @@
         <!-- Links to specific views for this ticker -->
         <div class="mobile-horizontal-scroll order-3 w-full lg:order-none lg:w-auto flex items-center gap-1 sm:gap-2">
           <a id="sub-link-stock" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Price Table</a>
+          <a id="sub-link-options" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Options Terminal</a>
           <a id="sub-link-analytics" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Risk Analytics</a>
           <a id="sub-link-positioning" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Market Positioning</a>
-          <a id="sub-link-live" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Live Microstructure & Options</a>
+          <a id="sub-link-live" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Live Microstructure</a>
+          <a id="sub-link-momentum" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Strategy Backtests</a>
           <a id="sub-link-ai-summary" href="#" class="text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">AI Strategy Report</a>
         </div>
 
@@ -397,8 +421,41 @@
       })();
     </script>
     <script>
-      // Persist the active ticker and configure sub-navbar
+      // Navigation state, active indicators, and ticker persistence
       (function () {
+        const path = window.location.pathname;
+        
+        // Determine active route key
+        let activeKey = null;
+        if (path === '/' || path === '/stock') activeKey = 'stock';
+        else if (path === '/analytics') activeKey = 'analytics';
+        else if (path === '/positioning') activeKey = 'positioning';
+        else if (path === '/live') activeKey = 'live';
+        else if (path === '/momentum' || path === '/strategies') activeKey = 'momentum';
+        else if (path === '/ai-summary') activeKey = 'ai-summary';
+        else if (path === '/glossary') activeKey = 'glossary';
+        else if (path.startsWith('/api/docs')) activeKey = 'apidocs';
+        else if (path === '/settings') activeKey = 'settings';
+
+        // Apply active styling to desktop and mobile nav items
+        if (activeKey) {
+          const desktopEl = document.getElementById('nav-' + activeKey);
+          if (desktopEl) {
+            if (activeKey === 'settings') {
+              desktopEl.classList.remove('text-zinc-500', 'dark:text-zinc-400', 'border-zinc-200', 'dark:border-zinc-800');
+              desktopEl.classList.add('border-amber-500', 'text-amber-600', 'dark:text-amber-400', 'bg-amber-500/10');
+            } else {
+              desktopEl.classList.remove('text-zinc-500', 'dark:text-zinc-400', 'border-transparent');
+              desktopEl.classList.add('text-amber-600', 'dark:text-amber-400', 'font-semibold', 'border-amber-500');
+            }
+          }
+          const mobileEl = document.getElementById('mobile-nav-' + activeKey);
+          if (mobileEl) {
+            mobileEl.classList.add('bg-amber-500/10', 'text-amber-600', 'dark:text-amber-400', 'font-bold', 'border-l-2', 'border-amber-500', 'pl-2');
+          }
+        }
+
+        // Ticker persistence and sub-navbar setup
         const params = new URLSearchParams(window.location.search);
         const urlTicker = params.get('ticker') || params.get('symbol');
         if (urlTicker) {
@@ -407,47 +464,50 @@
         const ticker = urlTicker || localStorage.getItem('last_ticker');
         if (!ticker) return;
 
-        // Configure main nav links
+        // Update core nav links with active ticker parameter
         const links = {
-          'brand-link':      '/stock?ticker=' + ticker,
-          'nav-analytics':   '/analytics?ticker=' + ticker,
-          'mobile-nav-analytics': '/analytics?ticker=' + ticker,
-          'nav-positioning': '/positioning?ticker=' + ticker,
-          'nav-live':        '/live?ticker=' + ticker,
-          'mobile-nav-live': '/live?ticker=' + ticker,
-          'nav-ai-summary':  '/ai-summary?ticker=' + ticker,
+          'brand-link':             '/stock?ticker=' + ticker,
+          'nav-stock':              '/stock?ticker=' + ticker,
+          'mobile-nav-stock':       '/stock?ticker=' + ticker,
+          'nav-analytics':          '/analytics?ticker=' + ticker,
+          'mobile-nav-analytics':   '/analytics?ticker=' + ticker,
+          'nav-positioning':        '/positioning?ticker=' + ticker,
+          'mobile-nav-positioning': '/positioning?ticker=' + ticker,
+          'nav-live':               '/live?ticker=' + ticker,
+          'mobile-nav-live':        '/live?ticker=' + ticker,
+          'nav-momentum':           '/momentum?ticker=' + ticker,
+          'mobile-nav-momentum':    '/momentum?ticker=' + ticker,
+          'nav-ai-summary':         '/ai-summary?ticker=' + ticker,
+          'mobile-nav-ai-summary':  '/ai-summary?ticker=' + ticker,
         };
         Object.entries(links).forEach(([id, href]) => {
           const el = document.getElementById(id);
           if (el) el.href = href;
         });
 
-        // Show and configure sub-navbar
+        // Show and configure ticker sub-navbar
         const subNav = document.getElementById('ticker-sub-nav');
         if (subNav) {
           subNav.classList.remove('hidden');
-          document.getElementById('sub-nav-ticker').innerText = ticker;
+          const tickerEl = document.getElementById('sub-nav-ticker');
+          if (tickerEl) tickerEl.innerText = ticker;
           
           const subLinks = {
             'sub-link-stock':       '/stock?ticker=' + ticker,
+            'sub-link-options':     '/options?ticker=' + ticker,
             'sub-link-analytics':   '/analytics?ticker=' + ticker,
             'sub-link-positioning': '/positioning?ticker=' + ticker,
             'sub-link-live':        '/live?ticker=' + ticker,
+            'sub-link-momentum':    '/momentum?ticker=' + ticker,
             'sub-link-ai-summary':  '/ai-summary?ticker=' + ticker,
           };
           
-          const path = window.location.pathname;
           Object.entries(subLinks).forEach(([id, href]) => {
             const el = document.getElementById(id);
             if (el) {
               el.href = href;
-              // Highlight active tab
-              const isActive = (id === 'sub-link-stock' && path === '/stock') ||
-                               (id === 'sub-link-analytics' && path === '/analytics') ||
-                               (id === 'sub-link-positioning' && path === '/positioning') ||
-                               (id === 'sub-link-live' && path === '/live') ||
-                               (id === 'sub-link-ai-summary' && path === '/ai-summary');
-              if (isActive) {
+              const linkKey = id.replace('sub-link-', '');
+              if (linkKey === activeKey) {
                 el.className = "text-xs font-bold px-3 py-1.5 rounded-lg bg-amber-500 text-zinc-950 shadow-sm transition-all";
               }
             }
@@ -462,12 +522,13 @@
 
       function handleSubNavSearch(e) {
         e.preventDefault();
-        const val = document.getElementById('sub-nav-search-input').value.trim().toUpperCase();
+        const input = document.getElementById('sub-nav-search-input');
+        const val = input ? input.value.trim().toUpperCase() : '';
         if (!val) return;
         
         const path = window.location.pathname;
         let target = '/stock';
-        if (['/stock', '/analytics', '/positioning', '/live', '/ai-summary'].includes(path)) {
+        if (['/stock', '/analytics', '/positioning', '/live', '/momentum', '/strategies', '/ai-summary'].includes(path)) {
           target = path;
         }
         window.location.href = target + '?ticker=' + val;
