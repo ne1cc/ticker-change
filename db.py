@@ -175,6 +175,43 @@ def get_prices(symbol: str) -> pd.DataFrame | None:
     return df
 
 
+def get_prices_batch(symbols: list[str]) -> dict[str, pd.DataFrame]:
+    """One query for many symbols. Returns {symbol: DataFrame} with the same
+    per-symbol shape get_prices returns. Symbols with no rows are ABSENT from
+    the dict (not None values). Empty input -> empty dict."""
+    if not symbols:
+        return {}
+    upper_symbols = [s.upper() for s in symbols]
+    CHUNK_SIZE = 900
+    rows = []
+    with get_conn() as conn:
+        for i in range(0, len(upper_symbols), CHUNK_SIZE):
+            chunk = upper_symbols[i:i + CHUNK_SIZE]
+            placeholders = ",".join("?" * len(chunk))
+            rows.extend(conn.execute(
+                "SELECT symbol, date, open, high, low, close, volume "
+                f"FROM daily_prices WHERE symbol IN ({placeholders}) "
+                "ORDER BY symbol, date ASC",
+                chunk,
+            ).fetchall())
+
+    rows_by_symbol: dict[str, list] = {}
+    for row in rows:
+        rows_by_symbol.setdefault(row["symbol"], []).append(row)
+
+    result: dict[str, pd.DataFrame] = {}
+    for symbol, symbol_rows in rows_by_symbol.items():
+        df = pd.DataFrame(
+            symbol_rows,
+            columns=["symbol", "date", "open", "high", "low", "close", "volume"],
+        )
+        df = df.drop(columns=["symbol"])
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        result[symbol] = df
+    return result
+
+
 def store_prices(symbol: str, df: pd.DataFrame):
     symbol = symbol.upper()
     df = df.copy()
