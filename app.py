@@ -2661,6 +2661,10 @@ def _load_price_frame(symbols):
 
     Symbols with no cached rows are absent from the batch — and so from the
     frame's columns. Column order follows `symbols`.
+
+    Callers must pass DB-cased (uppercase) symbols: the lookup is
+    case-sensitive and a lowercase symbol silently drops out rather than
+    raising, so an all-lowercase list yields an empty (0, 0) frame.
     """
     batch = db.get_prices_batch(symbols)
     return pd.DataFrame({s: batch[s]["close"] for s in symbols if s in batch})
@@ -3202,14 +3206,15 @@ def strategies_page():
             )
 
         df = db.get_prices(symbol)
-        if df is None or len(df) < momentum_engine.MOMENTUM_LOOKBACK + momentum_engine.MOMENTUM_EXCLUDE:
+        min_bars = momentum_engine.MOMENTUM_LOOKBACK + momentum_engine.MOMENTUM_EXCLUDE
+        if df is None or len(df) < min_bars:
             return render_template(
                 'strategies.html',
                 data=None,
                 tab='ticker',
                 available_symbols=available_symbols,
                 searched_symbol=symbol,
-                error=f"Ticker '{symbol}' has insufficient price history (need at least 273 trading days).",
+                error=f"Ticker '{symbol}' has insufficient price history (need at least {min_bars} trading days).",
                 **shared
             )
 
@@ -3279,7 +3284,7 @@ def strategies_page():
 
     data = _strategies_universe_data(symbols, price_df, strategy_id, period)
     if data is None:
-        return render_template('strategies.html', data=None, error=f"Insufficient history in database. Need at least {momentum_engine.MOMENTUM_LOOKBACK} daily bars.", **shared)
+        return render_template('strategies.html', data=None, error=f"Insufficient history in database. Need at least {momentum_engine.MOMENTUM_LOOKBACK + 2} daily bars.", **shared)
 
     series = data.pop("_series")
     data["chart_html"] = _strategies_universe_chart(

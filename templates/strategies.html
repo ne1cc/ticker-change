@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import metric %}
 {% block title %}Strategy Backtests — ticker/change{% endblock %}
 
 {% block head_extra %}
@@ -28,6 +29,67 @@
   {% endfor %}
 </select>
 {% endmacro %}
+
+{#
+  Leaderboard signal pill. Shared by the desktop table and the mobile card
+  list so the two can never drift apart.
+
+  Dual momentum is the only strategy whose rotation backtest drops a top-5
+  name to cash when it fails the absolute hurdle (see `backtest_rotation`:
+  the slot is NOT backfilled from rank 6). Relative strength has no hurdle,
+  and sma_trend holds its top 5 on rank alone even at a negative spread — so
+  neither gets the Cash treatment, or the table would claim a flat slot the
+  backtest was actually long. The caller decides `is_cash_slot`.
+#}
+{% macro signal_badge(is_top_5, is_cash_slot) -%}
+{%- if is_cash_slot %}
+<span title="Ranked top 5, but its 12-1 return fails the absolute cash hurdle — the backtest holds this slot in cash."
+      class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+  Cash
+</span>
+{%- elif is_top_5 %}
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap bg-zinc-800 text-white dark:bg-zinc-100 dark:text-zinc-900 border border-zinc-700 dark:border-zinc-300">
+  <span class="w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 animate-pulse"></span>
+  Buy
+</span>
+{%- else %}
+<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap bg-zinc-100 text-zinc-600 dark:bg-zinc-800/80 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-800">
+  Watch
+</span>
+{%- endif %}
+{%- endmacro %}
+
+{#
+  Colour class for a signed leaderboard figure. A cash slot's number is not a
+  live long/short signal, so it renders neutral rather than green/red — that
+  is the de-emphasis, instead of an opacity wash that would cost contrast.
+  `pos_cls` overrides the positive colour (the R/Adj column is neutral, not
+  green, when it is positive).
+#}
+{% macro score_cls(value, is_cash_slot, pos_cls='text-emerald-500') -%}
+{%- if is_cash_slot %}text-zinc-600 dark:text-zinc-300
+{%- elif value >= 0 %}{{ pos_cls }}
+{%- else %}text-rose-500{% endif %}
+{%- endmacro %}
+
+{#
+  "Export CSV" button. `table_id` is the rendered <table> the rows are read
+  back out of, so the file can only ever contain what is on screen; the date
+  is stamped client-side in the viewer's own timezone. Vanilla JS + a Blob —
+  no route, no round-trip, no dependency. See the exporter at the foot of
+  this template.
+#}
+{% macro csv_button(table_id, filename_stem) -%}
+<button type="button"
+        data-csv-table="{{ table_id }}"
+        data-csv-name="{{ filename_stem }}"
+        class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100 focus:outline-none focus:border-amber-500 transition-colors whitespace-nowrap shrink-0">
+  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+  </svg>
+  Export CSV
+</button>
+{%- endmacro %}
 
 <div class="space-y-8">
   <!-- Header Section -->
@@ -108,9 +170,14 @@
             {% if strategy_id == 'sma_trend' %}
             The Risk-Adj column divides the SMA spread by trailing 1-year annualised volatility, so a wide spread on a wildly volatile name isn't flattered. Note the leaderboard itself still sorts on the raw spread.
             {% else %}
-            The leaderboard sorts by the 12-1 return divided by trailing 1-year annualised volatility, so a name isn't ranked highly purely for being erratic.
+            The Risk-Adj column divides the 12-1 return by trailing 1-year annualised volatility, so a name isn't flattered purely for being erratic. Note the leaderboard itself still sorts on the raw 12-1 return — the risk-adjusted score is shown alongside it, and it is the Screener's Min Risk-Adjusted Score filter that actually acts on it.
             {% endif %}
           </p>
+          {% if strategy_id == 'sma_trend' %}
+          <p>
+            <strong class="text-zinc-900 dark:text-zinc-100">Rank, not sign, decides the holdings.</strong> Unlike Dual Momentum there is no absolute gate here: the rotation holds the top 5 by spread whatever that spread is, so in a broad downtrend a name badged <strong class="text-zinc-900 dark:text-zinc-100">Buy</strong> can sit at a <em>negative</em> spread — a death cross the backtest is genuinely long, because it was still one of the five least-bad names. The single-ticker backtest is the one that goes to cash below zero.
+          </p>
+          {% endif %}
         </div>
         <div class="space-y-2">
           <h4 class="font-bold text-zinc-900 dark:text-zinc-100 text-xs uppercase tracking-wide">3. Universe backtest</h4>
@@ -261,19 +328,37 @@
           <h2 class="text-lg font-bold text-zinc-900 dark:text-zinc-50">Universe Ranking</h2>
           <p class="text-[11px] text-zinc-400 mt-0.5">
             {% if strategy_id == 'sma_trend' %}
-            Ranked by 50/200 SMA spread · Risk-Adj = spread ÷ annualised volatility
+            Ranked by {{ metric('50/200 SMA spread', 'sma_spread') }} · {{ metric('Risk-Adj', 'risk_adj_mom') }} = spread ÷ annualised volatility
             {% else %}
-            Ranked by 12-1 momentum · Risk-Adj = return ÷ annualised volatility
+            Ranked by 12-1 momentum · {{ metric('Risk-Adj', 'risk_adj_mom') }} = return ÷ annualised volatility
             {% endif %}
           </p>
+          {% if strategy_id == 'sma_trend' %}
+          {# F1: this rotation has no absolute gate, so a top-5 slot is held on
+             rank alone. Saying so here is the honest fix — badging these rows
+             "Cash" would claim a flat slot the backtest is actually long. #}
+          <p class="text-[11px] text-zinc-400 mt-1 leading-relaxed">
+            No absolute gate: the top 5 are held on rank alone, so a <strong class="font-semibold text-zinc-500 dark:text-zinc-300">Buy</strong> can sit on a negative (death-cross) spread.
+          </p>
+          {% endif %}
         </div>
-        <div class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
-          Monthly Rebalance
+        <div class="flex flex-col items-end gap-2 shrink-0">
+          <div class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
+            Monthly Rebalance
+          </div>
+          {{ csv_button('universe-leaderboard', 'strategies-universe-' ~ strategy_id) }}
         </div>
       </div>
 
-      <div class="overflow-auto max-h-[500px] carousel-scrollbar">
-        <table class="w-full min-w-[560px] table-fixed text-left text-sm">
+      {#
+        Below `sm:` the 560px-wide table would force the whole page to scroll
+        sideways, so the same rows render as a stacked card list instead. The
+        table stays in the DOM either way (`hidden` only removes it visually),
+        which is what lets the CSV exporter read one source of rows at every
+        viewport.
+      #}
+      <div class="hidden sm:block overflow-auto max-h-[500px] carousel-scrollbar">
+        <table id="universe-leaderboard" class="w-full min-w-[560px] table-fixed text-left text-sm">
           <thead class="bg-zinc-50 dark:bg-zinc-900/50 text-[11px] font-medium text-zinc-400 sticky top-0">
             <tr>
               <th class="py-3 px-2 w-8 text-center">#</th>
@@ -287,48 +372,61 @@
           <tbody class="divide-y divide-zinc-100 dark:divide-zinc-800/50">
             {% for r in data.leaderboard %}
             {% set is_top_5 = r.symbol in data.top_5 %}
-            {#
-              Dual momentum is the only strategy whose rotation backtest drops
-              a top-5 name to cash when it fails the absolute hurdle (see
-              `backtest_rotation`: the slot is NOT backfilled from rank 6).
-              Relative strength has no hurdle, and sma_trend holds its top 5
-              on rank alone even at a negative spread — so neither gets the
-              Cash treatment, or the table would claim a flat slot the
-              backtest was actually long.
-            #}
             {% set is_cash_slot = is_top_5 and strategy_id == 'dual_momentum' and not r.passes_absolute %}
-            <tr class="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/20 {% if is_top_5 %}bg-zinc-100/50 dark:bg-zinc-800/30 hover:bg-zinc-100/80{% endif %} {% if is_cash_slot %}opacity-60{% endif %} transition-colors">
-              <td class="py-3.5 px-2 font-mono font-medium text-zinc-400 text-center">{{ r.rank }}</td>
+            {#
+              F3: a cash slot used to carry `opacity-60`, which stacked on
+              already-muted `text-zinc-400/500` cells and dropped the numbers
+              to roughly 1.7:1. De-emphasis now comes from an amber row tint
+              plus a neutral (rather than green/red) score, so every figure
+              keeps full contrast.
+            #}
+            <tr class="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/20 {% if is_cash_slot %}bg-amber-500/10{% elif is_top_5 %}bg-zinc-100/50 dark:bg-zinc-800/30 hover:bg-zinc-100/80{% endif %} transition-colors">
+              <td class="py-3.5 px-2 font-mono font-medium text-zinc-500 dark:text-zinc-400 text-center">{{ r.rank }}</td>
               <td class="py-3.5 px-2 font-semibold text-zinc-900 dark:text-zinc-50">
                 <a href="/stock?ticker={{ r.symbol }}" class="hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">{{ r.symbol }}</a>
               </td>
-              <td class="py-3.5 px-2 font-mono text-right font-semibold whitespace-nowrap {% if r.score >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
+              <td class="py-3.5 px-2 font-mono text-right font-semibold whitespace-nowrap {{ score_cls(r.score, is_cash_slot) }}">
                 {{ '+' if r.score >= 0 }}{{ r.score }}%
               </td>
-              <td class="py-3.5 px-2 font-mono text-right text-zinc-500 dark:text-zinc-400">{{ r.vol }}%</td>
-              <td class="py-3.5 px-2 font-mono text-right font-semibold {% if r.risk_adj >= 0 %}text-zinc-700 dark:text-zinc-200{% else %}text-rose-500{% endif %}">{{ r.risk_adj }}</td>
-              <td class="py-3.5 px-2 text-center">
-                {% if is_cash_slot %}
-                <span title="Ranked top 5, but its 12-1 return fails the absolute cash hurdle — the backtest holds this slot in cash."
-                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30">
-                  Cash
-                </span>
-                {% elif is_top_5 %}
-                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap bg-zinc-800 text-white dark:bg-zinc-100 dark:text-zinc-900 border border-zinc-700 dark:border-zinc-300">
-                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 animate-pulse"></span>
-                  Buy
-                </span>
-                {% else %}
-                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap bg-zinc-100 text-zinc-600 dark:bg-zinc-800/80 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-800">
-                  Watch
-                </span>
-                {% endif %}
-              </td>
+              <td class="py-3.5 px-2 font-mono text-right text-zinc-600 dark:text-zinc-400">{{ r.vol }}%</td>
+              <td class="py-3.5 px-2 font-mono text-right font-semibold {{ score_cls(r.risk_adj, is_cash_slot, 'text-zinc-700 dark:text-zinc-200') }}">{{ r.risk_adj }}</td>
+              <td class="py-3.5 px-2 text-center">{{ signal_badge(is_top_5, is_cash_slot) }}</td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
+
+      <!-- Mobile (< sm): same rows, stacked as cards so nothing scrolls sideways -->
+      <ul class="sm:hidden divide-y divide-zinc-100 dark:divide-zinc-800/50 max-h-[500px] overflow-y-auto carousel-scrollbar">
+        {% for r in data.leaderboard %}
+        {% set is_top_5 = r.symbol in data.top_5 %}
+        {% set is_cash_slot = is_top_5 and strategy_id == 'dual_momentum' and not r.passes_absolute %}
+        <li class="px-4 py-3 {% if is_cash_slot %}bg-amber-500/10{% elif is_top_5 %}bg-zinc-100/50 dark:bg-zinc-800/30{% endif %}">
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-baseline gap-2 min-w-0">
+              <span class="font-mono text-xs text-zinc-500 dark:text-zinc-400 shrink-0">#{{ r.rank }}</span>
+              <a href="/stock?ticker={{ r.symbol }}" class="font-semibold text-zinc-900 dark:text-zinc-50 truncate">{{ r.symbol }}</a>
+            </div>
+            {{ signal_badge(is_top_5, is_cash_slot) }}
+          </div>
+          <dl class="mt-2 grid grid-cols-3 gap-2 text-[11px]">
+            <div>
+              <dt class="text-zinc-500 dark:text-zinc-400">{% if strategy_id == 'sma_trend' %}SMA Spread{% else %}12-1 Ret{% endif %}</dt>
+              <dd class="font-mono font-semibold {{ score_cls(r.score, is_cash_slot) }}">{{ '+' if r.score >= 0 }}{{ r.score }}%</dd>
+            </div>
+            <div>
+              <dt class="text-zinc-500 dark:text-zinc-400">Vol</dt>
+              <dd class="font-mono text-zinc-700 dark:text-zinc-300">{{ r.vol }}%</dd>
+            </div>
+            <div>
+              <dt class="text-zinc-500 dark:text-zinc-400">R/Adj</dt>
+              <dd class="font-mono font-semibold {{ score_cls(r.risk_adj, is_cash_slot, 'text-zinc-700 dark:text-zinc-200') }}">{{ r.risk_adj }}</dd>
+            </div>
+          </dl>
+        </li>
+        {% endfor %}
+      </ul>
 
       {% if strategy_id == 'dual_momentum' %}
       <div class="px-4 sm:px-5 py-3 border-t border-zinc-100 dark:border-zinc-800/80 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
@@ -359,10 +457,10 @@
             <strong class="text-zinc-900 dark:text-zinc-100">Returns:</strong> Over {{ data.start_date }} → {{ data.end_date }}, the strategy returned a cumulative <strong class="text-zinc-900 dark:text-zinc-100">{{ data.strat_stats.total_return }}%</strong> ({{ data.strat_stats.annual_return }}% CAGR) and {{ data.verdict }} — S&P 500 at <strong class="text-zinc-800 dark:text-zinc-200">{{ data.spy_stats.total_return }}%</strong> and Nasdaq 100 at <strong class="text-zinc-800 dark:text-zinc-200">{{ data.qqq_stats.total_return }}%</strong> over the same window.
           </p>
           <p>
-            <strong class="text-zinc-900 dark:text-zinc-100">Risk-adjusted:</strong> Sharpe <strong class="text-zinc-900 dark:text-zinc-100">{{ data.strat_stats.sharpe }}</strong> and Sortino <strong class="text-zinc-900 dark:text-zinc-100">{{ data.strat_stats.sortino }}</strong> vs SPY's {{ data.spy_stats.sharpe }} / QQQ's {{ data.qqq_stats.sharpe }} Sharpe (all net of a {{ data.rf_annual }}% risk-free rate). Versus the S&P 500 the strategy carried a beta of <strong class="text-zinc-800 dark:text-zinc-200">{{ data.rel_spy.beta }}</strong>, generated <strong class="{% if data.rel_spy.alpha >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">{{ data.rel_spy.alpha }}%</strong> annualised excess return, and posted an information ratio of <strong class="text-zinc-900 dark:text-zinc-100">{{ data.rel_spy.info_ratio }}</strong>.
+            <strong class="text-zinc-900 dark:text-zinc-100">Risk-adjusted:</strong> {{ metric('Sharpe', 'sharpe') }} <strong class="text-zinc-900 dark:text-zinc-100">{{ data.strat_stats.sharpe }}</strong> and {{ metric('Sortino', 'sortino') }} <strong class="text-zinc-900 dark:text-zinc-100">{{ data.strat_stats.sortino }}</strong> vs SPY's {{ data.spy_stats.sharpe }} / QQQ's {{ data.qqq_stats.sharpe }} Sharpe (all net of a {{ data.rf_annual }}% risk-free rate). Versus the S&P 500 the strategy carried a {{ metric('beta', 'beta') }} of <strong class="text-zinc-800 dark:text-zinc-200">{{ data.rel_spy.beta }}</strong>, generated <strong class="{% if data.rel_spy.alpha >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">{{ data.rel_spy.alpha }}%</strong> of annualised {{ metric('alpha', 'alpha') }} on top of that beta exposure, and posted an {{ metric('information ratio', 'info_ratio') }} of <strong class="text-zinc-900 dark:text-zinc-100">{{ data.rel_spy.info_ratio }}</strong>.
           </p>
           <p>
-            <strong class="text-zinc-900 dark:text-zinc-100">Execution & risk:</strong> Monthly (21-day) rebalance, equal-weight top 5, ~{{ data.avg_turnover }}% annual one-way turnover. Worst drawdown was <strong class="text-rose-500">{{ data.strat_stats.max_dd }}%</strong> (Calmar {{ data.strat_stats.calmar }}); SPY {{ data.spy_stats.max_dd }}%, QQQ {{ data.qqq_stats.max_dd }}%. Costs of {{ '%.1f' % 7.5 }} bps are charged on traded notional at each rebalance. <em class="text-zinc-400">Backtest on a fixed large-cap universe — survivorship and small-sample caveats apply; not investment advice.</em>
+            <strong class="text-zinc-900 dark:text-zinc-100">Execution & risk:</strong> Monthly (21-day) rebalance, equal-weight top 5, ~{{ data.avg_turnover }}% annual one-way turnover. Worst {{ metric('drawdown', 'max_drawdown') }} was <strong class="text-rose-500">{{ data.strat_stats.max_dd }}%</strong> ({{ metric('Calmar', 'calmar') }} {{ data.strat_stats.calmar }}); SPY {{ data.spy_stats.max_dd }}%, QQQ {{ data.qqq_stats.max_dd }}%. Costs of {{ '%.1f' % 7.5 }} bps are charged on traded notional at each rebalance. <em class="text-zinc-400">Backtest on a fixed large-cap universe — survivorship and small-sample caveats apply; not investment advice.</em>
           </p>
         </div>
       </div>
@@ -442,7 +540,7 @@
       <h3 class="text-2xl font-bold mt-1 text-zinc-900 dark:text-zinc-50 {% if data.mom_12_1 >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
         {{ '+' if data.mom_12_1 >= 0 }}{{ data.mom_12_1 }}%
       </h3>
-      <p class="text-[10px] text-zinc-400 mt-1">1yr return ex-last 21d · risk-adj {{ data.risk_adj_mom }} (vol {{ data.ann_vol_1y }}%)</p>
+      <p class="text-[10px] text-zinc-400 mt-1">1yr return ex-last 21d · {{ metric('risk-adj', 'risk_adj_mom') }} {{ data.risk_adj_mom }} ({{ metric('vol', 'annualised_vol') }} {{ data.ann_vol_1y }}%)</p>
     </div>
 
     <!-- Stat 2: Trend State -->
@@ -574,11 +672,11 @@
               <th class="py-2.5 px-4 font-sans">Strategy</th>
               <th class="py-2.5 px-4 text-right">Total Return</th>
               <th class="py-2.5 px-4 text-right">CAGR</th>
-              <th class="py-2.5 px-4 text-right">Volatility</th>
-              <th class="py-2.5 px-4 text-right">Sharpe</th>
-              <th class="py-2.5 px-4 text-right">Sortino</th>
-              <th class="py-2.5 px-4 text-right">Max DD</th>
-              <th class="py-2.5 px-4 text-right">Calmar</th>
+              <th class="py-2.5 px-4 text-right">{{ metric('Volatility', 'annualised_vol') }}</th>
+              <th class="py-2.5 px-4 text-right">{{ metric('Sharpe', 'sharpe') }}</th>
+              <th class="py-2.5 px-4 text-right">{{ metric('Sortino', 'sortino') }}</th>
+              <th class="py-2.5 px-4 text-right">{{ metric('Max DD', 'max_drawdown') }}</th>
+              <th class="py-2.5 px-4 text-right">{{ metric('Calmar', 'calmar') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-zinc-100 dark:divide-zinc-800/50">
@@ -705,7 +803,7 @@
 
         <!-- Filter 2: Max Volatility -->
         <div class="flex flex-col gap-1.5">
-          <label for="max_vol" class="text-xs font-semibold text-zinc-500 dark:text-zinc-400">Max Annualized Vol (%)</label>
+          <label for="max_vol" class="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{{ metric('Max Annualized Vol (%)', 'annualised_vol') }}</label>
           <input
             type="number"
             step="0.5"
@@ -718,7 +816,7 @@
 
         <!-- Filter 3: Min Risk-Adjusted Score -->
         <div class="flex flex-col gap-1.5">
-          <label for="min_risk_adj" class="text-xs font-semibold text-zinc-500 dark:text-zinc-400">Min Risk-Adjusted Score</label>
+          <label for="min_risk_adj" class="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{{ metric('Min Risk-Adjusted Score', 'risk_adj_mom') }}</label>
           <input
             type="number"
             step="0.1"
@@ -787,10 +885,11 @@
             Found {{ data.total_screened }} symbols matching criteria{% if data.abs_only %}, restricted to names clearing the {{ strategy_label }} absolute filter{% endif %}
           </p>
         </div>
+        {{ csv_button('screener-results', 'strategies-screener-' ~ strategy_id) }}
       </div>
 
       <div class="overflow-x-auto">
-        <table class="w-full text-left text-sm">
+        <table id="screener-results" class="w-full text-left text-sm">
           <thead class="bg-zinc-50 dark:bg-zinc-900/50 text-xs font-semibold text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
             <tr>
               <th class="py-3.5 px-6 w-16 text-center">Rank</th>
@@ -798,12 +897,12 @@
               <th class="py-3.5 px-6 text-right">Price</th>
               <th class="py-3.5 px-6 text-right">12-1 Return</th>
               {% if strategy_id == 'sma_trend' %}
-              <th class="py-3.5 px-6 text-right whitespace-nowrap">SMA Spread</th>
+              <th class="py-3.5 px-6 text-right whitespace-nowrap">{{ metric('SMA Spread', 'sma_spread') }}</th>
               {% endif %}
-              <th class="py-3.5 px-6 text-right">Annual Volatility</th>
-              <th class="py-3.5 px-6 text-right">Risk-Adj Score</th>
+              <th class="py-3.5 px-6 text-right">{{ metric('Annual Volatility', 'annualised_vol') }}</th>
+              <th class="py-3.5 px-6 text-right">{{ metric('Risk-Adj Score', 'risk_adj_mom') }}</th>
               <th class="py-3.5 px-6 text-center">Trend</th>
-              <th class="py-3.5 px-6 text-center">Actions</th>
+              <th class="py-3.5 px-6 text-center" data-csv-skip>Actions</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-zinc-100 dark:divide-zinc-800/50">
@@ -837,7 +936,7 @@
                 </span>
                 {% endif %}
               </td>
-              <td class="py-3.5 px-6 text-center">
+              <td class="py-3.5 px-6 text-center" data-csv-skip>
                 <div class="flex items-center justify-center gap-3">
                   <a href="/strategies?tab=ticker&strategy={{ strategy_id }}&symbol={{ r.symbol }}" class="text-xs px-2.5 py-1 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-900 hover:text-white dark:hover:bg-zinc-100 dark:hover:text-zinc-900 font-semibold transition-all">
                     Backtest
@@ -935,6 +1034,63 @@
 
         Plotly.relayout(c, update);
       });
+    });
+  })();
+</script>
+
+<script>
+  // CSV export. Rows are read back out of the rendered <table> named by the
+  // button's data-csv-table, so the file can only ever contain what is on
+  // screen — the mobile card list mirrors the same table, which stays in the
+  // DOM (`hidden`, not removed) below `sm:`. Columns marked data-csv-skip
+  // (the action links) are dropped, as is the colspan "no matches" row.
+  (function () {
+    // Headers built with the metric() macro carry the glossary tooltip inline,
+    // so drop it before reading the text or every header lands in the file with
+    // its whole definition appended.
+    const cellText = (el) => {
+      const clone = el.cloneNode(true);
+      clone.querySelectorAll('[role="tooltip"]').forEach((n) => n.remove());
+      return clone.textContent.replace(/\s+/g, ' ').trim();
+    };
+    const csvEscape = (v) => (/[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v);
+    const exportable = (row) => Array.prototype.filter.call(row.cells, (c) => !c.hasAttribute('data-csv-skip'));
+
+    function serialize(table) {
+      const head = table.tHead && table.tHead.rows[0];
+      if (!head) return [];
+      const headers = exportable(head);
+      const rows = [headers.map(cellText)];
+      const body = table.tBodies[0];
+      if (body) {
+        Array.prototype.forEach.call(body.rows, (tr) => {
+          const cells = exportable(tr);
+          if (cells.length !== headers.length) return;  // colspan empty-state row
+          rows.push(cells.map(cellText));
+        });
+      }
+      return rows;
+    }
+
+    function download(btn) {
+      const table = document.getElementById(btn.dataset.csvTable);
+      if (!table) return;
+      const csv = serialize(table).map((r) => r.map(csvEscape).join(',')).join('\r\n');
+      // en-CA formats as YYYY-MM-DD, and in the viewer's own timezone rather
+      // than UTC — which is the date they'd expect on the filename.
+      const stamp = new Date().toLocaleDateString('en-CA');
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = btn.dataset.csvName + '-' + stamp + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    document.querySelectorAll('button[data-csv-table]').forEach((btn) => {
+      btn.addEventListener('click', () => download(btn));
     });
   })();
 </script>
