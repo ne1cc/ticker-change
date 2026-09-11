@@ -2584,7 +2584,7 @@ def compute_momentum(ticker: str) -> dict:
     spy_df = get_or_fetch_prices("SPY")
     rel = {"alpha": 0.0, "beta": 0.0, "info_ratio": 0.0, "corr": 0.0}
     if spy_df is not None:
-        spy_rets = spy_df["close"].pct_change().dropna()
+        spy_rets = spy_df["close"].pct_change(fill_method=None).dropna()
         merged = pd.concat([strat_series, spy_rets], axis=1, join="inner")
         if len(merged) > 30:
             rel = _relative_stats(merged.iloc[:, 0], merged.iloc[:, 1])
