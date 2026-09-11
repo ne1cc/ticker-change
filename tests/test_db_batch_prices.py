@@ -7,18 +7,43 @@ Verifies:
 3. Empty input returns an empty dict.
 4. Exactly one DB connection is opened regardless of symbol count, including
    past the 900-symbol chunk boundary.
+5. Exactly one (or correct number of) execute() call(s) per chunk, avoiding
+   N+1-shaped query work.
 """
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 import unittest
+from contextlib import contextmanager
 from unittest import mock
 
 import pandas as pd
 import pandas.testing as pdt
 
 import db
+
+
+class _ExecuteSpyConnection:
+    """Wrapper around a connection that tracks execute() calls."""
+
+    def __init__(self, conn, execute_calls):
+        self._conn = conn
+        self._execute_calls = execute_calls
+
+    def execute(self, *args, **kwargs):
+        self._execute_calls.append(None)
+        return self._conn.execute(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return self._conn.__exit__(*args)
 
 
 class TestGetPricesBatch(unittest.TestCase):
@@ -85,22 +110,45 @@ class TestGetPricesBatch(unittest.TestCase):
         self.assertEqual(db.get_prices_batch([]), {})
 
     def test_single_connection_regardless_of_symbol_count(self):
-        """One get_conn() call for a small batch..."""
-        with mock.patch.object(db, "get_conn", wraps=db.get_conn) as spy_conn:
+        """One get_conn() call and exactly one execute() call for a small batch."""
+        execute_calls = []
+        original_get_conn = db.get_conn
+
+        @contextmanager
+        def spy_get_conn():
+            """Wrap get_conn to spy on execute() without patching the class."""
+            with original_get_conn() as conn:
+                wrapped_conn = _ExecuteSpyConnection(conn, execute_calls)
+                yield wrapped_conn
+
+        with mock.patch.object(db, "get_conn", spy_get_conn):
             db.get_prices_batch(["AAA", "BBB", "ZZZ"])
-            self.assertEqual(spy_conn.call_count, 1)
+            # Exactly 1 execute call for ≤900 symbols (single chunk)
+            self.assertEqual(len(execute_calls), 1)
 
     def test_single_connection_past_chunk_boundary(self):
         """...and still exactly one get_conn() call past the 900-symbol chunk
-        boundary, with results from both chunks correctly merged."""
+        boundary, with exactly two execute() calls (one per 900-symbol chunk),
+        and results from both chunks correctly merged."""
         # AAA lands in the first 900-symbol chunk, BBB lands past it.
         padding = [f"PAD{i}" for i in range(1198)]
         symbols = ["AAA"] + padding + ["BBB"]
         self.assertGreater(len(symbols), 900)
 
-        with mock.patch.object(db, "get_conn", wraps=db.get_conn) as spy_conn:
+        execute_calls = []
+        original_get_conn = db.get_conn
+
+        @contextmanager
+        def spy_get_conn():
+            """Wrap get_conn to spy on execute() without patching the class."""
+            with original_get_conn() as conn:
+                wrapped_conn = _ExecuteSpyConnection(conn, execute_calls)
+                yield wrapped_conn
+
+        with mock.patch.object(db, "get_conn", spy_get_conn):
             batch = db.get_prices_batch(symbols)
-            self.assertEqual(spy_conn.call_count, 1)
+            # Exactly 2 execute calls for 1200 symbols (two 900-symbol chunks)
+            self.assertEqual(len(execute_calls), 2)
 
         self.assertEqual(set(batch.keys()), {"AAA", "BBB"})
         pdt.assert_frame_equal(batch["AAA"], db.get_prices("AAA"))
