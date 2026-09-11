@@ -2844,6 +2844,11 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
     `df` is the searched ticker's own price frame (caller has already
     rejected short histories); `price_batch` is the batched read for the
     whole universe, used only for the rank display.
+
+    Returns None when `df` is too short to score (mirrors
+    `_strategies_universe_data` / `_strategies_screener_data`) so callers
+    that bypass the route's own length guard don't hit an AttributeError or
+    IndexError further down.
     """
     close = df['close']
     daily_rets = close.pct_change(fill_method=None)
@@ -2851,6 +2856,8 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
     hurdle = momentum_engine.absolute_hurdle(strategy_id)
 
     score = momentum_engine.score_series(close, symbol=symbol)
+    if score is None:
+        return None
 
     rank_scores = _universe_rank_scores(price_batch, symbols, strategy_id)
     ranked = sorted(rank_scores.items(), key=lambda kv: kv[1], reverse=True)
