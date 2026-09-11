@@ -249,6 +249,41 @@ class TestOptionsTerminalFlaskRoutes:
             assert 'vol' in data
             assert 'cones' in data
 
+    def test_get_full_option_chain_df_handles_nan_values(self):
+        from app import get_full_option_chain_df
+        from unittest.mock import patch
+
+        calls_df = pd.DataFrame([{
+            'strike': 100.0,
+            'impliedVolatility': 0.25,
+            'bid': np.nan,
+            'ask': None,
+            'lastPrice': np.nan,
+            'openInterest': np.nan,
+            'volume': np.nan,
+        }])
+        puts_df = pd.DataFrame([{
+            'strike': 90.0,
+            'impliedVolatility': 0.30,
+            'bid': 1.0,
+            'ask': 1.2,
+            'lastPrice': 1.1,
+            'openInterest': np.nan,
+            'volume': 500,
+        }])
+
+        with patch('app.get_cached_expirations', return_value=['2026-10-16']), \
+             patch('app.get_cached_chain', return_value=(calls_df, puts_df, None)):
+            df = get_full_option_chain_df('TEST', current_price=100.0)
+            assert not df.empty
+            assert len(df) == 2
+            assert df.iloc[0]['open_interest'] == 0
+            assert df.iloc[0]['volume'] == 0
+            assert df.iloc[0]['bid'] == 0.0
+            assert df.iloc[1]['open_interest'] == 0
+            assert df.iloc[1]['volume'] == 500
+
+
 
 class TestEmpiricalGexEventStudy:
     def test_put_wall_bounce_study(self):
