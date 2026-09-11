@@ -53,7 +53,7 @@ class TestNavigation(unittest.TestCase):
         )
 
     def test_strategies_handles_ticker_parameter(self):
-        """Verify that /strategies and /momentum accept ?ticker=AAPL without error."""
+        """Verify that /strategies and /momentum accept ?ticker=AAPL without error and retain query params."""
         for path in ["/momentum?ticker=AAPL", "/strategies?ticker=AAPL"]:
             resp = self.client.get(path)
             self.assertEqual(
@@ -61,24 +61,33 @@ class TestNavigation(unittest.TestCase):
                 200,
                 f"Route {path} failed with status {resp.status_code}",
             )
+            self.assertEqual(
+                resp.request.args.get("ticker"),
+                "AAPL",
+                f"Query param ticker=AAPL not retained in {path}",
+            )
+            html = resp.get_data(as_text=True)
+            self.assertIn(
+                'id="nav-strategies"',
+                html,
+                f"Pillar nav-strategies not found in response for {path}",
+            )
 
     def test_desktop_navigation_links_present(self):
-        """Verify that desktop navigation contains all primary and utility links."""
+        """Verify that desktop navigation contains all 4 pillar links, utilities, and theme toggle, with no legacy IDs."""
         resp = self.client.get("/glossary")
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
 
         expected_ids = [
-            'id="nav-stock"',
+            'id="nav-markets"',
             'id="nav-options"',
             'id="nav-analytics"',
-            'id="nav-positioning"',
-            'id="nav-live"',
-            'id="nav-momentum"',
-            'id="nav-ai-summary"',
+            'id="nav-strategies"',
             'id="nav-glossary"',
             'id="nav-apidocs"',
             'id="nav-settings"',
+            'id="theme-toggle"',
         ]
         for link_id in expected_ids:
             self.assertIn(
@@ -87,19 +96,33 @@ class TestNavigation(unittest.TestCase):
                 f"Missing desktop navigation element: {link_id}",
             )
 
+        deprecated_legacy_ids = [
+            'id="nav-stock"',
+            'id="nav-live"',
+            'id="nav-momentum"',
+        ]
+        for legacy_id in deprecated_legacy_ids:
+            self.assertNotIn(
+                legacy_id,
+                html,
+                f"Deprecated legacy topbar navigation element still present: {legacy_id}",
+            )
+
     def test_ticker_sub_navbar_links_present(self):
-        """Verify that the ticker sub-navbar has links for all ticker views."""
-        resp = self.client.get("/glossary")
+        """Verify that the ticker sub-navbar structure contains all child tool link anchors and search/ticker badges."""
+        resp = self.client.get("/stock?ticker=AAPL")
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
 
         expected_sub_ids = [
+            'id="sub-nav-ticker"',
+            'id="sub-nav-search-input"',
             'id="sub-link-stock"',
+            'id="sub-link-live"',
             'id="sub-link-options"',
             'id="sub-link-analytics"',
             'id="sub-link-positioning"',
-            'id="sub-link-live"',
-            'id="sub-link-momentum"',
+            'id="sub-link-strategies"',
             'id="sub-link-ai-summary"',
         ]
         for sub_id in expected_sub_ids:
@@ -110,18 +133,18 @@ class TestNavigation(unittest.TestCase):
             )
 
     def test_mobile_navigation_links_present(self):
-        """Verify that mobile navigation drawer contains all core view links."""
+        """Verify that mobile navigation drawer contains all core view links organized by pillar."""
         resp = self.client.get("/glossary")
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
 
         expected_mobile_ids = [
             'id="mobile-nav-stock"',
+            'id="mobile-nav-live"',
             'id="mobile-nav-options"',
             'id="mobile-nav-analytics"',
             'id="mobile-nav-positioning"',
-            'id="mobile-nav-live"',
-            'id="mobile-nav-momentum"',
+            'id="mobile-nav-strategies"',
             'id="mobile-nav-ai-summary"',
             'id="mobile-nav-glossary"',
             'id="mobile-nav-apidocs"',
@@ -133,3 +156,58 @@ class TestNavigation(unittest.TestCase):
                 html,
                 f"Missing mobile navigation element: {m_id}",
             )
+
+    def test_analytics_view_structure_and_ticker_preservation(self):
+        """Verify that /analytics?ticker=AAPL renders proper structure, retains ticker, and includes nav elements."""
+        resp = self.client.get("/analytics?ticker=AAPL")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+
+        self.assertIn('id="nav-analytics"', html, "Missing id='nav-analytics' in /analytics response")
+        self.assertIn('id="sub-link-analytics"', html, "Missing sub-link-analytics in /analytics response")
+        self.assertIn('id="sub-link-positioning"', html, "Missing sub-link-positioning in /analytics response")
+        self.assertIn('id="sub-nav-ticker"', html, "Missing sub-nav-ticker in /analytics response")
+        self.assertIn('id="sub-nav-search-input"', html, "Missing sub-nav-search-input in /analytics response")
+        self.assertIn("AAPL", html, "Ticker AAPL not preserved in /analytics response")
+
+    def test_stock_view_renders_markets_sub_links(self):
+        """Verify that visiting /stock?ticker=AAPL renders proper structure including sub-link-stock and sub-link-live."""
+        resp = self.client.get("/stock?ticker=AAPL")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+
+        self.assertIn('id="nav-markets"', html, "Missing id='nav-markets' in /stock response")
+        self.assertIn('id="sub-link-stock"', html, "Missing sub-link-stock in /stock response")
+        self.assertIn('id="sub-link-live"', html, "Missing sub-link-live in /stock response")
+        self.assertIn('id="sub-nav-ticker"', html, "Missing sub-nav-ticker in /stock response")
+        self.assertIn('id="sub-nav-search-input"', html, "Missing sub-nav-search-input in /stock response")
+        self.assertIn("AAPL", html, "Ticker AAPL not rendered in /stock response")
+
+    def test_excel_mode_stylesheet_rules(self):
+        """Verify that excel-mode.css strictly hides .hidden elements in #ticker-sub-nav and styles nav links."""
+        resp = self.client.get("/static/excel-mode.css")
+        self.assertEqual(resp.status_code, 200)
+        css = resp.get_data(as_text=True)
+
+        self.assertIn(
+            "html.excel #ticker-sub-nav .hidden",
+            css,
+            "Missing strict .hidden rule for #ticker-sub-nav in excel-mode.css",
+        )
+        self.assertIn(
+            "display: none !important;",
+            css,
+            "Missing display: none !important for hidden elements in excel-mode.css",
+        )
+        self.assertIn(
+            'html.excel nav a[id^="nav-"]',
+            css,
+            "Missing topbar nav styling in excel-mode.css",
+        )
+        self.assertIn(
+            'html.excel nav a[id^="nav-"].border-amber-500',
+            css,
+            "Missing active topbar pillar styling in excel-mode.css",
+        )
+
+

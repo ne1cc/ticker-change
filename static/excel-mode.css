@@ -78,10 +78,29 @@ html.excel nav a:hover span,
 html.excel nav [class*="text-zinc"]:hover { color: #ffffff !important; }
 html.excel nav [class*="border"] { border-color: rgba(255, 255, 255, 0.35) !important; }
 
+/* Topbar pillar and utility chrome styling */
+html.excel nav a[id^="nav-"] {
+  color: #ffffff !important;
+}
+html.excel nav a[id^="nav-"]:hover {
+  color: #ffffff !important;
+}
+html.excel nav a[id^="nav-"].border-amber-500 {
+  color: #ffffff !important;
+  border-bottom-color: #ffffff !important;
+  font-weight: 700;
+}
+html.excel nav a#nav-settings.border-amber-500 {
+  border-color: #ffffff !important;
+}
+
 /* ---- Ticker sub-nav -> workbook sheet-tab strip ---- */
 html.excel #ticker-sub-nav {
   background-color: #dce3ea !important;
   border-bottom: 1px solid var(--xl-gridline) !important;
+}
+html.excel #ticker-sub-nav .hidden {
+  display: none !important;
 }
 html.excel #ticker-sub-nav a[id^="sub-link"] {
   background-color: #eef1f5 !important;
@@ -94,7 +113,8 @@ html.excel #ticker-sub-nav a[id^="sub-link"]:hover {
   color: var(--xl-ink) !important;
 }
 /* Active view = active sheet tab: white with the green top rule */
-html.excel #ticker-sub-nav a.bg-amber-500 {
+html.excel #ticker-sub-nav a.bg-amber-500,
+html.excel #ticker-sub-nav a[id^="sub-link"].bg-amber-500 {
   background-color: #ffffff !important;
   color: var(--xl-accent-deep) !important;
   border-top: 3px solid var(--xl-accent) !important;
