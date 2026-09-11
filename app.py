@@ -31,6 +31,7 @@ import derivatives_alpha
 import backtest_engine
 import api_docs
 import decide
+import momentum_engine
 from glossary import GLOSSARY
 
 # --- yfinance custom session with browser headers to prevent Cloud IP blocking ---
@@ -2515,75 +2516,13 @@ MOMENTUM_BENCHMARK_ETFS = {"SPY", "QQQ", "DIA", "IWM"}
 # Risk-free assumption used for Sharpe / Sortino (annualised). Roughly the
 # average front-end T-bill yield over the sample; keeps ratios honest rather
 # than treating cash as zero-cost.
-RF_ANNUAL = 0.04
+RF_ANNUAL = momentum_engine.RF_ANNUAL
 
-
-def _perf_stats(series, rf_annual=RF_ANNUAL):
-    """Return geometric, risk-adjusted performance stats for a daily return series.
-
-    Uses CAGR (not the arithmetic-mean annualisation, which overstates returns
-    for volatile series) and the standard Sharpe (sqrt(252) * mean excess / std).
-    """
-    series = pd.Series(series).dropna()
-    n = len(series)
-    empty = {"total_return": 0.0, "annual_return": 0.0, "volatility": 0.0,
-             "sharpe": 0.0, "sortino": 0.0, "max_dd": 0.0, "calmar": 0.0}
-    if n == 0:
-        return empty
-
-    cum = (1 + series).prod() - 1
-    cagr = (1 + cum) ** (252.0 / n) - 1 if (1 + cum) > 0 else -1.0
-
-    std = series.std(ddof=1) if n > 1 else 0.0
-    ann_vol = std * np.sqrt(252)
-    rf_daily = rf_annual / 252.0
-    excess = series - rf_daily
-    sharpe = (excess.mean() / std * np.sqrt(252)) if std > 0 else 0.0
-
-    downside = excess[excess < 0]
-    dd_std = downside.std(ddof=1) if len(downside) > 1 else 0.0
-    sortino = (excess.mean() / dd_std * np.sqrt(252)) if dd_std > 0 else 0.0
-
-    cum_prod = (1 + series).cumprod()
-    running_max = cum_prod.cummax()
-    drawdown = (cum_prod - running_max) / running_max
-    max_dd = drawdown.min()
-    calmar = (cagr / abs(max_dd)) if max_dd < 0 else 0.0
-
-    return {
-        "total_return": round(cum * 100, 1),
-        "annual_return": round(cagr * 100, 1),
-        "volatility": round(ann_vol * 100, 1),
-        "sharpe": round(sharpe, 2),
-        "sortino": round(sortino, 2),
-        "max_dd": round(max_dd * 100, 1),
-        "calmar": round(calmar, 2),
-    }
-
-
-def _relative_stats(strat, bench, rf_annual=RF_ANNUAL):
-    """Benchmark-relative stats: annualised Jensen alpha, beta, info ratio, corr."""
-    df = pd.concat([pd.Series(strat), pd.Series(bench)], axis=1).dropna()
-    df.columns = ["s", "b"]
-    empty = {"alpha": 0.0, "beta": 0.0, "info_ratio": 0.0, "corr": 0.0}
-    if len(df) < 2 or df["b"].var() == 0:
-        return empty
-
-    beta = df["s"].cov(df["b"]) / df["b"].var()
-    rf_daily = rf_annual / 252.0
-    alpha_daily = (df["s"].mean() - rf_daily) - beta * (df["b"].mean() - rf_daily)
-    alpha_ann = ((1 + alpha_daily) ** 252 - 1) * 100
-
-    active = df["s"] - df["b"]
-    act_std = active.std(ddof=1)
-    info = (active.mean() / act_std * np.sqrt(252)) if act_std > 0 else 0.0
-
-    return {
-        "alpha": round(alpha_ann, 1),
-        "beta": round(beta, 2),
-        "info_ratio": round(info, 2),
-        "corr": round(df["s"].corr(df["b"]), 2),
-    }
+# Ported to momentum_engine.py verbatim; kept as module-level aliases so
+# every existing call site (`_perf_stats(...)`, `_relative_stats(...)`)
+# keeps working unchanged.
+_perf_stats = momentum_engine.perf_stats
+_relative_stats = momentum_engine.relative_stats
 
 
 def compute_momentum(ticker: str) -> dict:
@@ -2595,34 +2534,18 @@ def compute_momentum(ticker: str) -> dict:
 
     close = df['close']
     daily_rets = close.pct_change()
-    
-    p_latest = close.iloc[-1]
-    p_21 = close.iloc[-22] if len(close) >= 22 else close.iloc[0]
-    p_63 = close.iloc[-64] if len(close) >= 64 else close.iloc[0]
-    p_126 = close.iloc[-127] if len(close) >= 127 else close.iloc[0]
-    p_252 = close.iloc[-253] if len(close) >= 253 else close.iloc[0]
 
-    mom_12_1 = (p_21 - p_252) / p_252 if p_252 > 0 else 0.0
-    mom_6m = (p_latest - p_126) / p_126 if p_126 > 0 else 0.0
-    mom_3m = (p_latest - p_63) / p_63 if p_63 > 0 else 0.0
-    mom_1m = (p_latest - p_21) / p_21 if p_21 > 0 else 0.0
+    score = momentum_engine.score_series(close, symbol=symbol)
+    if score is None:
+        return {}
 
-    vol_window = daily_rets.iloc[-252:].std() * np.sqrt(252)
-    ann_vol_1y = float(vol_window) if pd.notna(vol_window) and vol_window > 0 else 0.0
-    risk_adj_mom = round(mom_12_1 / ann_vol_1y, 2) if ann_vol_1y > 0 else 0.0
-
-    # Backtest stats
-    roll_score = close.shift(21) / close.shift(252) - 1
-    signal = np.where(roll_score > 0, 1.0, 0.0)
-    signal = pd.Series(signal, index=df.index).shift(1).fillna(0.0)
-
-    trades = signal.diff().abs().fillna(0.0)
-    cost_bps = 7.5 / 1e4
-    strat_rets = signal * daily_rets - trades * cost_bps
-
-    strat_series = strat_rets.iloc[253:]
+    # Backtest stats — 12-1 momentum long/cash trend-following. `relative_strength`
+    # has no absolute-return hurdle, so this is "long whenever 12-1 momentum > 0",
+    # matching what this function always computed inline.
+    bt = momentum_engine.backtest_timeseries(close, strategy_id="relative_strength")
+    strat_series = bt.strategy_returns
     hold_series = daily_rets.iloc[253:]
-    trade_signals = signal.iloc[253:]
+    trade_signals = bt.trade_signal
 
     strat_stats = _perf_stats(strat_series)
     hold_stats = _perf_stats(hold_series)
@@ -2633,6 +2556,7 @@ def compute_momentum(ticker: str) -> dict:
     trade_records = []
     in_trade = False
     entry_idx = 0
+    cost_bps = momentum_engine.DEFAULT_COST_BPS / 1e4
     backtest_start_idx = df.index.get_loc(df.index[253])
 
     for idx in range(len(trade_signals)):
@@ -2666,12 +2590,12 @@ def compute_momentum(ticker: str) -> dict:
             rel = _relative_stats(merged.iloc[:, 0], merged.iloc[:, 1])
 
     return {
-        "mom_12_1": round(mom_12_1 * 100, 2),
-        "mom_6m": round(mom_6m * 100, 2),
-        "mom_3m": round(mom_3m * 100, 2),
-        "mom_1m": round(mom_1m * 100, 2),
-        "ann_vol_1y": round(ann_vol_1y * 100, 2),
-        "risk_adj_mom": risk_adj_mom,
+        "mom_12_1": round(score.mom_12_1 * 100, 2),
+        "mom_6m": round(score.mom_6m * 100, 2),
+        "mom_3m": round(score.mom_3m * 100, 2),
+        "mom_1m": round(score.mom_1m * 100, 2),
+        "ann_vol_1y": round(score.ann_vol_1y * 100, 2),
+        "risk_adj_mom": score.risk_adj,
         "strat_stats": strat_stats,
         "hold_stats": hold_stats,
         "pct_invested": pct_invested,
