@@ -430,33 +430,68 @@
     <script>
       // Navigation state, active indicators, and ticker persistence
       (function () {
-        const path = window.location.pathname;
-        
-        // Determine active route key
-        let activeKey = null;
-        if (path === '/' || path === '/stock') activeKey = 'stock';
-        else if (path === '/analytics') activeKey = 'analytics';
-        else if (path === '/positioning') activeKey = 'positioning';
-        else if (path === '/live') activeKey = 'live';
-        else if (path === '/momentum' || path === '/strategies') activeKey = 'momentum';
-        else if (path === '/ai-summary') activeKey = 'ai-summary';
-        else if (path === '/glossary') activeKey = 'glossary';
-        else if (path.startsWith('/api/docs')) activeKey = 'apidocs';
-        else if (path === '/settings') activeKey = 'settings';
+        const PILLARS = {
+          markets:    { id: 'nav-markets', defaultRoute: '/stock', children: ['stock', 'live'] },
+          options:    { id: 'nav-options', defaultRoute: '/options', children: ['options'] },
+          analytics:  { id: 'nav-analytics', defaultRoute: '/analytics', children: ['analytics', 'positioning'] },
+          strategies: { id: 'nav-strategies', defaultRoute: '/strategies', children: ['strategies', 'ai-summary'] }
+        };
 
-        // Apply active styling to desktop and mobile nav items
-        if (activeKey) {
-          const desktopEl = document.getElementById('nav-' + activeKey);
+        const ROUTE_MAP = {
+          '/':            { pillar: 'markets', sub: 'stock' },
+          '/stock':       { pillar: 'markets', sub: 'stock' },
+          '/live':        { pillar: 'markets', sub: 'live' },
+          '/options':     { pillar: 'options', sub: 'options' },
+          '/analytics':   { pillar: 'analytics', sub: 'analytics' },
+          '/positioning': { pillar: 'analytics', sub: 'positioning' },
+          '/strategies':  { pillar: 'strategies', sub: 'strategies' },
+          '/momentum':    { pillar: 'strategies', sub: 'strategies' },
+          '/ai-summary':  { pillar: 'strategies', sub: 'ai-summary' },
+          '/glossary':    { utility: 'glossary' },
+          '/settings':    { utility: 'settings' }
+        };
+
+        let path = window.location.pathname;
+        if (path.length > 1 && path.endsWith('/')) {
+          path = path.slice(0, -1);
+        }
+
+        let routeInfo = ROUTE_MAP[path];
+        if (!routeInfo && path.startsWith('/api/docs')) {
+          routeInfo = { utility: 'apidocs' };
+        }
+
+        const activePillar = routeInfo ? routeInfo.pillar : null;
+        const activeSub = routeInfo ? routeInfo.sub : null;
+        const activeUtility = routeInfo ? routeInfo.utility : null;
+
+        // Apply active styling to desktop navigation element
+        if (activePillar && PILLARS[activePillar]) {
+          const desktopEl = document.getElementById(PILLARS[activePillar].id);
           if (desktopEl) {
-            if (activeKey === 'settings') {
+            desktopEl.classList.remove('text-zinc-500', 'dark:text-zinc-400', 'border-transparent');
+            desktopEl.classList.add('border-amber-500', 'text-amber-600', 'dark:text-amber-400', 'font-semibold');
+          }
+        } else if (activeUtility) {
+          const desktopEl = document.getElementById('nav-' + activeUtility);
+          if (desktopEl) {
+            if (activeUtility === 'settings') {
               desktopEl.classList.remove('text-zinc-500', 'dark:text-zinc-400', 'border-zinc-200', 'dark:border-zinc-800');
               desktopEl.classList.add('border-amber-500', 'text-amber-600', 'dark:text-amber-400', 'bg-amber-500/10');
+            } else if (activeUtility === 'apidocs') {
+              desktopEl.classList.remove('border-transparent');
+              desktopEl.classList.add('border-amber-500');
             } else {
               desktopEl.classList.remove('text-zinc-500', 'dark:text-zinc-400', 'border-transparent');
-              desktopEl.classList.add('text-amber-600', 'dark:text-amber-400', 'font-semibold', 'border-amber-500');
+              desktopEl.classList.add('border-amber-500', 'text-amber-600', 'dark:text-amber-400', 'font-semibold');
             }
           }
-          const mobileEl = document.getElementById('mobile-nav-' + activeKey);
+        }
+
+        // Apply active styling to mobile navigation link
+        const mobileKey = activeSub || activeUtility;
+        if (mobileKey) {
+          const mobileEl = document.getElementById('mobile-nav-' + mobileKey);
           if (mobileEl) {
             mobileEl.classList.add('bg-amber-500/10', 'text-amber-600', 'dark:text-amber-400', 'font-bold', 'border-l-2', 'border-amber-500', 'pl-2');
           }
@@ -465,31 +500,42 @@
         // Ticker persistence and sub-navbar setup
         const params = new URLSearchParams(window.location.search);
         const urlTicker = params.get('ticker') || params.get('symbol');
-        if (urlTicker) {
-          localStorage.setItem('last_ticker', urlTicker.toUpperCase());
+        let savedTicker = '';
+        try {
+          if (urlTicker) {
+            localStorage.setItem('last_ticker', urlTicker.toUpperCase());
+          }
+          savedTicker = localStorage.getItem('last_ticker') || '';
+        } catch (err) {
+          // ignore storage errors
         }
-        const ticker = urlTicker || localStorage.getItem('last_ticker');
+        const ticker = (urlTicker || savedTicker).toUpperCase();
         if (!ticker) return;
 
-        // Update core nav links with active ticker parameter
-        const links = {
-          'brand-link':             '/stock?ticker=' + ticker,
-          'nav-stock':              '/stock?ticker=' + ticker,
-          'mobile-nav-stock':       '/stock?ticker=' + ticker,
-          'nav-analytics':          '/analytics?ticker=' + ticker,
-          'mobile-nav-analytics':   '/analytics?ticker=' + ticker,
-          'nav-positioning':        '/positioning?ticker=' + ticker,
-          'mobile-nav-positioning': '/positioning?ticker=' + ticker,
-          'nav-live':               '/live?ticker=' + ticker,
-          'mobile-nav-live':        '/live?ticker=' + ticker,
-          'nav-momentum':           '/momentum?ticker=' + ticker,
-          'mobile-nav-momentum':    '/momentum?ticker=' + ticker,
-          'nav-ai-summary':         '/ai-summary?ticker=' + ticker,
-          'mobile-nav-ai-summary':  '/ai-summary?ticker=' + ticker,
+        // Update brand link and topbar pillar links with active ticker parameter
+        const brandLink = document.getElementById('brand-link');
+        if (brandLink) brandLink.href = '/stock?ticker=' + encodeURIComponent(ticker);
+
+        Object.values(PILLARS).forEach(pillar => {
+          const el = document.getElementById(pillar.id);
+          if (el) el.href = pillar.defaultRoute + '?ticker=' + encodeURIComponent(ticker);
+        });
+
+        // Child routes mapping for mobile nav links and sub-nav pills
+        const childRoutes = {
+          stock:       '/stock',
+          live:        '/live',
+          options:     '/options',
+          analytics:   '/analytics',
+          positioning: '/positioning',
+          strategies:  '/strategies',
+          'ai-summary': '/ai-summary'
         };
-        Object.entries(links).forEach(([id, href]) => {
-          const el = document.getElementById(id);
-          if (el) el.href = href;
+
+        // Update mobile links with active ticker parameter
+        Object.entries(childRoutes).forEach(([key, route]) => {
+          const mobEl = document.getElementById('mobile-nav-' + key);
+          if (mobEl) mobEl.href = route + '?ticker=' + encodeURIComponent(ticker);
         });
 
         // Show and configure ticker sub-navbar
@@ -498,32 +544,33 @@
           subNav.classList.remove('hidden');
           const tickerEl = document.getElementById('sub-nav-ticker');
           if (tickerEl) tickerEl.innerText = ticker;
-          
-          const subLinks = {
-            'sub-link-stock':       '/stock?ticker=' + ticker,
-            'sub-link-options':     '/options?ticker=' + ticker,
-            'sub-link-analytics':   '/analytics?ticker=' + ticker,
-            'sub-link-positioning': '/positioning?ticker=' + ticker,
-            'sub-link-live':        '/live?ticker=' + ticker,
-            'sub-link-momentum':    '/momentum?ticker=' + ticker,
-            'sub-link-ai-summary':  '/ai-summary?ticker=' + ticker,
-          };
-          
-          Object.entries(subLinks).forEach(([id, href]) => {
-            const el = document.getElementById(id);
-            if (el) {
-              el.href = href;
-              const linkKey = id.replace('sub-link-', '');
-              if (linkKey === activeKey) {
-                el.className = "text-xs font-bold px-3 py-1.5 rounded-lg bg-amber-500 text-zinc-950 shadow-sm transition-all";
-              }
-            }
-          });
-          
+
           const searchInput = document.getElementById('sub-nav-search-input');
           if (searchInput) {
             searchInput.value = ticker;
           }
+
+          // In #ticker-sub-nav, display ONLY child links belonging to the active pillar.
+          // If on a utility route (/glossary, /api/docs, /settings), hide all pillar child links.
+          const visibleChildren = (activePillar && PILLARS[activePillar]) ? PILLARS[activePillar].children : [];
+
+          Object.entries(childRoutes).forEach(([childKey, childRoute]) => {
+            const el = document.getElementById('sub-link-' + childKey);
+            if (!el) return;
+
+            el.href = childRoute + '?ticker=' + encodeURIComponent(ticker);
+
+            if (visibleChildren.includes(childKey)) {
+              el.classList.remove('hidden');
+              if (childKey === activeSub) {
+                el.className = "sub-nav-pill text-xs font-bold px-3 py-1.5 rounded-lg bg-amber-500 text-zinc-950 shadow-sm transition-all";
+              } else {
+                el.className = "sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors";
+              }
+            } else {
+              el.classList.add('hidden');
+            }
+          });
         }
       })();
 
@@ -532,13 +579,23 @@
         const input = document.getElementById('sub-nav-search-input');
         const val = input ? input.value.trim().toUpperCase() : '';
         if (!val) return;
-        
-        const path = window.location.pathname;
+        try {
+          localStorage.setItem('last_ticker', val);
+        } catch (err) {
+          // ignore
+        }
+
+        let path = window.location.pathname;
+        if (path.length > 1 && path.endsWith('/')) {
+          path = path.slice(0, -1);
+        }
+
+        const coreRoutes = ['/stock', '/live', '/options', '/analytics', '/positioning', '/strategies', '/momentum', '/ai-summary'];
         let target = '/stock';
-        if (['/stock', '/analytics', '/positioning', '/live', '/momentum', '/strategies', '/ai-summary'].includes(path)) {
+        if (coreRoutes.includes(path)) {
           target = path;
         }
-        window.location.href = target + '?ticker=' + val;
+        window.location.href = target + '?ticker=' + encodeURIComponent(val);
       }
     </script>
     {% block scripts %}{% endblock %}
