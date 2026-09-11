@@ -167,7 +167,7 @@
           Volatility Term Structure &amp; 3D Surface
         </button>
         <button id="tab-btn-cones" onclick="switchTab('cones')" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition">
-          Realized Vol Cones &amp; Expected Move (68%)
+          Realized Vol Cones &amp; Empirical Validation
         </button>
       </div>
     </div>
@@ -271,6 +271,125 @@
           </div>
         </div>
       </div>
+
+      <!-- Empirical GEX Validation & Event Study Panel -->
+      {% if data.validation %}
+      <div class="pt-6 border-t border-zinc-200 dark:border-zinc-800 space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+              <span class="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+              Empirical GEX Validation &amp; Touch-and-Reversal Event Study
+            </h3>
+            <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Historical price action test at key gamma boundaries vs. 25-iteration Monte Carlo random baseline (p &lt; 0.05)</p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <!-- Put Wall Support Study -->
+          {% if data.validation.put_wall %}
+          <div class="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold uppercase tracking-wider text-rose-500">Put Wall Support</span>
+              {% if data.validation.put_wall.is_significant %}
+              <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">p = {{ data.validation.put_wall.p_value }} (Sig)</span>
+              {% else %}
+              <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-zinc-500">p = {{ data.validation.put_wall.p_value }}</span>
+              {% endif %}
+            </div>
+            <div class="text-lg font-mono font-bold text-zinc-900 dark:text-zinc-100">
+              ${{ '%.2f'|format(data.validation.put_wall.level_price) }}
+            </div>
+            <div class="space-y-1 text-xs font-mono">
+              <div class="flex justify-between">
+                <span class="text-zinc-500">Bounce Win Rate:</span>
+                <span class="font-bold text-emerald-600 dark:text-emerald-400">{{ data.validation.put_wall.reversal_rate }}% ({{ data.validation.put_wall.reversals }}/{{ data.validation.put_wall.total_touches }})</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-zinc-500">Random Baseline:</span>
+                <span class="text-zinc-400">{{ data.validation.put_wall.baseline_rate }}%</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-zinc-500">Z-Score:</span>
+                <span class="text-zinc-700 dark:text-zinc-300">{{ data.validation.put_wall.z_score }}</span>
+              </div>
+            </div>
+            <p class="text-[11px] text-zinc-500 dark:text-zinc-400 pt-2 border-t border-zinc-200 dark:border-zinc-800 leading-tight">
+              {{ data.validation.put_wall.summary }}
+            </p>
+          </div>
+          {% endif %}
+
+          <!-- Call Wall Resistance Study -->
+          {% if data.validation.call_wall %}
+          <div class="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold uppercase tracking-wider text-emerald-500">Call Wall Resistance</span>
+              {% if data.validation.call_wall.is_significant %}
+              <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">p = {{ data.validation.call_wall.p_value }} (Sig)</span>
+              {% else %}
+              <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-zinc-500">p = {{ data.validation.call_wall.p_value }}</span>
+              {% endif %}
+            </div>
+            <div class="text-lg font-mono font-bold text-zinc-900 dark:text-zinc-100">
+              ${{ '%.2f'|format(data.validation.call_wall.level_price) }}
+            </div>
+            <div class="space-y-1 text-xs font-mono">
+              <div class="flex justify-between">
+                <span class="text-zinc-500">Rejection Win Rate:</span>
+                <span class="font-bold text-rose-600 dark:text-rose-400">{{ data.validation.call_wall.reversal_rate }}% ({{ data.validation.call_wall.reversals }}/{{ data.validation.call_wall.total_touches }})</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-zinc-500">Random Baseline:</span>
+                <span class="text-zinc-400">{{ data.validation.call_wall.baseline_rate }}%</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-zinc-500">Z-Score:</span>
+                <span class="text-zinc-700 dark:text-zinc-300">{{ data.validation.call_wall.z_score }}</span>
+              </div>
+            </div>
+            <p class="text-[11px] text-zinc-500 dark:text-zinc-400 pt-2 border-t border-zinc-200 dark:border-zinc-800 leading-tight">
+              {{ data.validation.call_wall.summary }}
+            </p>
+          </div>
+          {% endif %}
+
+          <!-- Gamma Flip Boundary Study -->
+          {% if data.validation.gamma_flip %}
+          <div class="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold uppercase tracking-wider text-amber-500">Gamma Flip Boundary</span>
+              {% if data.validation.gamma_flip.is_significant %}
+              <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">p = {{ data.validation.gamma_flip.p_value }} (Sig)</span>
+              {% else %}
+              <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-zinc-500">p = {{ data.validation.gamma_flip.p_value }}</span>
+              {% endif %}
+            </div>
+            <div class="text-lg font-mono font-bold text-zinc-900 dark:text-zinc-100">
+              ${{ '%.2f'|format(data.validation.gamma_flip.level_price) }}
+            </div>
+            <div class="space-y-1 text-xs font-mono">
+              <div class="flex justify-between">
+                <span class="text-zinc-500">Vol Expansion Rate:</span>
+                <span class="font-bold text-amber-600 dark:text-amber-400">{{ data.validation.gamma_flip.reversal_rate }}% ({{ data.validation.gamma_flip.reversals }}/{{ data.validation.gamma_flip.total_touches }})</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-zinc-500">Random Baseline:</span>
+                <span class="text-zinc-400">{{ data.validation.gamma_flip.baseline_rate }}%</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-zinc-500">Z-Score:</span>
+                <span class="text-zinc-700 dark:text-zinc-300">{{ data.validation.gamma_flip.z_score }}</span>
+              </div>
+            </div>
+            <p class="text-[11px] text-zinc-500 dark:text-zinc-400 pt-2 border-t border-zinc-200 dark:border-zinc-800 leading-tight">
+              {{ data.validation.gamma_flip.summary }}
+            </p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
     </div>
   </div>
 
@@ -375,6 +494,11 @@
       <div>
         <h4 class="font-bold text-zinc-900 dark:text-zinc-100">5. Yang-Zhang (1998) Realized Volatility</h4>
         <p>A minimum-variance, drift-independent estimator combining overnight jumps, continuous open-to-close drift, and Rogers-Satchell high-low intraday components over 30-day and 90-day windows.</p>
+      </div>
+
+      <div>
+        <h4 class="font-bold text-zinc-900 dark:text-zinc-100">6. Empirical Touch-and-Reversal Event Study</h4>
+        <p>Evaluates whether underlying price action historically respects structural levels: Put Wall support (reversal upwards), Call Wall resistance (reversal downwards), and Gamma Flip crossing (volatility expansion). Benchmarked against a 25-iteration Monte Carlo random price level baseline with one-tailed z-test significance testing (p &lt; 0.05).</p>
       </div>
     </div>
 

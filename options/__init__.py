@@ -127,7 +127,34 @@ def compute_options_terminal(
             }
             contracts_list.append(row_dict)
 
-        # 7. Optionally record snapshot into SQLite
+        # 7. Run Empirical GEX Validation Event Study (if daily prices available)
+        validation_data = None
+        if daily_df is not None and not daily_df.empty and len(daily_df) >= 30:
+            from dataclasses import asdict
+            from event_study import run_gex_touch_and_reversal_study
+            val_map = {}
+            if gex.put_wall and gex.put_wall > 0:
+                pw_study = run_gex_touch_and_reversal_study(
+                    daily_df, level_price=gex.put_wall, level_type="put_wall", ticker=ticker
+                )
+                if pw_study:
+                    val_map["put_wall"] = asdict(pw_study)
+            if gex.call_wall and gex.call_wall > 0:
+                cw_study = run_gex_touch_and_reversal_study(
+                    daily_df, level_price=gex.call_wall, level_type="call_wall", ticker=ticker
+                )
+                if cw_study:
+                    val_map["call_wall"] = asdict(cw_study)
+            if gex.gamma_flip and gex.gamma_flip > 0:
+                gf_study = run_gex_touch_and_reversal_study(
+                    daily_df, level_price=gex.gamma_flip, level_type="gamma_flip", ticker=ticker
+                )
+                if gf_study:
+                    val_map["gamma_flip"] = asdict(gf_study)
+            if val_map:
+                validation_data = val_map
+
+        # 8. Optionally record snapshot into SQLite
         if record_db:
             record_snapshot(
                 symbol=ticker,
@@ -152,6 +179,7 @@ def compute_options_terminal(
             vol=vol,
             cones=cones,
             contracts=contracts_list,
+            validation=validation_data,
             error=None,
         )
 

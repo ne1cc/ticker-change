@@ -248,3 +248,89 @@ class TestOptionsTerminalFlaskRoutes:
             assert 'gex' in data
             assert 'vol' in data
             assert 'cones' in data
+
+
+class TestEmpiricalGexEventStudy:
+    def test_put_wall_bounce_study(self):
+        from event_study import run_gex_touch_and_reversal_study
+        dates = pd.date_range("2024-01-01", periods=60, freq="B")
+        # Construct synthetic price series that bounces whenever it touches 100.0
+        closes = []
+        p = 105.0
+        for i in range(60):
+            if i % 10 == 0:
+                p = 100.5  # Approach support
+            elif i % 10 == 1:
+                p = 102.0  # Upward bounce
+            else:
+                p = 105.0 + (i % 3)
+            closes.append(p)
+
+        df = pd.DataFrame({
+            "close": closes,
+            "high": [c + 0.5 for c in closes],
+            "low": [c - 0.6 for c in closes],
+        }, index=dates)
+
+        res = run_gex_touch_and_reversal_study(df, level_price=100.0, level_type="put_wall", ticker="TEST")
+        assert res is not None
+        assert res.ticker == "TEST"
+        assert res.level_type == "put_wall"
+        assert res.total_touches > 0
+        assert res.reversals > 0
+        assert res.reversal_rate > 0.0
+        assert res.baseline_rate > 0.0
+        assert isinstance(res.is_significant, bool)
+
+    def test_call_wall_rejection_study(self):
+        from event_study import run_gex_touch_and_reversal_study
+        dates = pd.date_range("2024-01-01", periods=60, freq="B")
+        # Construct synthetic price series rejected at 150.0
+        closes = []
+        p = 145.0
+        for i in range(60):
+            if i % 10 == 0:
+                p = 149.5  # Touch resistance from below
+            elif i % 10 == 1:
+                p = 147.0  # Rejected downward
+            else:
+                p = 144.0 + (i % 3)
+            closes.append(p)
+
+        df = pd.DataFrame({
+            "close": closes,
+            "high": [c + 0.8 for c in closes],
+            "low": [c - 0.2 for c in closes],
+        }, index=dates)
+
+        res = run_gex_touch_and_reversal_study(df, level_price=150.0, level_type="call_wall", ticker="TEST")
+        assert res is not None
+        assert res.level_type == "call_wall"
+        assert res.total_touches > 0
+        assert res.reversals > 0
+        assert "Resistance rejection" in res.summary
+
+    def test_insufficient_history_returns_none(self):
+        from event_study import run_gex_touch_and_reversal_study
+        df_short = pd.DataFrame({"close": [100.0] * 10})
+        assert run_gex_touch_and_reversal_study(df_short, 100.0, "put_wall") is None
+        assert run_gex_touch_and_reversal_study(None, 100.0, "put_wall") is None
+
+    def test_orchestrator_integrates_validation(self):
+        spot = 100.0
+        chain_df = pd.DataFrame([
+            {"strike": 95.0, "dte": 7, "expiration": "2026-09-17", "cp": "P", "bid": 1.0, "ask": 1.1, "iv": 0.28, "open_interest": 5000, "volume": 100},
+            {"strike": 100.0, "dte": 7, "expiration": "2026-09-17", "cp": "C", "bid": 2.0, "ask": 2.1, "iv": 0.25, "open_interest": 8000, "volume": 200},
+            {"strike": 105.0, "dte": 7, "expiration": "2026-09-17", "cp": "C", "bid": 0.8, "ask": 0.9, "iv": 0.27, "open_interest": 4000, "volume": 50},
+        ])
+        dates = pd.date_range(end="2026-09-10", periods=50, freq="B")
+        daily_df = pd.DataFrame({
+            "close": [95.0 + (i % 10) for i in range(50)],
+            "open": [95.0 + (i % 10) for i in range(50)],
+            "high": [96.0 + (i % 10) for i in range(50)],
+            "low": [94.0 + (i % 10) for i in range(50)],
+        }, index=dates)
+
+        res = compute_options_terminal("TEST", spot, chain_df, daily_df, convention="naive")
+        assert res.validation is not None
+        assert isinstance(res.validation, dict)
