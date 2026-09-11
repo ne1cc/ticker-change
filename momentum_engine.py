@@ -80,10 +80,17 @@ def score_series(close: pd.Series, symbol: str = "",
     p_126 = close.iloc[-127]
     p_252 = close.iloc[-253]
 
-    mom_12_1 = (p_21 - p_252) / p_252
-    mom_6m = (p_latest - p_126) / p_126
-    mom_3m = (p_latest - p_63) / p_63
-    mom_1m = (p_latest - p_21) / p_21
+    # Guard every anchor the way score_universe does: a zero/NaN anchor would
+    # otherwise yield inf/NaN, which reaches /ai-summary as un-serializable JSON.
+    def _ret(now, then):
+        if pd.isna(now) or pd.isna(then) or then <= 0:
+            return 0.0
+        return (now - then) / then
+
+    mom_12_1 = _ret(p_21, p_252)
+    mom_6m = _ret(p_latest, p_126)
+    mom_3m = _ret(p_latest, p_63)
+    mom_1m = _ret(p_latest, p_21)
 
     vol = close.pct_change(fill_method=None).iloc[-MOMENTUM_LOOKBACK:].std() * math.sqrt(252)
     ann_vol_1y = float(vol) if pd.notna(vol) and vol > 0 else 0.0
@@ -368,7 +375,9 @@ def backtest_timeseries(close: pd.Series, strategy_id: str = "relative_strength"
     if family == "sma":
         raw_signal = sma_spread(close) > 0
     else:
-        hurdle = absolute_hurdle(strategy_id) or 0.0
+        hurdle = absolute_hurdle(strategy_id)
+        if hurdle is None:
+            hurdle = 0.0
         raw_signal = rolling_score(close) > hurdle
 
     signal = raw_signal.astype(float).shift(1).fillna(0.0)

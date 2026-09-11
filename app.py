@@ -2917,6 +2917,7 @@ def _strategies_universe_data(symbols, price_df, strategy_id, period):
         "verdict": verdict,
         "avg_turnover": result.avg_turnover_pct,
         "rf_annual": round(RF_ANNUAL * 100, 1),
+        "cost_bps": momentum_engine.DEFAULT_COST_BPS,
         "start_date": backtest_dates[0].strftime('%Y-%m-%d'),
         "end_date": backtest_dates[-1].strftime('%Y-%m-%d'),
         "_series": {
@@ -3354,6 +3355,16 @@ def strategies_page():
 
         price_batch = db.get_prices_batch(symbols)
         data = _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, period)
+        if data is None:
+            return render_template(
+                'strategies.html',
+                data=None,
+                tab='ticker',
+                available_symbols=available_symbols,
+                searched_symbol=symbol,
+                error=f"Ticker '{symbol}' could not be scored for this strategy.",
+                **shared
+            )
         data.update(_strategies_ticker_charts(symbol, data.pop("_series"), strategy_id))
 
         return render_template(

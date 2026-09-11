@@ -392,6 +392,19 @@
               <td class="py-3.5 px-2 font-mono text-right font-semibold {{ score_cls(r.risk_adj, is_cash_slot, 'text-zinc-700 dark:text-zinc-200') }}">{{ r.risk_adj }}</td>
               <td class="py-3.5 px-2 text-center">{{ signal_badge(is_top_5, is_cash_slot) }}</td>
             </tr>
+            {% else %}
+            <tr>
+              <td colspan="6" class="py-12 px-4 text-center text-sm text-zinc-400 font-mono">
+                No ticker in the cached universe could be scored for this strategy.
+                {% if strategy_id == 'sma_trend' %}
+                The 50/200 spread needs 200 unbroken bars ending on the same date as
+                the rest of the universe, so symbols whose cache has fallen behind drop
+                out entirely — search a few tickers on the homepage to refresh them.
+                {% else %}
+                Search a few tickers on the homepage to refresh their price history.
+                {% endif %}
+              </td>
+            </tr>
             {% endfor %}
           </tbody>
         </table>
@@ -424,6 +437,10 @@
               <dd class="font-mono font-semibold {{ score_cls(r.risk_adj, is_cash_slot, 'text-zinc-700 dark:text-zinc-200') }}">{{ r.risk_adj }}</dd>
             </div>
           </dl>
+        </li>
+        {% else %}
+        <li class="py-12 px-4 text-center text-sm text-zinc-400 font-mono">
+          No ticker in the cached universe could be scored for this strategy.
         </li>
         {% endfor %}
       </ul>
@@ -460,7 +477,7 @@
             <strong class="text-zinc-900 dark:text-zinc-100">Risk-adjusted:</strong> {{ metric('Sharpe', 'sharpe') }} <strong class="text-zinc-900 dark:text-zinc-100">{{ data.strat_stats.sharpe }}</strong> and {{ metric('Sortino', 'sortino') }} <strong class="text-zinc-900 dark:text-zinc-100">{{ data.strat_stats.sortino }}</strong> vs SPY's {{ data.spy_stats.sharpe }} / QQQ's {{ data.qqq_stats.sharpe }} Sharpe (all net of a {{ data.rf_annual }}% risk-free rate). Versus the S&P 500 the strategy carried a {{ metric('beta', 'beta') }} of <strong class="text-zinc-800 dark:text-zinc-200">{{ data.rel_spy.beta }}</strong>, generated <strong class="{% if data.rel_spy.alpha >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">{{ data.rel_spy.alpha }}%</strong> of annualised {{ metric('alpha', 'alpha') }} on top of that beta exposure, and posted an {{ metric('information ratio', 'info_ratio') }} of <strong class="text-zinc-900 dark:text-zinc-100">{{ data.rel_spy.info_ratio }}</strong>.
           </p>
           <p>
-            <strong class="text-zinc-900 dark:text-zinc-100">Execution & risk:</strong> Monthly (21-day) rebalance, equal-weight top 5, ~{{ data.avg_turnover }}% annual one-way turnover. Worst {{ metric('drawdown', 'max_drawdown') }} was <strong class="text-rose-500">{{ data.strat_stats.max_dd }}%</strong> ({{ metric('Calmar', 'calmar') }} {{ data.strat_stats.calmar }}); SPY {{ data.spy_stats.max_dd }}%, QQQ {{ data.qqq_stats.max_dd }}%. Costs of {{ '%.1f' % 7.5 }} bps are charged on traded notional at each rebalance. <em class="text-zinc-400">Backtest on a fixed large-cap universe — survivorship and small-sample caveats apply; not investment advice.</em>
+            <strong class="text-zinc-900 dark:text-zinc-100">Execution & risk:</strong> Monthly (21-day) rebalance, equal-weight top 5, ~{{ data.avg_turnover }}% annual one-way turnover. Worst {{ metric('drawdown', 'max_drawdown') }} was <strong class="text-rose-500">{{ data.strat_stats.max_dd }}%</strong> ({{ metric('Calmar', 'calmar') }} {{ data.strat_stats.calmar }}); SPY {{ data.spy_stats.max_dd }}%, QQQ {{ data.qqq_stats.max_dd }}%. Costs of {{ data.cost_bps }} bps are charged on traded notional at each rebalance. <em class="text-zinc-400">Backtest on a fixed large-cap universe — survivorship and small-sample caveats apply; not investment advice.</em>
           </p>
         </div>
       </div>
@@ -1086,7 +1103,8 @@
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      // Revoking synchronously can cancel the download before it starts (Safari).
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
     document.querySelectorAll('button[data-csv-table]').forEach((btn) => {
