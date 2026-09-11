@@ -2606,584 +2606,214 @@ def compute_momentum(ticker: str) -> dict:
     }
 
 
-@app.route('/strategies')
-def strategies_page():
-    COST_BPS = 7.5
-    tab = request.args.get('tab', 'universe')
-    symbol = request.args.get('symbol', '').upper().strip()
-    period = request.args.get('period', 'all')
+# --------------------------------------------------------------------------
+# /strategies — shared helpers
+#
+# The page is three tabs over one universe of cached prices. Each tab splits
+# into a data builder (plain data in, plain dict out — no Flask globals, no
+# Plotly, so it can be exercised without a request context) and a chart
+# builder that turns the already-computed series into embedded Plotly HTML.
+# All scoring and backtest math lives in `momentum_engine`; nothing here
+# reimplements it.
+# --------------------------------------------------------------------------
 
-    # 1. Fetch all symbols in database
-    with db.get_conn() as conn:
-        rows = conn.execute("SELECT DISTINCT symbol FROM daily_prices").fetchall()
-    symbols = [r["symbol"] for r in rows if r["symbol"] not in MOMENTUM_BENCHMARK_ETFS]
-    if not symbols:
-        return render_template('strategies.html', data=None, error="No stock price data available in the database. Please visit the homepage and search for tickers first.")
+DEFAULT_STRATEGY = "relative_strength"
 
-    # Sort symbols for the dropdown list
-    available_symbols = sorted(symbols)
 
-    if tab == 'ticker':
-        if not symbol:
-            # Default to the first symbol if none searched
-            symbol = available_symbols[0] if available_symbols else ""
-            
-        if symbol not in available_symbols:
-            return render_template(
-                'strategies.html',
-                data=None,
-                tab='ticker',
-                available_symbols=available_symbols,
-                searched_symbol=symbol,
-                error=f"Ticker '{symbol}' is not currently cached in the database. Please search for it on the homepage first to download its history."
-            )
+def _resolve_strategy(raw: str) -> str:
+    """Validate a `strategy=` query value.
 
-        # Load ticker price data
-        df = db.get_prices(symbol)
-        if df is None or len(df) < 273:  # 252 + 21
-            return render_template(
-                'strategies.html',
-                data=None,
-                tab='ticker',
-                available_symbols=available_symbols,
-                searched_symbol=symbol,
-                error=f"Ticker '{symbol}' has insufficient price history (need at least 273 trading days)."
-            )
+    Anything unrecognized falls back to the default rather than 500ing.
+    """
+    return raw if raw in momentum_engine.STRATEGIES else DEFAULT_STRATEGY
 
-        close = df['close']
-        daily_rets = close.pct_change()
-        
-        # Momentum score metrics
-        latest_price = float(close.iloc[-1])
-        
-        # Compute scores at various horizons
-        # 12-1 momentum: 252 days ago to 21 days ago
-        p_latest = close.iloc[-1]
-        p_21 = close.iloc[-22] if len(close) >= 22 else close.iloc[0]
-        p_63 = close.iloc[-64] if len(close) >= 64 else close.iloc[0]
-        p_126 = close.iloc[-127] if len(close) >= 127 else close.iloc[0]
-        p_252 = close.iloc[-253] if len(close) >= 253 else close.iloc[0]
-        
-        mom_12_1 = (p_21 - p_252) / p_252 if p_252 > 0 else 0.0
-        mom_6m = (p_latest - p_126) / p_126 if p_126 > 0 else 0.0
-        mom_3m = (p_latest - p_63) / p_63 if p_63 > 0 else 0.0
-        mom_1m = (p_latest - p_21) / p_21 if p_21 > 0 else 0.0
 
-        # Volatility-scaled (risk-adjusted) momentum: 12-1 return per unit of
-        # annualised volatility over the same window. Comparable across names.
-        vol_window = daily_rets.iloc[-252:].std() * np.sqrt(252)
-        ann_vol_1y = float(vol_window) if pd.notna(vol_window) and vol_window > 0 else 0.0
-        risk_adj_mom = round(mom_12_1 / ann_vol_1y, 2) if ann_vol_1y > 0 else 0.0
+def _strategy_family(strategy_id: str) -> str:
+    """"momentum" or "sma" — the axis every scoring branch dispatches on."""
+    return momentum_engine.STRATEGIES.get(strategy_id, {}).get("family", "momentum")
 
-        # Calculate rank in universe
-        universe_scores = {}
-        for s in symbols:
-            s_df = db.get_prices(s)
-            if s_df is not None and len(s_df) >= 253:
-                p_past_s = s_df['close'].iloc[-253]
-                p_recent_s = s_df['close'].iloc[-22]
-                if p_past_s > 0:
-                    universe_scores[s] = (p_recent_s - p_past_s) / p_past_s
-        sorted_univ = sorted(universe_scores.items(), key=lambda x: x[1], reverse=True)
-        univ_ranks = {s: idx + 1 for idx, (s, _) in enumerate(sorted_univ)}
-        rank = univ_ranks.get(symbol, len(symbols))
 
-        # Time-Series Momentum Backtest
-        # Signal: Long if 12-1 momentum is positive, cash (0) otherwise
-        # Rolling 12-1 momentum score at each day:
-        roll_score = close.shift(21) / close.shift(252) - 1
-        signal = np.where(roll_score > 0, 1.0, 0.0)
-        signal = pd.Series(signal, index=df.index).shift(1).fillna(0.0)
-        
-        trades = signal.diff().abs().fillna(0.0)
-        cost_bps = COST_BPS / 1e4
-        strat_rets = signal * daily_rets - trades * cost_bps
-        
-        # Start backtest from index 253
-        backtest_dates = df.index[253:]
-        strat_series = strat_rets.iloc[253:]
-        hold_series = daily_rets.iloc[253:]
-        trade_signals = signal.iloc[253:]
-        
-        # Apply timeframe filter if requested
-        if period != 'all':
-            latest_date = df.index[-1]
-            if period == '3y':
-                start_cutoff = latest_date - pd.DateOffset(years=3)
-            elif period == '1y':
-                start_cutoff = latest_date - pd.DateOffset(years=1)
-            elif period == '6m':
-                start_cutoff = latest_date - pd.DateOffset(months=6)
-            elif period == '3m':
-                start_cutoff = latest_date - pd.DateOffset(months=3)
-            else:
-                start_cutoff = backtest_dates[0]
-                
-            mask = backtest_dates >= start_cutoff
-            if mask.any() and mask.sum() >= 10:
-                backtest_dates = backtest_dates[mask]
-                strat_series = strat_series[mask]
-                hold_series = hold_series[mask]
-                trade_signals = trade_signals[mask]
-        
-        # Compute performance stats (geometric CAGR + standard Sharpe/Sortino)
-        strat_stats = _perf_stats(strat_series)
-        hold_stats = _perf_stats(hold_series)
+def _strategy_label(strategy_id: str) -> str:
+    return momentum_engine.STRATEGIES.get(strategy_id, {}).get("label", strategy_id)
 
-        # Fraction of the backtest the trend signal was actually invested.
-        pct_invested = round(float(trade_signals.mean()) * 100, 1) if len(trade_signals) else 0.0
-        
-        # Plotly chart: Strategy vs Buy & Hold
-        cum_strat = (1 + strat_series).cumprod() * 10000
-        cum_hold = (1 + hold_series).cumprod() * 10000
 
-        # Full-length Buy & Hold: spans the entire available ticker history
-        # (the strategy needs 252 days of warm-up, but Buy & Hold can start from day 1)
-        hold_full_dates = df.index
-        hold_full_rets = daily_rets.fillna(0.0)
-        if period != 'all':
-            mask_hold_full = hold_full_dates >= start_cutoff
-            if mask_hold_full.any() and mask_hold_full.sum() >= 10:
-                hold_full_dates = hold_full_dates[mask_hold_full]
-                hold_full_rets = hold_full_rets[mask_hold_full]
-        cum_hold_full = (1 + hold_full_rets).cumprod() * 10000
-        hold_full_dates_str = hold_full_dates.strftime('%Y-%m-%d').tolist()
+def _strategy_choices() -> dict:
+    """Ordered {id: label} mapping backing the strategy <select>."""
+    return {sid: meta["label"] for sid, meta in momentum_engine.STRATEGIES.items()}
 
-        # Convert index to string for guaranteed clean parsing in Plotly
-        backtest_dates_str = backtest_dates.strftime('%Y-%m-%d').tolist()
-        
-        trade_dates = backtest_dates
-        sig_diff = trade_signals.diff().fillna(0.0)
-        
-        # Entries: signal changes from 0 to 1
-        buys = sig_diff == 1
-        # Exits: signal changes from 1 to 0
-        sells = sig_diff == -1
-        
-        buy_dates = trade_dates[buys]
-        sell_dates = trade_dates[sells]
-        
-        # Calculate individual trade returns
-        trade_records = []
-        in_trade = False
-        entry_idx = 0
-        backtest_start_idx = df.index.get_loc(backtest_dates[0])
-        
-        for idx in range(len(trade_signals)):
-            sig = trade_signals.iloc[idx]
-            if sig == 1 and not in_trade:
-                in_trade = True
-                entry_idx = idx
-            elif sig == 0 and in_trade:
-                in_trade = False
-                ret_val = close.iloc[backtest_start_idx + idx] / close.iloc[backtest_start_idx + entry_idx] - 1 - cost_bps * 2
-                trade_records.append(ret_val)
-                
-        if in_trade:
-            ret_val = close.iloc[-1] / close.iloc[backtest_start_idx + entry_idx] - 1 - cost_bps
-            trade_records.append(ret_val)
-            
-        trade_count = len(trade_records)
-        wins = [r for r in trade_records if r > 0]
-        losses = [r for r in trade_records if r <= 0]
-        
-        win_rate = round(len(wins) / trade_count * 100, 1) if trade_count > 0 else 0.0
-        profit_factor = round(sum(wins) / abs(sum(losses)), 2) if losses and sum(losses) != 0.0 else (99.0 if wins else 0.0)
-        
-        fig_perf = go.Figure()
-        fig_perf.add_trace(go.Scatter(x=backtest_dates_str, y=cum_strat.tolist(), mode='lines', name='Trend-Following (Long/Cash)', line=dict(color='#fbbf24', width=2), hoverlabel=dict(bgcolor='#000000', bordercolor='#fbbf24', font=dict(color='#fbbf24'))))
-        fig_perf.add_trace(go.Scatter(x=hold_full_dates_str, y=cum_hold_full.tolist(), mode='lines', name=f'Buy & Hold {symbol}', line=dict(color='#64748b', width=1.5, dash='dash')))
-        
-        # Add Buy entry markers on the performance chart
-        if not buy_dates.empty:
-            buy_dates_str = buy_dates.strftime('%Y-%m-%d').tolist()
-            buy_prices = cum_strat.loc[buy_dates].tolist()
-            fig_perf.add_trace(go.Scatter(
-                x=buy_dates_str, y=buy_prices,
-                mode='markers',
-                marker=dict(symbol='triangle-up', size=10, color='#10b981', line=dict(width=1, color='black')),
-                name='Buy Entry'
-            ))
-            
-        # Add Sell exit markers on the performance chart
-        if not sell_dates.empty:
-            sell_dates_str = sell_dates.strftime('%Y-%m-%d').tolist()
-            sell_prices = cum_strat.loc[sell_dates].tolist()
-            fig_perf.add_trace(go.Scatter(
-                x=sell_dates_str, y=sell_prices,
-                mode='markers',
-                marker=dict(symbol='triangle-down', size=10, color='#ef4444', line=dict(width=1, color='black')),
-                name='Sell Exit'
-            ))
-            
-        fig_perf.update_layout(
-            title=f'Trend-Following Strategy vs Buy & Hold for {symbol}',
-            xaxis_title='Date',
-            yaxis_title='Portfolio Value ($)',
-            template='plotly_white',
-            height=350,
-            margin=dict(l=50, r=30, t=60, b=80),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            showlegend=True,
-            legend=dict(orientation='h', yanchor='top', y=-0.18, xanchor='center', x=0.5),
-            font=dict(family='Inter, sans-serif')
-        )
-        perf_chart_html = fig_perf.to_html(full_html=False, include_plotlyjs=False)
-        
-        # Plotly chart: Drawdowns comparison
-        dd_strat = (cum_strat - cum_strat.cummax()) / cum_strat.cummax() * 100
-        dd_hold = (cum_hold - cum_hold.cummax()) / cum_hold.cummax() * 100
-        
-        fig_dd = go.Figure()
-        fig_dd.add_trace(go.Scatter(x=backtest_dates_str, y=dd_strat.tolist(), mode='lines', name='Trend-Following DD', line=dict(color='#fbbf24', width=1.5), fill='tozeroy', fillcolor='rgba(251,191,36,0.1)'))
-        fig_dd.add_trace(go.Scatter(x=backtest_dates_str, y=dd_hold.tolist(), mode='lines', name=f'{symbol} DD', line=dict(color='#ef4444', width=1, dash='dash'), fill='tozeroy', fillcolor='rgba(239,68,68,0.15)'))
-        
-        fig_dd.update_layout(
-            title='Drawdown Comparison (%)',
-            xaxis_title='Date',
-            yaxis_title='Drawdown (%)',
-            template='plotly_white',
-            height=250,
-            margin=dict(l=50, r=30, t=60, b=80),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            showlegend=True,
-            legend=dict(orientation='h', yanchor='top', y=-0.22, xanchor='center', x=0.5),
-            font=dict(family='Inter, sans-serif')
-        )
-        dd_chart_html = fig_dd.to_html(full_html=False, include_plotlyjs=False)
-        
-        # Plotly chart: Rolling 12-1 Momentum Score
-        valid_score = roll_score.iloc[253:] * 100
-        roll_dates = df.index[253:]
-        if period != 'all':
-            mask_roll = roll_dates >= start_cutoff
-            if mask_roll.any():
-                roll_dates = roll_dates[mask_roll]
-                valid_score = valid_score[mask_roll]
-        
-        fig_roll = go.Figure()
-        fig_roll.add_trace(go.Scatter(x=roll_dates.strftime('%Y-%m-%d').tolist(), y=valid_score.tolist(), mode='lines', name='12-1 Momentum %', line=dict(color='#818cf8', width=1.5)))
-        fig_roll.add_hline(
-            y=0,
-            line_dash='dash',
-            line_color='#ef4444',
-            line_width=1,
-            annotation_text="Zero Threshold (Trend Switch)",
-            annotation_position="bottom right",
-            annotation_font=dict(size=10, color='#71717a')
-        )
-        
-        fig_roll.update_layout(
-            title=f'Rolling 12-1 Momentum Score (%) for {symbol}',
-            xaxis_title='Date',
-            yaxis_title='Momentum Score (%)',
-            template='plotly_white',
-            height=280,
-            margin=dict(l=50, r=30, t=50, b=50),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            showlegend=False,
-            font=dict(family='Inter, sans-serif')
-        )
-        roll_chart_html = fig_roll.to_html(full_html=False, include_plotlyjs=False)
-        
-        # Determine current trend state
-        current_score = roll_score.iloc[-1]
-        trend_state = "BULLISH (Long)" if current_score > 0 else "BEARISH (Flat/Cash)"
-        trend_color = "text-emerald-500" if current_score > 0 else "text-rose-500"
-        
-        data = {
-            "symbol": symbol,
-            "latest_price": latest_price,
-            "mom_12_1": round(mom_12_1 * 100, 2),
-            "mom_6m": round(mom_6m * 100, 2),
-            "mom_3m": round(mom_3m * 100, 2),
-            "mom_1m": round(mom_1m * 100, 2),
-            "rank": rank,
-            "total_rank_count": len(universe_scores),
-            "trend_state": trend_state,
-            "trend_color": trend_color,
-            "strat_stats": strat_stats,
-            "hold_stats": hold_stats,
-            "perf_chart_html": perf_chart_html,
-            "dd_chart_html": dd_chart_html,
-            "roll_chart_html": roll_chart_html,
-            "trade_count": trade_count,
-            "win_rate": win_rate,
-            "profit_factor": profit_factor,
-            "risk_adj_mom": risk_adj_mom,
-            "ann_vol_1y": round(ann_vol_1y * 100, 1),
-            "pct_invested": pct_invested,
-            "start_date": backtest_dates[0].strftime('%Y-%m-%d'),
-            "end_date": backtest_dates[-1].strftime('%Y-%m-%d')
-        }
 
-        return render_template(
-            'strategies.html',
-            data=data,
-            tab='ticker',
-            header_badge=f"{symbol} · Rank #{rank} of {len(universe_scores)}",
-            available_symbols=available_symbols,
-            searched_symbol=symbol,
-            period=period,
-            error=None
-        )
+_PERIOD_OFFSETS = {
+    "3y": pd.DateOffset(years=3),
+    "1y": pd.DateOffset(years=1),
+    "6m": pd.DateOffset(months=6),
+    "3m": pd.DateOffset(months=3),
+}
 
-    elif tab == 'screener':
-        min_mom = float(request.args.get('min_mom', '0.0'))
-        max_vol = float(request.args.get('max_vol', '60.0'))
-        min_risk_adj = float(request.args.get('min_risk_adj', '0.5'))
-        trend_filter = request.args.get('trend', 'bullish')
 
-        # Load close prices for all symbols in database
-        prices = {}
-        for t in symbols:
-            df = db.get_prices(t)
-            if df is not None:
-                prices[t] = df["close"]
+def _period_start(latest_date, period, fallback):
+    """Cutoff date for a `period=` filter; unknown values fall back."""
+    offset = _PERIOD_OFFSETS.get(period)
+    return latest_date - offset if offset is not None else fallback
 
-        if not prices:
-            return render_template(
-                'strategies.html',
-                data=None,
-                tab='screener',
-                error="No stock data available in database.",
-                available_symbols=available_symbols,
-                searched_symbol='',
-                period=period
-            )
 
-        price_df = pd.DataFrame(prices)
-        if len(price_df) < 273:
-            return render_template(
-                'strategies.html',
-                data=None,
-                tab='screener',
-                error="Insufficient price history in database to run screener.",
-                available_symbols=available_symbols,
-                searched_symbol='',
-                period=period
-            )
+def _load_price_frame(symbols):
+    """Wide close-price frame for `symbols` from a single batched query.
 
-        daily_rets = price_df.pct_change()
-        momentum_lookback = 252
-        exclude_days = 21
+    Symbols with no cached rows are absent from the batch — and so from the
+    frame's columns. Column order follows `symbols`.
+    """
+    batch = db.get_prices_batch(symbols)
+    return pd.DataFrame({s: batch[s]["close"] for s in symbols if s in batch})
 
-        latest_idx = len(price_df) - 1
-        recent_idx = latest_idx - exclude_days
-        past_idx = latest_idx - momentum_lookback
 
-        screened_results = []
-        for t in symbols:
-            if t in price_df.columns:
-                p_past = price_df[t].iloc[past_idx]
-                p_recent = price_df[t].iloc[recent_idx]
-                p_latest = price_df[t].iloc[-1]
-                if pd.notna(p_past) and pd.notna(p_recent) and p_past > 0:
-                    score = (p_recent - p_past) / p_past
-                    v = daily_rets[t].iloc[-momentum_lookback:].std() * np.sqrt(252)
-                    vol = float(v) if pd.notna(v) and v > 0 else 0.0
-                    risk_adj = score / vol if vol > 0 else 0.0
+def _universe_rank_scores(price_batch, symbols, strategy_id) -> dict:
+    """Latest ranking score per symbol, each from its OWN price history.
 
-                    score_pct = score * 100
-                    vol_pct = vol * 100
-                    
-                    # Apply screen filters
-                    if score_pct < min_mom:
-                        continue
-                    if vol_pct > max_vol:
-                        continue
-                    if risk_adj < min_risk_adj:
-                        continue
-
-                    trend = "BULLISH" if score_pct > 0 else "BEARISH"
-                    if trend_filter == 'bullish' and trend != 'BULLISH':
-                        continue
-                    if trend_filter == 'bearish' and trend != 'BEARISH':
-                        continue
-
-                    screened_results.append({
-                        "symbol": t,
-                        "score": round(score_pct, 2),
-                        "vol": round(vol_pct, 1),
-                        "risk_adj": round(risk_adj, 2),
-                        "trend": trend,
-                        "price": round(float(p_latest), 2)
-                    })
-
-        # Sort by risk_adj descending
-        screened_results = sorted(screened_results, key=lambda x: x["risk_adj"], reverse=True)
-        # Assign ranks
-        for idx, item in enumerate(screened_results):
-            item["rank"] = idx + 1
-
-        data = {
-            "results": screened_results,
-            "min_mom": min_mom,
-            "max_vol": max_vol,
-            "min_risk_adj": min_risk_adj,
-            "trend_filter": trend_filter,
-            "total_screened": len(screened_results)
-        }
-
-        return render_template(
-            'strategies.html',
-            data=data,
-            tab='screener',
-            header_badge=f"Screened {len(screened_results)} Tickers",
-            available_symbols=available_symbols,
-            searched_symbol='',
-            period=period,
-            error=None
-        )
-
-    # ELSE: Tab == 'universe'
-    # 2. Load close prices for these symbols
-    prices = {}
-    for t in symbols + ["SPY", "QQQ"]:
-        df = db.get_prices(t)
-        if df is not None:
-            prices[t] = df["close"]
-    
-    if not prices:
-        return render_template('strategies.html', data=None, error="Failed to load price data.")
-
-    price_df = pd.DataFrame(prices)
-    
-    # 3. Calculate 12-1 momentum scores for active tickers
-    momentum_lookback = 252
-    exclude_days = 21
-    
-    if len(price_df) < momentum_lookback + 2:
-        return render_template('strategies.html', data=None, error=f"Insufficient history in database. Need at least {momentum_lookback} daily bars.")
-        
-    daily_rets = price_df.pct_change()
-
+    Deliberately not `score_universe`: that indexes a shared date-aligned
+    wide frame, so a symbol whose cache lags the universe scores as NaN and
+    drops out. The ticker tab's rank has always been computed against each
+    symbol's own trailing bars, and stays that way.
+    """
+    is_sma = _strategy_family(strategy_id) == "sma"
     scores = {}
-    vols = {}
-    latest_idx = len(price_df) - 1
-    recent_idx = latest_idx - exclude_days
-    past_idx = latest_idx - momentum_lookback
+    for sym in symbols:
+        sym_df = price_batch.get(sym)
+        if sym_df is None:
+            continue
+        close = sym_df["close"]
+        series = (momentum_engine.sma_spread(close) if is_sma
+                  else momentum_engine.rolling_score(close))
+        if not len(series):
+            continue
+        value = series.iloc[-1]
+        if pd.notna(value):
+            scores[sym] = float(value)
+    return scores
 
-    for t in symbols:
-        if t in price_df.columns:
-            p_past = price_df[t].iloc[past_idx]
-            p_recent = price_df[t].iloc[recent_idx]
-            if pd.notna(p_past) and pd.notna(p_recent) and p_past > 0:
-                scores[t] = (p_recent - p_past) / p_past
-                v = daily_rets[t].iloc[-momentum_lookback:].std() * np.sqrt(252)
-                vols[t] = float(v) if pd.notna(v) and v > 0 else 0.0
 
-    # Sort symbols by momentum score
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    leaderboard = [{
-        "symbol": t,
-        "score": round(score * 100, 2),
-        "vol": round(vols.get(t, 0.0) * 100, 1),
-        "risk_adj": round(score / vols[t], 2) if vols.get(t, 0.0) > 0 else 0.0,
-        "rank": idx + 1,
-    } for idx, (t, score) in enumerate(sorted_scores)]
+# --------------------------------------------------------------------------
+# /strategies — universe tab
+# --------------------------------------------------------------------------
 
-    top_5 = [t for t, _ in sorted_scores[:5]]
-    
-    # 4. Backtest Momentum Strategy rebalanced monthly (equal-weight top 5)
-    rebalance_freq = 21
-    start_idx = momentum_lookback + 1
+def _strategies_universe_data(symbols, price_df, strategy_id, period):
+    """Leaderboard + top-N rotation backtest against SPY/QQQ.
 
-    portfolio_returns = []
-    active_portfolio = []
-    prev_weights = {}
-    total_turnover = 0.0
-    rebalance_count = 0
-    backtest_dates = price_df.index[start_idx:]
+    Returns None when `price_df` is too short to score, so the caller can
+    render the error page. The returned dict carries the raw return series
+    under `_series` for the chart builder; the route pops it before
+    rendering.
+    """
+    if len(price_df) < momentum_engine.MOMENTUM_LOOKBACK + 2:
+        return None
 
-    for i in range(start_idx, len(price_df)):
-        is_rebalance = (i - start_idx) % rebalance_freq == 0
-        cost_today = 0.0
-        if is_rebalance:
-            step_scores = {}
-            for t in symbols:
-                if t in price_df.columns:
-                    p_past = price_df[t].iloc[i - momentum_lookback]
-                    p_recent = price_df[t].iloc[i - exclude_days]
-                    if pd.notna(p_past) and pd.notna(p_recent) and p_past > 0:
-                        step_scores[t] = (p_recent - p_past) / p_past
-            sorted_step = sorted(step_scores.items(), key=lambda x: x[1], reverse=True)
-            active_portfolio = [t for t, score in sorted_step[:5] if np.isfinite(score)]
+    hurdle = momentum_engine.absolute_hurdle(strategy_id)
+    scores = momentum_engine.score_universe(price_df, symbols, hurdle=hurdle)
 
-            # Transaction cost scaled by actual turnover (sum of absolute weight
-            # changes), not a flat charge that assumes the book turns over fully.
-            new_weights = {t: 1.0 / len(active_portfolio) for t in active_portfolio} if active_portfolio else {}
-            names = set(new_weights) | set(prev_weights)
-            turnover = sum(abs(new_weights.get(t, 0.0) - prev_weights.get(t, 0.0)) for t in names)
-            if i > start_idx:
-                # One-way turnover = half the gross weight change; round-trip cost
-                # is charged on the notional traded.
-                cost_today = (turnover / 2.0) * (COST_BPS / 1e4)
-                total_turnover += turnover / 2.0
-                rebalance_count += 1
-            prev_weights = new_weights
+    if _strategy_family(strategy_id) == "sma":
+        # SMA spread is the primary score and sort key; `score_universe` is
+        # still consulted purely to populate the volatility column so the
+        # table keeps one shape across strategies.
+        spreads = momentum_engine.sma_score_universe(price_df, symbols)
+        ranked = sorted(spreads.items(), key=lambda kv: kv[1], reverse=True)
+        leaderboard = []
+        for idx, (sym, spread) in enumerate(ranked):
+            vol = scores[sym].ann_vol_1y if sym in scores else 0.0
+            leaderboard.append({
+                "symbol": sym,
+                "score": round(spread * 100, 2),
+                "sma_spread": round(spread * 100, 2),
+                "vol": round(vol * 100, 1),
+                "risk_adj": round(spread / vol, 2) if vol > 0 else 0.0,
+                "passes_absolute": spread > 0,
+                "rank": idx + 1,
+            })
+    else:
+        ranked = sorted(scores.items(), key=lambda kv: kv[1].mom_12_1, reverse=True)
+        leaderboard = [{
+            "symbol": sym,
+            "score": round(score.mom_12_1 * 100, 2),
+            "vol": round(score.ann_vol_1y * 100, 1),
+            "risk_adj": score.risk_adj,
+            "passes_absolute": bool(score.passes_absolute),
+            "rank": idx + 1,
+        } for idx, (sym, score) in enumerate(ranked)]
 
-        if active_portfolio:
-            daily_ret = daily_rets[active_portfolio].iloc[i].mean()
-        else:
-            daily_ret = 0.0
+    top_5 = [sym for sym, _ in ranked[:momentum_engine.TOP_N]]
 
-        daily_ret -= cost_today
-        portfolio_returns.append(daily_ret)
+    result = momentum_engine.backtest_rotation(price_df, symbols, strategy_id)
+    backtest_dates = result.dates
+    strat_series = result.strategy_returns
 
-    strat_series = pd.Series(portfolio_returns, index=backtest_dates)
-    spy_series = daily_rets["SPY"].loc[backtest_dates] if "SPY" in daily_rets.columns else pd.Series(0.0, index=backtest_dates)
-    qqq_series = daily_rets["QQQ"].loc[backtest_dates] if "QQQ" in daily_rets.columns else pd.Series(0.0, index=backtest_dates)
-    
-    # Apply timeframe filter if requested
-    if period != 'all':
-        latest_date = price_df.index[-1]
-        if period == '3y':
-            start_cutoff = latest_date - pd.DateOffset(years=3)
-        elif period == '1y':
-            start_cutoff = latest_date - pd.DateOffset(years=1)
-        elif period == '6m':
-            start_cutoff = latest_date - pd.DateOffset(months=6)
-        elif period == '3m':
-            start_cutoff = latest_date - pd.DateOffset(months=3)
-        else:
-            start_cutoff = backtest_dates[0]
-            
+    daily_rets = price_df.pct_change(fill_method=None)
+    has_spy = "SPY" in daily_rets.columns
+    has_qqq = "QQQ" in daily_rets.columns
+    spy_series = daily_rets["SPY"].loc[backtest_dates] if has_spy else pd.Series(0.0, index=backtest_dates)
+    qqq_series = daily_rets["QQQ"].loc[backtest_dates] if has_qqq else pd.Series(0.0, index=backtest_dates)
+
+    if period != "all":
+        start_cutoff = _period_start(price_df.index[-1], period, backtest_dates[0])
         mask = backtest_dates >= start_cutoff
         if mask.any() and mask.sum() >= 10:
             backtest_dates = backtest_dates[mask]
             strat_series = strat_series[mask]
-            if "SPY" in daily_rets.columns:
+            if has_spy:
                 spy_series = spy_series[mask]
-            if "QQQ" in daily_rets.columns:
+            if has_qqq:
                 qqq_series = qqq_series[mask]
-    
-    # Compute stats (geometric CAGR + standard Sharpe/Sortino) and the
+
+    # Stats (geometric CAGR + standard Sharpe/Sortino) plus the
     # benchmark-relative alpha/beta/information ratio that actually tell you
     # whether the strategy added value versus just owning the index.
     strat_stats = _perf_stats(strat_series)
     spy_stats = _perf_stats(spy_series)
     qqq_stats = _perf_stats(qqq_series)
     rel_spy = _relative_stats(strat_series, spy_series)
-    
-    # Create interactive plot
-    cum_strat = (1 + strat_series).cumprod() * 10000
-    cum_spy = (1 + spy_series).cumprod() * 10000
-    cum_qqq = (1 + qqq_series).cumprod() * 10000
-    
-    # Convert index to string for guaranteed clean parsing in Plotly
-    backtest_dates_str = backtest_dates.strftime('%Y-%m-%d').tolist()
-    
+
+    # Data-driven verdict — describe what actually happened, don't assert a win.
+    excess_spy = round(strat_stats["total_return"] - spy_stats["total_return"], 1)
+    beat_spy = strat_stats["total_return"] > spy_stats["total_return"]
+    beat_qqq = strat_stats["total_return"] > qqq_stats["total_return"]
+    if beat_spy and beat_qqq:
+        verdict = "outperformed both benchmarks"
+    elif beat_spy or beat_qqq:
+        verdict = "beat the S&P 500 but trailed the Nasdaq 100" if beat_spy else "beat the Nasdaq 100 but trailed the S&P 500"
+    else:
+        verdict = "underperformed both benchmarks"
+
+    return {
+        "leaderboard": leaderboard,
+        "top_5": top_5,
+        "strat_stats": strat_stats,
+        "spy_stats": spy_stats,
+        "qqq_stats": qqq_stats,
+        "rel_spy": rel_spy,
+        "excess_spy": excess_spy,
+        "verdict": verdict,
+        "avg_turnover": result.avg_turnover_pct,
+        "rf_annual": round(RF_ANNUAL * 100, 1),
+        "start_date": backtest_dates[0].strftime('%Y-%m-%d'),
+        "end_date": backtest_dates[-1].strftime('%Y-%m-%d'),
+        "_series": {
+            "dates": backtest_dates,
+            "strat": strat_series,
+            "spy": spy_series if has_spy else None,
+            "qqq": qqq_series if has_qqq else None,
+        },
+    }
+
+
+def _strategies_universe_chart(dates, strat_series, spy_series, qqq_series,
+                               strategy_label) -> str:
+    """Growth-of-$10,000 chart. A None benchmark series is simply not drawn."""
+    dates_str = dates.strftime('%Y-%m-%d').tolist()
+
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=backtest_dates_str, y=cum_strat.tolist(), mode='lines', name='12-1 Momentum Strategy (Top 5)', line=dict(color='#fbbf24', width=2)))
-    if "SPY" in daily_rets.columns:
-        fig.add_trace(go.Scatter(x=backtest_dates_str, y=cum_spy.tolist(), mode='lines', name='SPY (S&P 500) Benchmark', line=dict(color='#64748b', width=1.5, dash='dash')))
-    if "QQQ" in daily_rets.columns:
-        fig.add_trace(go.Scatter(x=backtest_dates_str, y=cum_qqq.tolist(), mode='lines', name='QQQ (Nasdaq 100) Benchmark', line=dict(color='#818cf8', width=1.5, dash='dash')))
-        
+    fig.add_trace(go.Scatter(x=dates_str, y=((1 + strat_series).cumprod() * 10000).tolist(), mode='lines', name=strategy_label, line=dict(color='#fbbf24', width=2)))
+    if spy_series is not None:
+        fig.add_trace(go.Scatter(x=dates_str, y=((1 + spy_series).cumprod() * 10000).tolist(), mode='lines', name='SPY (S&P 500) Benchmark', line=dict(color='#64748b', width=1.5, dash='dash')))
+    if qqq_series is not None:
+        fig.add_trace(go.Scatter(x=dates_str, y=((1 + qqq_series).cumprod() * 10000).tolist(), mode='lines', name='QQQ (Nasdaq 100) Benchmark', line=dict(color='#818cf8', width=1.5, dash='dash')))
+
     fig.update_layout(
         title='Growth of $10,000 Investment',
         xaxis_title='Date',
@@ -3197,47 +2827,475 @@ def strategies_page():
         legend=dict(orientation='h', yanchor='top', y=-0.15, xanchor='center', x=0.5),
         font=dict(family='Inter, sans-serif')
     )
-    chart_html = fig.to_html(full_html=False, include_plotlyjs=False)
+    return fig.to_html(full_html=False, include_plotlyjs=False)
 
-    # Average annual one-way turnover (rebalances are monthly => ~12.6/yr).
-    avg_turnover = round((total_turnover / rebalance_count) * (252.0 / rebalance_freq) * 100, 0) if rebalance_count else 0.0
 
-    # Data-driven verdict — describe what actually happened, don't assert a win.
-    excess_spy = round(strat_stats["total_return"] - spy_stats["total_return"], 1)
-    beat_spy = strat_stats["total_return"] > spy_stats["total_return"]
-    beat_qqq = strat_stats["total_return"] > qqq_stats["total_return"]
-    if beat_spy and beat_qqq:
-        verdict = "outperformed both benchmarks"
-    elif beat_spy or beat_qqq:
-        verdict = "beat the S&P 500 but trailed the Nasdaq 100" if beat_spy else "beat the Nasdaq 100 but trailed the S&P 500"
+# --------------------------------------------------------------------------
+# /strategies — ticker tab
+# --------------------------------------------------------------------------
+
+def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, period):
+    """Single-ticker long/cash trend backtest plus its universe rank.
+
+    `df` is the searched ticker's own price frame (caller has already
+    rejected short histories); `price_batch` is the batched read for the
+    whole universe, used only for the rank display.
+    """
+    close = df['close']
+    daily_rets = close.pct_change(fill_method=None)
+    is_sma = _strategy_family(strategy_id) == "sma"
+    hurdle = momentum_engine.absolute_hurdle(strategy_id)
+
+    score = momentum_engine.score_series(close, symbol=symbol)
+
+    rank_scores = _universe_rank_scores(price_batch, symbols, strategy_id)
+    ranked = sorted(rank_scores.items(), key=lambda kv: kv[1], reverse=True)
+    univ_ranks = {sym: idx + 1 for idx, (sym, _) in enumerate(ranked)}
+    rank = univ_ranks.get(symbol, len(symbols))
+
+    # The signal series the strategy trades on, and the threshold it crosses.
+    # A zero threshold stays an int — Plotly serialises `0` and `0.0`
+    # differently into the embedded chart JSON.
+    if is_sma:
+        signal_series = momentum_engine.sma_spread(close)
+        threshold = 0
     else:
-        verdict = "underperformed both benchmarks"
+        signal_series = momentum_engine.rolling_score(close)
+        threshold = 0 if hurdle is None else hurdle
 
-    data = {
-        "leaderboard": leaderboard,
-        "top_5": top_5,
+    result = momentum_engine.backtest_timeseries(close, strategy_id)
+    backtest_dates = result.dates
+    strat_series = result.strategy_returns
+    trade_signals = result.trade_signal
+    warmup = momentum_engine.MOMENTUM_LOOKBACK + 1
+    hold_series = daily_rets.iloc[warmup:]
+
+    start_cutoff = None
+    if period != 'all':
+        start_cutoff = _period_start(df.index[-1], period, backtest_dates[0])
+        mask = backtest_dates >= start_cutoff
+        if mask.any() and mask.sum() >= 10:
+            backtest_dates = backtest_dates[mask]
+            strat_series = strat_series[mask]
+            hold_series = hold_series[mask]
+            trade_signals = trade_signals[mask]
+
+    strat_stats = _perf_stats(strat_series)
+    hold_stats = _perf_stats(hold_series)
+
+    # Fraction of the backtest the trend signal was actually invested.
+    pct_invested = round(float(trade_signals.mean()) * 100, 1) if len(trade_signals) else 0.0
+
+    cum_strat = (1 + strat_series).cumprod() * 10000
+    cum_hold = (1 + hold_series).cumprod() * 10000
+
+    # Full-length Buy & Hold: spans the entire available ticker history
+    # (the strategy needs 252 days of warm-up, but Buy & Hold can start from day 1)
+    hold_full_dates = df.index
+    hold_full_rets = daily_rets.fillna(0.0)
+    if start_cutoff is not None:
+        mask_hold_full = hold_full_dates >= start_cutoff
+        if mask_hold_full.any() and mask_hold_full.sum() >= 10:
+            hold_full_dates = hold_full_dates[mask_hold_full]
+            hold_full_rets = hold_full_rets[mask_hold_full]
+
+    sig_diff = trade_signals.diff().fillna(0.0)
+    buy_dates = backtest_dates[sig_diff == 1]
+    sell_dates = backtest_dates[sig_diff == -1]
+
+    # Individual round-trip trade returns, charged entry + exit cost.
+    cost_bps = momentum_engine.DEFAULT_COST_BPS / 1e4
+    trade_records = []
+    in_trade = False
+    entry_idx = 0
+    backtest_start_idx = df.index.get_loc(backtest_dates[0])
+    for idx in range(len(trade_signals)):
+        sig = trade_signals.iloc[idx]
+        if sig == 1 and not in_trade:
+            in_trade = True
+            entry_idx = idx
+        elif sig == 0 and in_trade:
+            in_trade = False
+            trade_records.append(close.iloc[backtest_start_idx + idx] / close.iloc[backtest_start_idx + entry_idx] - 1 - cost_bps * 2)
+    if in_trade:
+        trade_records.append(close.iloc[-1] / close.iloc[backtest_start_idx + entry_idx] - 1 - cost_bps)
+
+    trade_count = len(trade_records)
+    wins = [r for r in trade_records if r > 0]
+    losses = [r for r in trade_records if r <= 0]
+    win_rate = round(len(wins) / trade_count * 100, 1) if trade_count > 0 else 0.0
+    profit_factor = round(sum(wins) / abs(sum(losses)), 2) if losses and sum(losses) != 0.0 else (99.0 if wins else 0.0)
+
+    # Rolling signal series for the score chart, on the same period window.
+    roll_series = signal_series.iloc[warmup:] * 100
+    roll_dates = df.index[warmup:]
+    if start_cutoff is not None:
+        mask_roll = roll_dates >= start_cutoff
+        if mask_roll.any():
+            roll_dates = roll_dates[mask_roll]
+            roll_series = roll_series[mask_roll]
+
+    current = signal_series.iloc[-1]
+    bullish = bool(pd.notna(current) and current > threshold)
+    if is_sma:
+        trend_state = "GOLDEN CROSS (Long)" if bullish else "DEATH CROSS (Flat/Cash)"
+    else:
+        trend_state = "BULLISH (Long)" if bullish else "BEARISH (Flat/Cash)"
+    trend_color = "text-emerald-500" if bullish else "text-rose-500"
+
+    return {
+        "symbol": symbol,
+        "latest_price": float(close.iloc[-1]),
+        "mom_12_1": round(score.mom_12_1 * 100, 2),
+        "mom_6m": round(score.mom_6m * 100, 2),
+        "mom_3m": round(score.mom_3m * 100, 2),
+        "mom_1m": round(score.mom_1m * 100, 2),
+        "rank": rank,
+        "total_rank_count": len(rank_scores),
+        "trend_state": trend_state,
+        "trend_color": trend_color,
         "strat_stats": strat_stats,
-        "spy_stats": spy_stats,
-        "qqq_stats": qqq_stats,
-        "rel_spy": rel_spy,
-        "excess_spy": excess_spy,
-        "verdict": verdict,
-        "avg_turnover": avg_turnover,
-        "rf_annual": round(RF_ANNUAL * 100, 1),
-        "chart_html": chart_html,
+        "hold_stats": hold_stats,
+        "trade_count": trade_count,
+        "win_rate": win_rate,
+        "profit_factor": profit_factor,
+        "risk_adj_mom": score.risk_adj,
+        "ann_vol_1y": round(score.ann_vol_1y * 100, 1),
+        "pct_invested": pct_invested,
         "start_date": backtest_dates[0].strftime('%Y-%m-%d'),
-        "end_date": backtest_dates[-1].strftime('%Y-%m-%d')
+        "end_date": backtest_dates[-1].strftime('%Y-%m-%d'),
+        "_series": {
+            "dates": backtest_dates,
+            "cum_strat": cum_strat,
+            "cum_hold": cum_hold,
+            "hold_full_dates": hold_full_dates,
+            "cum_hold_full": (1 + hold_full_rets).cumprod() * 10000,
+            "buy_dates": buy_dates,
+            "sell_dates": sell_dates,
+            "roll_dates": roll_dates,
+            "roll_series": roll_series,
+            "threshold": threshold,
+        },
     }
+
+
+def _strategies_ticker_charts(symbol, series, strategy_id) -> dict:
+    """Performance, drawdown and rolling-score charts for the ticker tab."""
+    dates_str = series["dates"].strftime('%Y-%m-%d').tolist()
+    cum_strat = series["cum_strat"]
+    cum_hold = series["cum_hold"]
+
+    fig_perf = go.Figure()
+    fig_perf.add_trace(go.Scatter(x=dates_str, y=cum_strat.tolist(), mode='lines', name='Trend-Following (Long/Cash)', line=dict(color='#fbbf24', width=2), hoverlabel=dict(bgcolor='#000000', bordercolor='#fbbf24', font=dict(color='#fbbf24'))))
+    fig_perf.add_trace(go.Scatter(x=series["hold_full_dates"].strftime('%Y-%m-%d').tolist(), y=series["cum_hold_full"].tolist(), mode='lines', name=f'Buy & Hold {symbol}', line=dict(color='#64748b', width=1.5, dash='dash')))
+
+    if not series["buy_dates"].empty:
+        fig_perf.add_trace(go.Scatter(
+            x=series["buy_dates"].strftime('%Y-%m-%d').tolist(),
+            y=cum_strat.loc[series["buy_dates"]].tolist(),
+            mode='markers',
+            marker=dict(symbol='triangle-up', size=10, color='#10b981', line=dict(width=1, color='black')),
+            name='Buy Entry'
+        ))
+    if not series["sell_dates"].empty:
+        fig_perf.add_trace(go.Scatter(
+            x=series["sell_dates"].strftime('%Y-%m-%d').tolist(),
+            y=cum_strat.loc[series["sell_dates"]].tolist(),
+            mode='markers',
+            marker=dict(symbol='triangle-down', size=10, color='#ef4444', line=dict(width=1, color='black')),
+            name='Sell Exit'
+        ))
+
+    fig_perf.update_layout(
+        title=f'Trend-Following Strategy vs Buy & Hold for {symbol}',
+        xaxis_title='Date',
+        yaxis_title='Portfolio Value ($)',
+        template='plotly_white',
+        height=350,
+        margin=dict(l=50, r=30, t=60, b=80),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='top', y=-0.18, xanchor='center', x=0.5),
+        font=dict(family='Inter, sans-serif')
+    )
+
+    dd_strat = (cum_strat - cum_strat.cummax()) / cum_strat.cummax() * 100
+    dd_hold = (cum_hold - cum_hold.cummax()) / cum_hold.cummax() * 100
+
+    fig_dd = go.Figure()
+    fig_dd.add_trace(go.Scatter(x=dates_str, y=dd_strat.tolist(), mode='lines', name='Trend-Following DD', line=dict(color='#fbbf24', width=1.5), fill='tozeroy', fillcolor='rgba(251,191,36,0.1)'))
+    fig_dd.add_trace(go.Scatter(x=dates_str, y=dd_hold.tolist(), mode='lines', name=f'{symbol} DD', line=dict(color='#ef4444', width=1, dash='dash'), fill='tozeroy', fillcolor='rgba(239,68,68,0.15)'))
+
+    fig_dd.update_layout(
+        title='Drawdown Comparison (%)',
+        xaxis_title='Date',
+        yaxis_title='Drawdown (%)',
+        template='plotly_white',
+        height=250,
+        margin=dict(l=50, r=30, t=60, b=80),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='top', y=-0.22, xanchor='center', x=0.5),
+        font=dict(family='Inter, sans-serif')
+    )
+
+    if _strategy_family(strategy_id) == "sma":
+        score_name, score_axis = 'SMA 50/200 Spread %', 'SMA Spread (%)'
+        score_title = f'Rolling SMA 50/200 Spread (%) for {symbol}'
+        threshold_text = "Golden Cross Threshold (Trend Switch)"
+    else:
+        score_name, score_axis = '12-1 Momentum %', 'Momentum Score (%)'
+        score_title = f'Rolling 12-1 Momentum Score (%) for {symbol}'
+        threshold_text = ("Zero Threshold (Trend Switch)" if series["threshold"] == 0
+                          else "Absolute Hurdle (Trend Switch)")
+
+    fig_roll = go.Figure()
+    fig_roll.add_trace(go.Scatter(x=series["roll_dates"].strftime('%Y-%m-%d').tolist(), y=series["roll_series"].tolist(), mode='lines', name=score_name, line=dict(color='#818cf8', width=1.5)))
+    fig_roll.add_hline(
+        y=series["threshold"] * 100,
+        line_dash='dash',
+        line_color='#ef4444',
+        line_width=1,
+        annotation_text=threshold_text,
+        annotation_position="bottom right",
+        annotation_font=dict(size=10, color='#71717a')
+    )
+
+    fig_roll.update_layout(
+        title=score_title,
+        xaxis_title='Date',
+        yaxis_title=score_axis,
+        template='plotly_white',
+        height=280,
+        margin=dict(l=50, r=30, t=50, b=50),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        showlegend=False,
+        font=dict(family='Inter, sans-serif')
+    )
+
+    return {
+        "perf_chart_html": fig_perf.to_html(full_html=False, include_plotlyjs=False),
+        "dd_chart_html": fig_dd.to_html(full_html=False, include_plotlyjs=False),
+        "roll_chart_html": fig_roll.to_html(full_html=False, include_plotlyjs=False),
+    }
+
+
+# --------------------------------------------------------------------------
+# /strategies — screener tab
+# --------------------------------------------------------------------------
+
+def _strategies_screener_data(symbols, price_df, filters, strategy_id):
+    """Filtered, risk-adjusted-ranked table of the cached universe.
+
+    Returns None when `price_df` is too short to score.
+    """
+    if len(price_df) < momentum_engine.MOMENTUM_LOOKBACK + momentum_engine.MOMENTUM_EXCLUDE:
+        return None
+
+    is_sma = _strategy_family(strategy_id) == "sma"
+    hurdle = momentum_engine.absolute_hurdle(strategy_id)
+    scores = momentum_engine.score_universe(price_df, symbols, hurdle=hurdle)
+    spreads = momentum_engine.sma_score_universe(price_df, symbols) if is_sma else {}
+
+    results = []
+    for sym in symbols:
+        score = scores.get(sym)
+        if score is None:
+            continue
+
+        score_pct = score.mom_12_1 * 100
+        vol_pct = score.ann_vol_1y * 100
+        # Filtered on the unrounded ratio, displayed (and sorted) rounded.
+        risk_adj = score.mom_12_1 / score.ann_vol_1y if score.ann_vol_1y > 0 else 0.0
+
+        if score_pct < filters["min_mom"]:
+            continue
+        if vol_pct > filters["max_vol"]:
+            continue
+        if risk_adj < filters["min_risk_adj"]:
+            continue
+
+        trend = "BULLISH" if score_pct > 0 else "BEARISH"
+        if filters["trend_filter"] == 'bullish' and trend != 'BULLISH':
+            continue
+        if filters["trend_filter"] == 'bearish' and trend != 'BEARISH':
+            continue
+
+        if is_sma:
+            # Only symbols the SMA filter can actually score are eligible.
+            spread = spreads.get(sym)
+            if spread is None:
+                continue
+            passes_absolute = spread > 0
+        else:
+            passes_absolute = bool(score.passes_absolute)
+
+        if filters["abs_only"] and not passes_absolute:
+            continue
+
+        row = {
+            "symbol": sym,
+            "score": round(score_pct, 2),
+            "vol": round(vol_pct, 1),
+            "risk_adj": round(risk_adj, 2),
+            "trend": trend,
+            "price": round(float(price_df[sym].iloc[-1]), 2),
+            "passes_absolute": passes_absolute,
+        }
+        if is_sma:
+            row["sma_spread"] = round(spread * 100, 2)
+        results.append(row)
+
+    results = sorted(results, key=lambda r: r["risk_adj"], reverse=True)
+    for idx, row in enumerate(results):
+        row["rank"] = idx + 1
+
+    return {
+        "results": results,
+        "min_mom": filters["min_mom"],
+        "max_vol": filters["max_vol"],
+        "min_risk_adj": filters["min_risk_adj"],
+        "trend_filter": filters["trend_filter"],
+        "abs_only": filters["abs_only"],
+        "total_screened": len(results),
+    }
+
+
+@app.route('/strategies')
+def strategies_page():
+    tab = request.args.get('tab', 'universe')
+    symbol = request.args.get('symbol', '').upper().strip()
+    period = request.args.get('period', 'all')
+    strategy_id = _resolve_strategy(request.args.get('strategy', DEFAULT_STRATEGY))
+
+    shared = {
+        "strategy_id": strategy_id,
+        "strategy_label": _strategy_label(strategy_id),
+        "strategies": _strategy_choices(),
+        "period": period,
+    }
+
+    with db.get_conn() as conn:
+        rows = conn.execute("SELECT DISTINCT symbol FROM daily_prices").fetchall()
+    symbols = [r["symbol"] for r in rows if r["symbol"] not in MOMENTUM_BENCHMARK_ETFS]
+    if not symbols:
+        return render_template('strategies.html', data=None, error="No stock price data available in the database. Please visit the homepage and search for tickers first.", **shared)
+
+    available_symbols = sorted(symbols)
+
+    if tab == 'ticker':
+        if not symbol:
+            symbol = available_symbols[0] if available_symbols else ""
+
+        if symbol not in available_symbols:
+            return render_template(
+                'strategies.html',
+                data=None,
+                tab='ticker',
+                available_symbols=available_symbols,
+                searched_symbol=symbol,
+                error=f"Ticker '{symbol}' is not currently cached in the database. Please search for it on the homepage first to download its history.",
+                **shared
+            )
+
+        df = db.get_prices(symbol)
+        if df is None or len(df) < momentum_engine.MOMENTUM_LOOKBACK + momentum_engine.MOMENTUM_EXCLUDE:
+            return render_template(
+                'strategies.html',
+                data=None,
+                tab='ticker',
+                available_symbols=available_symbols,
+                searched_symbol=symbol,
+                error=f"Ticker '{symbol}' has insufficient price history (need at least 273 trading days).",
+                **shared
+            )
+
+        price_batch = db.get_prices_batch(symbols)
+        data = _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, period)
+        data.update(_strategies_ticker_charts(symbol, data.pop("_series"), strategy_id))
+
+        return render_template(
+            'strategies.html',
+            data=data,
+            tab='ticker',
+            header_badge=f"{symbol} · Rank #{data['rank']} of {data['total_rank_count']}",
+            available_symbols=available_symbols,
+            searched_symbol=symbol,
+            error=None,
+            **shared
+        )
+
+    if tab == 'screener':
+        filters = {
+            "min_mom": float(request.args.get('min_mom', '0.0')),
+            "max_vol": float(request.args.get('max_vol', '60.0')),
+            "min_risk_adj": float(request.args.get('min_risk_adj', '0.5')),
+            "trend_filter": request.args.get('trend', 'bullish'),
+            "abs_only": request.args.get('abs_only', '') == '1',
+        }
+
+        price_df = _load_price_frame(symbols)
+        if price_df.empty:
+            return render_template(
+                'strategies.html',
+                data=None,
+                tab='screener',
+                error="No stock data available in database.",
+                available_symbols=available_symbols,
+                searched_symbol='',
+                **shared
+            )
+
+        data = _strategies_screener_data(symbols, price_df, filters, strategy_id)
+        if data is None:
+            return render_template(
+                'strategies.html',
+                data=None,
+                tab='screener',
+                error="Insufficient price history in database to run screener.",
+                available_symbols=available_symbols,
+                searched_symbol='',
+                **shared
+            )
+
+        return render_template(
+            'strategies.html',
+            data=data,
+            tab='screener',
+            header_badge=f"Screened {data['total_screened']} Tickers",
+            available_symbols=available_symbols,
+            searched_symbol='',
+            error=None,
+            **shared
+        )
+
+    # ELSE: tab == 'universe'
+    price_df = _load_price_frame(symbols + ["SPY", "QQQ"])
+    if price_df.empty:
+        return render_template('strategies.html', data=None, error="Failed to load price data.", **shared)
+
+    data = _strategies_universe_data(symbols, price_df, strategy_id, period)
+    if data is None:
+        return render_template('strategies.html', data=None, error=f"Insufficient history in database. Need at least {momentum_engine.MOMENTUM_LOOKBACK} daily bars.", **shared)
+
+    series = data.pop("_series")
+    data["chart_html"] = _strategies_universe_chart(
+        series["dates"], series["strat"], series["spy"], series["qqq"],
+        shared["strategy_label"],
+    )
 
     return render_template(
         'strategies.html',
         data=data,
         tab='universe',
-        header_badge=f"Sharpe {strat_stats['sharpe']} · IR {rel_spy['info_ratio']} vs SPY",
+        header_badge=f"Sharpe {data['strat_stats']['sharpe']} · IR {data['rel_spy']['info_ratio']} vs SPY",
         available_symbols=available_symbols,
         searched_symbol='',
-        period=period,
-        error=None
+        error=None,
+        **shared
     )
 
 
