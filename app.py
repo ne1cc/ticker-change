@@ -2533,7 +2533,7 @@ def compute_momentum(ticker: str) -> dict:
         return {}
 
     close = df['close']
-    daily_rets = close.pct_change()
+    daily_rets = close.pct_change(fill_method=None)
 
     score = momentum_engine.score_series(close, symbol=symbol)
     if score is None:
