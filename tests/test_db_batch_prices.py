@@ -112,18 +112,21 @@ class TestGetPricesBatch(unittest.TestCase):
     def test_single_connection_regardless_of_symbol_count(self):
         """One get_conn() call and exactly one execute() call for a small batch."""
         execute_calls = []
+        conn_calls = []
         original_get_conn = db.get_conn
 
         @contextmanager
         def spy_get_conn():
-            """Wrap get_conn to spy on execute() without patching the class."""
+            """Wrap get_conn to track both connection and execute() calls."""
+            conn_calls.append(None)
             with original_get_conn() as conn:
                 wrapped_conn = _ExecuteSpyConnection(conn, execute_calls)
                 yield wrapped_conn
 
         with mock.patch.object(db, "get_conn", spy_get_conn):
             db.get_prices_batch(["AAA", "BBB", "ZZZ"])
-            # Exactly 1 execute call for ≤900 symbols (single chunk)
+            # Exactly 1 get_conn call and exactly 1 execute call for ≤900 symbols
+            self.assertEqual(len(conn_calls), 1)
             self.assertEqual(len(execute_calls), 1)
 
     def test_single_connection_past_chunk_boundary(self):
@@ -136,18 +139,21 @@ class TestGetPricesBatch(unittest.TestCase):
         self.assertGreater(len(symbols), 900)
 
         execute_calls = []
+        conn_calls = []
         original_get_conn = db.get_conn
 
         @contextmanager
         def spy_get_conn():
-            """Wrap get_conn to spy on execute() without patching the class."""
+            """Wrap get_conn to track both connection and execute() calls."""
+            conn_calls.append(None)
             with original_get_conn() as conn:
                 wrapped_conn = _ExecuteSpyConnection(conn, execute_calls)
                 yield wrapped_conn
 
         with mock.patch.object(db, "get_conn", spy_get_conn):
             batch = db.get_prices_batch(symbols)
-            # Exactly 2 execute calls for 1200 symbols (two 900-symbol chunks)
+            # Exactly 1 get_conn call and exactly 2 execute calls (two chunks)
+            self.assertEqual(len(conn_calls), 1)
             self.assertEqual(len(execute_calls), 2)
 
         self.assertEqual(set(batch.keys()), {"AAA", "BBB"})
