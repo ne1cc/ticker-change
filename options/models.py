@@ -96,4 +96,5 @@ class OptionsTerminalResult:
     vol: VolTermStructure
     cones: RealizedVolCones
     contracts: List[Dict[str, Any]] = field(default_factory=list)
+    validation: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
