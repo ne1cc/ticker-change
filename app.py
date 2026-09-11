@@ -2525,6 +2525,22 @@ def get_full_option_chain_df(
         if not selected:
             return pd.DataFrame()
 
+        def _safe_float(val, default=0.0) -> float:
+            try:
+                if val is None or pd.isna(val):
+                    return default
+                return float(val)
+            except Exception:
+                return default
+
+        def _safe_int(val, default=0) -> int:
+            try:
+                if val is None or pd.isna(val):
+                    return default
+                return int(val)
+            except Exception:
+                return default
+
         def _fetch(exp_tuple):
             try:
                 return exp_tuple, get_cached_chain(ticker, exp_tuple[0], stock=stock, spot_hint=current_price)
@@ -2545,19 +2561,19 @@ def get_full_option_chain_df(
                 for _, r in df_side.iterrows():
                     strike = r.get('strike')
                     iv = r.get('impliedVolatility')
-                    if strike is None or iv is None or np.isnan(strike) or np.isnan(iv):
+                    if strike is None or iv is None or pd.isna(strike) or pd.isna(iv):
                         continue
                     rows.append({
                         'strike': float(strike),
                         'cp': cp,
                         'dte': int(dte),
                         'expiration': exp,
-                        'bid': float(r.get('bid', 0.0) or 0.0),
-                        'ask': float(r.get('ask', 0.0) or 0.0),
-                        'last_price': float(r.get('lastPrice', 0.0) or 0.0),
+                        'bid': _safe_float(r.get('bid', 0.0)),
+                        'ask': _safe_float(r.get('ask', 0.0)),
+                        'last_price': _safe_float(r.get('lastPrice', 0.0)),
                         'iv': float(iv),
-                        'open_interest': int(r.get('openInterest', 0) or 0),
-                        'volume': int(r.get('volume', 0) or 0),
+                        'open_interest': _safe_int(r.get('openInterest', 0)),
+                        'volume': _safe_int(r.get('volume', 0)),
                     })
 
         return pd.DataFrame(rows) if rows else pd.DataFrame()
