@@ -63,19 +63,16 @@ class TestNavigation(unittest.TestCase):
             )
 
     def test_desktop_navigation_links_present(self):
-        """Verify that desktop navigation contains all primary and utility links."""
+        """Verify that desktop navigation contains all 4 pillar links and utilities."""
         resp = self.client.get("/glossary")
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
 
         expected_ids = [
-            'id="nav-stock"',
+            'id="nav-markets"',
             'id="nav-options"',
             'id="nav-analytics"',
-            'id="nav-positioning"',
-            'id="nav-live"',
-            'id="nav-momentum"',
-            'id="nav-ai-summary"',
+            'id="nav-strategies"',
             'id="nav-glossary"',
             'id="nav-apidocs"',
             'id="nav-settings"',
@@ -88,18 +85,18 @@ class TestNavigation(unittest.TestCase):
             )
 
     def test_ticker_sub_navbar_links_present(self):
-        """Verify that the ticker sub-navbar has links for all ticker views."""
-        resp = self.client.get("/glossary")
+        """Verify that the ticker sub-navbar structure contains all child tool link anchors."""
+        resp = self.client.get("/stock?ticker=AAPL")
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
 
         expected_sub_ids = [
             'id="sub-link-stock"',
+            'id="sub-link-live"',
             'id="sub-link-options"',
             'id="sub-link-analytics"',
             'id="sub-link-positioning"',
-            'id="sub-link-live"',
-            'id="sub-link-momentum"',
+            'id="sub-link-strategies"',
             'id="sub-link-ai-summary"',
         ]
         for sub_id in expected_sub_ids:
@@ -110,18 +107,18 @@ class TestNavigation(unittest.TestCase):
             )
 
     def test_mobile_navigation_links_present(self):
-        """Verify that mobile navigation drawer contains all core view links."""
+        """Verify that mobile navigation drawer contains all core view links organized by pillar."""
         resp = self.client.get("/glossary")
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
 
         expected_mobile_ids = [
             'id="mobile-nav-stock"',
+            'id="mobile-nav-live"',
             'id="mobile-nav-options"',
             'id="mobile-nav-analytics"',
             'id="mobile-nav-positioning"',
-            'id="mobile-nav-live"',
-            'id="mobile-nav-momentum"',
+            'id="mobile-nav-strategies"',
             'id="mobile-nav-ai-summary"',
             'id="mobile-nav-glossary"',
             'id="mobile-nav-apidocs"',
@@ -133,3 +130,4 @@ class TestNavigation(unittest.TestCase):
                 html,
                 f"Missing mobile navigation element: {m_id}",
             )
+
