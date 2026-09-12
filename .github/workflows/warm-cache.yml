@@ -2,9 +2,11 @@ name: Options Cache Warm and Sync
 
 on:
   schedule:
-    # Run hourly on weekdays during US market hours (14:15 to 22:15 UTC covers 9:15 AM to 6:15 PM ET)
-    # Plus a final EOD run at 22:15 UTC (6:15 PM ET) to capture the final post-market closing options chain.
-    - cron: '15 14-22 * * 1-5'
+    # Hourly on weekdays through US market hours (14:15-21:15 UTC = 9:15 AM-5:15 PM ET).
+    - cron: '15 14-21 * * 1-5'
+    # Separate entry, not just another hour, so the closing run is identifiable
+    # via github.event.schedule and can additionally force-refresh the Fly cache.
+    - cron: '15 22 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -33,5 +35,15 @@ jobs:
           S3_CACHE_ENDPOINT_URL: ${{ secrets.S3_CACHE_ENDPOINT_URL }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          APP_URL: ${{ secrets.RENDER_APP_URL }}
+          APP_URL: https://ticker-change.fly.dev
           WARM_CACHE_TOKEN: ${{ secrets.WARM_CACHE_TOKEN }}
+
+      # Runs even when the S3 step above failed: the Fly SQLite cache is an
+      # independent store, and keeping it correct is what makes the chain show
+      # real OI/volume after the close regardless of S3's state.
+      - name: Force EOD refresh of the Fly options cache
+        if: ${{ !cancelled() && (github.event.schedule == '15 22 * * 1-5' || github.event_name == 'workflow_dispatch') }}
+        run: |
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.WARM_CACHE_TOKEN }}" \
+            https://ticker-change.fly.dev/api/warm-cache
