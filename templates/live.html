@@ -1470,6 +1470,11 @@
   });
 
   // Initialize base book depth
+  // Book sizes are share counts: whole numbers, grouped for readability.
+  function fmtSize(n) {
+    return Math.round(n).toLocaleString('en-US');
+  }
+
   // Liquidity at a given level: a hump near the touch (peak ~level 4) spread
   // across ~20 levels, plus a baseline so deep levels aren't empty, plus noise.
   // Widening the hump over many levels is what makes the depth curve granular.
@@ -1489,12 +1494,12 @@
 
     for (let i = 1; i <= BOOK_LEVELS; i++) {
       const bidPrice = midPrice - (spread / 2) - (i - 1) * tickSize;
-      const bidSize = Math.round(levelLiquidity(i) * 10) / 10;
+      const bidSize = Math.round(levelLiquidity(i));
       bidSum += bidSize;
       bids.push({ price: Math.round(bidPrice * 100) / 100, size: bidSize, cumulative: bidSum });
 
       const askPrice = midPrice + (spread / 2) + (i - 1) * tickSize;
-      const askSize = Math.round(levelLiquidity(i) * 10) / 10;
+      const askSize = Math.round(levelLiquidity(i));
       askSum += askSize;
       asks.push({ price: Math.round(askPrice * 100) / 100, size: askSize, cumulative: askSum });
     }
@@ -1520,7 +1525,7 @@
       const idx = Math.floor(Math.random() * orderBook.bids.length);
       const sizeDiff = (Math.random() - 0.5) * 200;
       const oldSize = orderBook.bids[idx].size;
-      orderBook.bids[idx].size = Math.max(10, Math.round((oldSize + sizeDiff) * 10) / 10);
+      orderBook.bids[idx].size = Math.max(10, Math.round(oldSize + sizeDiff));
       triggerFlash(`bid-row-${idx}`, sizeDiff > 0 ? 'bg-emerald-500/10' : 'bg-rose-500/10');
     }
     
@@ -1529,7 +1534,7 @@
       const idx = Math.floor(Math.random() * orderBook.asks.length);
       const sizeDiff = (Math.random() - 0.5) * 200;
       const oldSize = orderBook.asks[idx].size;
-      orderBook.asks[idx].size = Math.max(10, Math.round((oldSize + sizeDiff) * 10) / 10);
+      orderBook.asks[idx].size = Math.max(10, Math.round(oldSize + sizeDiff));
       triggerFlash(`ask-row-${idx}`, sizeDiff > 0 ? 'bg-emerald-500/10' : 'bg-rose-500/10');
     }
     
@@ -1613,7 +1618,7 @@
           <td class="py-1.5 px-2 text-center text-rose-500 font-bold z-10 relative">${ask.price.toFixed(2)}</td>
           <td class="py-1.5 px-4 text-right text-zinc-700 dark:text-zinc-300 font-semibold z-10 relative font-mono">
             <span class="depth-bar-ask" style="width: ${pct}%"></span>
-            ${ask.size.toFixed(1)}
+            ${fmtSize(ask.size)}
           </td>
         </tr>
       `;
@@ -1645,7 +1650,7 @@
         <tr id="bid-row-${i}" class="relative border-b border-zinc-100 dark:border-zinc-850 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/20">
           <td class="py-1.5 px-4 text-left text-zinc-700 dark:text-zinc-300 font-semibold z-10 relative font-mono">
             <span class="depth-bar-bid" style="width: ${pct}%"></span>
-            ${bid.size.toFixed(1)}
+            ${fmtSize(bid.size)}
           </td>
           <td class="py-1.5 px-2 text-center text-emerald-500 font-bold z-10 relative">${bid.price.toFixed(2)}</td>
           <td class="py-1.5 px-4 text-zinc-500"></td>
@@ -1747,8 +1752,8 @@
     
     document.getElementById('stat-mid').innerText = `$${((bidPrice + askPrice) / 2).toFixed(2)}`;
     document.getElementById('stat-spread').innerText = `$${spread.toFixed(2)} (${spreadPct.toFixed(3)}%)`;
-    document.getElementById('stat-bid-depth').innerText = `${totalBidSize.toFixed(1)} contracts`;
-    document.getElementById('stat-ask-depth').innerText = `${totalAskSize.toFixed(1)} contracts`;
+    document.getElementById('stat-bid-depth').innerText = `${fmtSize(totalBidSize)} shares`;
+    document.getElementById('stat-ask-depth').innerText = `${fmtSize(totalAskSize)} shares`;
     document.getElementById('stat-trades-count').innerText = trades.length;
   }
 
