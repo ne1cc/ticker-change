@@ -339,6 +339,8 @@
               id="sub-nav-search-input"
               type="text" 
               placeholder="Search ticker..." 
+              autocomplete="off"
+              spellcheck="false"
               class="w-32 sm:w-44 px-3 py-1.5 pl-8 text-xs bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono font-bold uppercase tracking-wider text-zinc-900 dark:text-zinc-100"
             />
             <svg class="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -506,19 +508,24 @@
         }
 
         // Ticker persistence and sub-navbar setup
-        const params = new URLSearchParams(window.location.search);
-        const urlTicker = params.get('ticker') || params.get('symbol');
-        let savedTicker = '';
-        try {
-          if (urlTicker) {
-            localStorage.setItem('last_ticker', urlTicker.toUpperCase());
-          }
-          savedTicker = localStorage.getItem('last_ticker') || '';
-        } catch (err) {
-          // ignore storage errors
+        const path = window.location.pathname;
+        const isRoot = path === '/' || path === '';
+
+        // If visiting the homepage, clear any saved ticker and leave navigation pristine
+        if (isRoot) {
+          try {
+            localStorage.removeItem('last_ticker');
+          } catch (err) {}
+          return;
         }
-        const ticker = (urlTicker || savedTicker).toUpperCase();
-        if (!ticker) return;
+
+        const params = new URLSearchParams(window.location.search);
+        const urlTicker = (params.get('ticker') || params.get('symbol') || '').trim();
+
+        // If no ticker was specified in the URL for this page, do not resurrect old state
+        if (!urlTicker) {
+          return;
+        }
 
         // The options-chain route already carries ?tab=greeks, so the ticker has
         // to join with & rather than blindly appending a second '?'.
@@ -529,6 +536,7 @@
         const brandLink = document.getElementById('brand-link');
         if (brandLink) brandLink.href = '/stock?ticker=' + encodeURIComponent(ticker);
 
+        // Note: brand-link remains '/' so clicking the logo always returns to a clean homepage
         Object.values(PILLARS).forEach(pillar => {
           const el = document.getElementById(pillar.id);
           if (el) el.href = withTicker(pillar.defaultRoute, ticker);
@@ -559,9 +567,10 @@
           const tickerEl = document.getElementById('sub-nav-ticker');
           if (tickerEl) tickerEl.innerText = ticker;
 
+          // Search input stays cleared so placeholder is visible and ready for a fresh search
           const searchInput = document.getElementById('sub-nav-search-input');
           if (searchInput) {
-            searchInput.value = ticker;
+            searchInput.value = '';
           }
 
           // In #ticker-sub-nav, display ONLY child links belonging to the active pillar.

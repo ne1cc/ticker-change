@@ -210,4 +210,27 @@ class TestNavigation(unittest.TestCase):
             "Missing active topbar pillar styling in excel-mode.css",
         )
 
+    def test_options_default_ticker_does_not_leak_database_symbols(self):
+        """Verify that /options without ?ticker= defaults to SPY and does not leak tickers searched by other users."""
+        with db.get_conn() as conn:
+            conn.execute(
+                "INSERT INTO daily_prices (symbol, date, open, high, low, close, volume) "
+                "VALUES ('TSLA', '2026-09-01', 200.0, 210.0, 195.0, 205.0, 1000000)"
+            )
+        resp = self.client.get('/options')
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertNotIn("TSLA Options Terminal", html, "Leaked previously searched ticker TSLA on fresh /options load")
+        self.assertIn("SPY", html)
+
+    def test_brand_link_and_search_input_cleanliness(self):
+        """Verify that brand-link points to / and search input has autocomplete=off."""
+        resp = self.client.get('/')
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn('id="brand-link" href="/"', html)
+        self.assertIn('id="sub-nav-search-input"', html)
+        self.assertIn('autocomplete="off"', html)
+
+
 
