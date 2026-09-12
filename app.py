@@ -2585,12 +2585,7 @@ def get_full_option_chain_df(
 
 @app.route('/options')
 def options_page():
-    ticker = request.args.get('ticker', '').strip().upper()
-    if not ticker:
-        with db.get_conn() as conn:
-            rows = conn.execute("SELECT DISTINCT symbol FROM daily_prices").fetchall()
-        tickers = [r["symbol"] for r in rows]
-        ticker = tickers[0] if tickers else 'SPY'
+    ticker = request.args.get('ticker', '').strip().upper() or 'SPY'
 
     convention = request.args.get('convention', 'naive').strip().lower()
     if convention not in ('naive', 'short_wings'):
