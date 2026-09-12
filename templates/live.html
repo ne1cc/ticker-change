@@ -967,6 +967,16 @@
     }
   }
 
+  // Deep link: /live?tab=greeks lands straight on the options chain, which is
+  // what lets the Options pillar link to it. Any other value keeps the default
+  // microstructure tab, so plain /live links are unaffected.
+  (function applyTabFromQuery() {
+    const requested = new URLSearchParams(window.location.search).get('tab');
+    if (requested === 'greeks' || requested === 'options-ai') {
+      switchTab(requested);
+    }
+  })();
+
   let optionsAnalysisData = null;
 
   async function loadOptionsAnalysis() {

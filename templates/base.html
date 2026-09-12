@@ -278,8 +278,9 @@
           </div>
           <div>
             <div class="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 px-2 mb-1">Options</div>
-            <div class="grid grid-cols-1 gap-1.5">
+            <div class="grid grid-cols-2 gap-1.5">
               <a id="mobile-nav-options" href="/options" class="mobile-nav-link">Options Terminal</a>
+              <a id="mobile-nav-chain" href="/live?tab=greeks" class="mobile-nav-link">Options Chain</a>
             </div>
           </div>
           <div>
@@ -324,6 +325,7 @@
           <a id="sub-link-stock" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Price Table</a>
           <a id="sub-link-live" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Live Microstructure</a>
           <a id="sub-link-options" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Options Terminal</a>
+          <a id="sub-link-chain" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Options Chain</a>
           <a id="sub-link-analytics" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Risk Analytics</a>
           <a id="sub-link-positioning" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Market Positioning</a>
           <a id="sub-link-strategies" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Strategy Backtests</a>
@@ -432,7 +434,7 @@
       (function () {
         const PILLARS = {
           markets:    { id: 'nav-markets', defaultRoute: '/stock', children: ['stock', 'live'] },
-          options:    { id: 'nav-options', defaultRoute: '/options', children: ['options'] },
+          options:    { id: 'nav-options', defaultRoute: '/options', children: ['options', 'chain'] },
           analytics:  { id: 'nav-analytics', defaultRoute: '/analytics', children: ['analytics', 'positioning'] },
           strategies: { id: 'nav-strategies', defaultRoute: '/strategies', children: ['strategies', 'ai-summary'] }
         };
@@ -457,6 +459,12 @@
         }
 
         let routeInfo = ROUTE_MAP[path];
+        // /live backs two different pillars: bare it is Markets -> Live
+        // Microstructure, with ?tab=greeks it is the Options pillar's chain.
+        if (path === '/live'
+            && new URLSearchParams(window.location.search).get('tab') === 'greeks') {
+          routeInfo = { pillar: 'options', sub: 'chain' };
+        }
         if (!routeInfo && path.startsWith('/api/docs')) {
           routeInfo = { utility: 'apidocs' };
         }
@@ -512,13 +520,18 @@
         const ticker = (urlTicker || savedTicker).toUpperCase();
         if (!ticker) return;
 
+        // The options-chain route already carries ?tab=greeks, so the ticker has
+        // to join with & rather than blindly appending a second '?'.
+        const withTicker = (route, t) =>
+          route + (route.includes('?') ? '&' : '?') + 'ticker=' + encodeURIComponent(t);
+
         // Update brand link and topbar pillar links with active ticker parameter
         const brandLink = document.getElementById('brand-link');
         if (brandLink) brandLink.href = '/stock?ticker=' + encodeURIComponent(ticker);
 
         Object.values(PILLARS).forEach(pillar => {
           const el = document.getElementById(pillar.id);
-          if (el) el.href = pillar.defaultRoute + '?ticker=' + encodeURIComponent(ticker);
+          if (el) el.href = withTicker(pillar.defaultRoute, ticker);
         });
 
         // Child routes mapping for mobile nav links and sub-nav pills
@@ -526,6 +539,7 @@
           stock:       '/stock',
           live:        '/live',
           options:     '/options',
+          chain:       '/live?tab=greeks',
           analytics:   '/analytics',
           positioning: '/positioning',
           strategies:  '/strategies',
@@ -535,7 +549,7 @@
         // Update mobile links with active ticker parameter
         Object.entries(childRoutes).forEach(([key, route]) => {
           const mobEl = document.getElementById('mobile-nav-' + key);
-          if (mobEl) mobEl.href = route + '?ticker=' + encodeURIComponent(ticker);
+          if (mobEl) mobEl.href = withTicker(route, ticker);
         });
 
         // Show and configure ticker sub-navbar
@@ -558,7 +572,7 @@
             const el = document.getElementById('sub-link-' + childKey);
             if (!el) return;
 
-            el.href = childRoute + '?ticker=' + encodeURIComponent(ticker);
+            el.href = withTicker(childRoute, ticker);
 
             if (visibleChildren.includes(childKey)) {
               el.classList.remove('hidden');
@@ -595,7 +609,13 @@
         if (coreRoutes.includes(path)) {
           target = path;
         }
-        window.location.href = target + '?ticker=' + encodeURIComponent(val);
+        let dest = target + '?ticker=' + encodeURIComponent(val);
+        // Keep the options-chain deep link intact when switching tickers from it.
+        const tab = new URLSearchParams(window.location.search).get('tab');
+        if (target === '/live' && tab) {
+          dest += '&tab=' + encodeURIComponent(tab);
+        }
+        window.location.href = dest;
       }
     </script>
     {% block scripts %}{% endblock %}
