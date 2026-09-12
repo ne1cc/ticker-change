@@ -49,7 +49,8 @@ def nav_script() -> str:
 
 
 # A DOM thin enough to stay maintainable, real enough that the block runs its
-# whole ticker path rather than short-circuiting on null guards.
+# whole ticker path rather than short-circuiting on null guards. `replace` is
+# recorded rather than followed, so the rebinding redirect is observable.
 DOM_STUB = """
 const makeEl = (id) => ({
   id, href: '', className: '', innerText: '', value: '',
@@ -57,13 +58,24 @@ const makeEl = (id) => ({
 });
 const els = {};
 globalThis.document = { getElementById: (id) => (els[id] ||= makeEl(id)) };
-globalThis.localStorage = { store: {}, getItem(k){ return this.store[k] ?? null; },
-                            setItem(k,v){ this.store[k] = String(v); },
-                            removeItem(k){ delete this.store[k]; } };
+const mkStore = (seed) => ({ store: {...seed},
+  getItem(k){ return this.store[k] ?? null; },
+  setItem(k,v){ this.store[k] = String(v); },
+  removeItem(k){ delete this.store[k]; } });
+globalThis.localStorage = mkStore({});
+globalThis.sessionStorage = mkStore(SEED);
+const redirects = [];
 globalThis.window = {
-  location: { pathname: PATHNAME, search: SEARCH, href: '' },
+  location: { pathname: PATHNAME, search: SEARCH, href: '',
+              replace(u){ redirects.push(u); } },
   addEventListener(){},
 };
+const report = () => console.log(JSON.stringify({
+  redirects,
+  session: sessionStorage.store,
+  brandHref: els['brand-link'] ? els['brand-link'].href : null,
+  analyticsHref: els['nav-analytics'] ? els['nav-analytics'].href : null,
+}));
 """
 
 
@@ -86,14 +98,21 @@ class TestBaseInlineScripts(unittest.TestCase):
                 failures.append(f"block {i}: {first if isinstance(first, str) else first[0]}")
         self.assertEqual([], failures, "\n".join(failures))
 
-    def _run_nav(self, pathname: str, search: str):
+    def _run_nav(self, pathname: str, search: str, session=None):
         stub = (DOM_STUB
                 .replace("PATHNAME", json.dumps(pathname))
-                .replace("SEARCH", json.dumps(search)))
+                .replace("SEARCH", json.dumps(search))
+                .replace("SEED", json.dumps(session or {})))
         return subprocess.run(
-            [NODE, "--input-type=module", "-e", stub + "\n" + nav_script()],
+            [NODE, "--input-type=module", "-e",
+             stub + "\n" + nav_script() + "\nreport();"],
             capture_output=True, text=True,
         )
+
+    def _state(self, pathname: str, search: str, session=None):
+        proc = self._run_nav(pathname, search, session)
+        self.assertEqual(0, proc.returncode, proc.stderr.strip()[:600])
+        return json.loads(proc.stdout.strip().splitlines()[-1])
 
     def test_nav_runs_with_a_ticker(self):
         """The path that ReferenceError'd: every consumer of `ticker` executes."""
@@ -116,16 +135,60 @@ class TestBaseInlineScripts(unittest.TestCase):
 
     def test_pillar_links_carry_the_active_ticker(self):
         """The user-visible symptom: nav links losing ?ticker= when this breaks."""
-        stub = (DOM_STUB
-                .replace("PATHNAME", json.dumps("/analytics"))
-                .replace("SEARCH", json.dumps("?ticker=MU")))
-        probe = "\nconsole.log(JSON.stringify(document.getElementById('nav-analytics').href));"
-        proc = subprocess.run(
-            [NODE, "--input-type=module", "-e", stub + "\n" + nav_script() + probe],
-            capture_output=True, text=True,
-        )
-        self.assertEqual(0, proc.returncode, proc.stderr.strip()[:600])
-        self.assertIn("ticker=MU", json.loads(proc.stdout.strip()))
+        st = self._state("/analytics", "?ticker=MU")
+        self.assertIn("ticker=MU", st["analyticsHref"])
+
+
+class TestSessionScopedTickerBinding(unittest.TestCase):
+    """Binding must survive moving between views, but not the browser session."""
+
+    _state = TestBaseInlineScripts._state
+    _run_nav = TestBaseInlineScripts._run_nav
+
+    def test_url_ticker_is_remembered_for_the_session(self):
+        st = self._state("/analytics", "?ticker=MU")
+        self.assertEqual("MU", st["session"].get("active_ticker"))
+        self.assertEqual([], st["redirects"])
+
+    def test_bare_route_rebinds_to_the_session_ticker(self):
+        """Landing on /analytics mid-session keeps the subject you were on."""
+        st = self._state("/analytics", "", session={"active_ticker": "MU"})
+        self.assertEqual(["/analytics?ticker=MU"], st["redirects"])
+
+    def test_bare_route_with_no_session_shows_the_empty_state(self):
+        """A fresh visitor gets nothing resurrected."""
+        st = self._state("/analytics", "")
+        self.assertEqual([], st["redirects"])
+
+    def test_rebinding_preserves_an_existing_query_string(self):
+        """The options-chain deep link must keep tab=greeks through the rebind."""
+        st = self._state("/live", "?tab=greeks", session={"active_ticker": "MU"})
+        self.assertEqual(["/live?tab=greeks&ticker=MU"], st["redirects"])
+
+    def test_utility_routes_never_rebind(self):
+        st = self._state("/glossary", "", session={"active_ticker": "MU"})
+        self.assertEqual([], st["redirects"])
+
+    def test_homepage_clears_the_session_ticker(self):
+        """'/' is the reset, and the brand logo is how it is reached."""
+        st = self._state("/", "", session={"active_ticker": "MU"})
+        self.assertNotIn("active_ticker", st["session"])
+        self.assertEqual([], st["redirects"])
+
+    def test_brand_link_is_not_given_a_ticker(self):
+        """The logo must keep its '/' template href, or the reset is unreachable.
+
+        None means the script never even looked the element up, which is the
+        strongest form of "left alone".
+        """
+        st = self._state("/analytics", "?ticker=MU")
+        self.assertIsNone(st["brandHref"], "nav script must not rewrite brand-link")
+
+    def test_no_redirect_loop_once_the_ticker_is_present(self):
+        st = self._state("/analytics", "?ticker=MU", session={"active_ticker": "NVDA"})
+        self.assertEqual([], st["redirects"])
+        self.assertEqual("MU", st["session"].get("active_ticker"),
+                         "the URL wins and replaces the remembered ticker")
 
 
 if __name__ == "__main__":

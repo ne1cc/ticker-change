@@ -507,39 +507,58 @@
           }
         }
 
-        // Ticker persistence and sub-navbar setup.
+        // Ticker binding is scoped to the browsing session, not the browser.
+        // sessionStorage is per-tab and dies with the tab, so views stay bound to
+        // the active ticker while you move between them, but a new tab, a
+        // returning visitor, and the next person to use this browser each start
+        // clean. localStorage outlived all three, which is what #28 removed.
         // Reuses the `path` declared above; re-declaring it here was a
         // SyntaxError that took the entire script down.
-        const isRoot = path === '/' || path === '';
+        const TICKER_KEY = 'active_ticker';
+        const readTicker = () => {
+          try { return sessionStorage.getItem(TICKER_KEY) || ''; } catch (err) { return ''; }
+        };
+        const storeTicker = (t) => {
+          try { sessionStorage.setItem(TICKER_KEY, t); } catch (err) {}
+        };
 
-        // If visiting the homepage, clear any saved ticker and leave navigation pristine
-        if (isRoot) {
-          try {
-            localStorage.removeItem('last_ticker');
-          } catch (err) {}
+        // The homepage is the explicit reset, and the brand logo is how you reach it.
+        if (path === '/' || path === '') {
+          try { sessionStorage.removeItem(TICKER_KEY); } catch (err) {}
           return;
         }
 
         const params = new URLSearchParams(window.location.search);
         const urlTicker = (params.get('ticker') || params.get('symbol') || '').trim();
+        const ticker = urlTicker.toUpperCase();
 
-        // If no ticker was specified in the URL for this page, do not resurrect old state
-        if (!urlTicker) {
+        if (ticker) {
+          storeTicker(ticker);
+        } else if (ROUTE_MAP[path] && ROUTE_MAP[path].pillar) {
+          // A ticker-relevant route reached without one: rebind it to the session's
+          // ticker so switching views keeps its subject. These pages are rendered
+          // server-side from ?ticker=, so this has to be a redirect rather than a
+          // DOM update. It cannot loop -- the destination always carries the param.
+          const remembered = readTicker();
+          if (remembered) {
+            const sep = window.location.search ? '&' : '?';
+            window.location.replace(
+              path + window.location.search + sep + 'ticker=' + encodeURIComponent(remembered)
+            );
+          }
+          return;
+        } else {
+          // Utility routes (/glossary, /settings, /api/docs) never bind a ticker.
           return;
         }
-
-        const ticker = urlTicker.toUpperCase();
 
         // The options-chain route already carries ?tab=greeks, so the ticker has
         // to join with & rather than blindly appending a second '?'.
         const withTicker = (route, t) =>
           route + (route.includes('?') ? '&' : '?') + 'ticker=' + encodeURIComponent(t);
 
-        // Update brand link and topbar pillar links with active ticker parameter
-        const brandLink = document.getElementById('brand-link');
-        if (brandLink) brandLink.href = '/stock?ticker=' + encodeURIComponent(ticker);
-
-        // Note: brand-link remains '/' so clicking the logo always returns to a clean homepage
+        // brand-link keeps its template href of '/' so the logo is the one control
+        // that clears the session ticker. Pillar links carry it; the logo drops it.
         Object.values(PILLARS).forEach(pillar => {
           const el = document.getElementById(pillar.id);
           if (el) el.href = withTicker(pillar.defaultRoute, ticker);
@@ -606,7 +625,7 @@
         const val = input ? input.value.trim().toUpperCase() : '';
         if (!val) return;
         try {
-          localStorage.setItem('last_ticker', val);
+          sessionStorage.setItem('active_ticker', val);
         } catch (err) {
           // ignore
         }
