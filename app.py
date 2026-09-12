@@ -2499,7 +2499,7 @@ def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045):
 def get_full_option_chain_df(
     ticker: str,
     stock=None,
-    current_price: Optional[float] = None,
+    current_price: float | None = None,
     max_expirations: int = 8,
 ) -> pd.DataFrame:
     """Aggregate cached option chains across expirations into a single normalized DataFrame."""

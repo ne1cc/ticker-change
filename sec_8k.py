@@ -67,8 +67,7 @@ def fetch_and_parse_8k_filings(ticker: str, limit: int = 20) -> List[MaterialEve
         return []
 
     url = providers.SEC_SUBMISSIONS_URL.format(cik=cik_int)
-    headers = {"User-Agent": providers.sec_user_agent(), "Accept-Encoding": "gzip, deflate"}
-    res = providers._sec_get(url, headers=headers)
+    res = providers._get_json(url, headers=providers._sec_headers())
     if not res or "filings" not in res:
         return []
 
@@ -107,7 +106,7 @@ def fetch_and_parse_8k_filings(ticker: str, limit: int = 20) -> List[MaterialEve
 
             event = MaterialEvent8K(
                 accession_number=accessions[i] if i < len(accessions) else "",
-                cik=cik_str,
+                cik=str(cik_str),
                 ticker=ticker.upper(),
                 filing_date=filing_dates[i] if i < len(filing_dates) else "",
                 report_date=report_dates[i] if i < len(report_dates) and report_dates[i] else filing_dates[i],
