@@ -330,6 +330,48 @@ def finnhub_insider_sentiment(symbol: str):
     return rows or None
 
 
+def finnhub_insider_transactions(symbol: str, limit: int = 15):
+    """Insider Form 4 transactions from Finnhub (primary feed).
+
+    Normalized to the same row shape yfinance_insider_transactions returns so
+    get_insider_transactions can fall through between the two feeds without the
+    caller or template caring which one answered.
+    """
+    if not finnhub_keys():
+        return None
+
+    def fetch():
+        return _finnhub_get(
+            "/stock/insider-transactions",
+            {"symbol": symbol.upper(), "from": "2022-01-01", "to": "2030-01-01"},
+        )
+
+    raw = _cached("finnhub", f"insider-tx:{symbol.upper()}", fetch)
+    if not raw or not isinstance(raw.get("data"), list):
+        return None
+
+    rows = []
+    for r in raw["data"]:
+        # `change` is the signed share delta; `share` is post-transaction holdings,
+        # so the delta is what belongs in the buy/sell column.
+        change = _first(r, "change", default=0)
+        if not isinstance(change, (int, float)):
+            continue
+        price = _first(r, "transactionPrice")
+        rows.append({
+            "name": _first(r, "name", default="Insider"),
+            "shares": int(change),
+            "is_buy": change > 0,
+            "price": float(price) if isinstance(price, (int, float)) and price else None,
+            "code": _first(r, "transactionCode"),
+            "filing_date": _first(r, "filingDate"),
+            "transaction_date": _first(r, "transactionDate"),
+            "source": "finnhub",
+        })
+    rows.sort(key=lambda x: x["filing_date"] or "", reverse=True)
+    return rows[:limit] or None
+
+
 def yfinance_insider_transactions(symbol: str, limit: int = 15):
     """Fetch insider transactions from yfinance (keyless secondary feed)."""
     try:
@@ -371,7 +413,12 @@ def yfinance_insider_transactions(symbol: str, limit: int = 15):
 
 
 def get_insider_transactions(symbol: str, limit: int = 15):
-    """Multi-feed cascade: Finnhub -> yfinance -> SEC EDGAR Form 4 filings."""
+    """Two-feed cascade: Finnhub -> yfinance.
+
+    Raw SEC Form 3/4/5 filings are the third tier, but they carry no share/price
+    detail so they are surfaced separately as `sec_filings` rather than being
+    flattened into this list.
+    """
     # 1. Finnhub
     fh_tx = finnhub_insider_transactions(symbol, limit=limit)
     if fh_tx:
