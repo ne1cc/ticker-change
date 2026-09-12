@@ -216,14 +216,21 @@ html.excel .xl-warn { background-color: #fffbeb; }
 html.excel .xl-muted { color: #64748b; font-weight: 400; }
 
 /* Panels converted via the panel() macro: re-grid their label/value pairs
-   into bordered cells. gap collapses so cell borders form the gridlines. */
+   into bordered cells. gap collapses so cell borders form the gridlines.
+
+   OPT-IN via .xl-kv, and deliberately so. This used to match every .grid in a
+   sheet body, which assumed each grid child was a simple label/value pair of
+   two <p>s. _institutional.html later wrapped rich nested layouts in panel()
+   -- a 12-column split, three-up stat rows, cards holding a label, a value and
+   a caption -- and the forced flex/space-between crushed them into overlapping
+   text. Anything not marked .xl-kv now keeps its own layout inside the sheet. */
 html.excel .xl-sheet-body { padding: 8px 12px; }
-html.excel .xl-sheet-body .grid {
+html.excel .xl-sheet-body .grid.xl-kv {
   gap: 0 !important;
   border-top: 1px solid var(--xl-gridline);
   border-left: 1px solid var(--xl-gridline);
 }
-html.excel .xl-sheet-body .grid > div {
+html.excel .xl-sheet-body .grid.xl-kv > div {
   border-right: 1px solid var(--xl-gridline);
   border-bottom: 1px solid var(--xl-gridline);
   padding: 4px 8px;
@@ -232,14 +239,14 @@ html.excel .xl-sheet-body .grid > div {
   justify-content: space-between;
   gap: 8px;
 }
-html.excel .xl-sheet-body .grid > div > p:first-child { 
+html.excel .xl-sheet-body .grid.xl-kv > div > p:first-child {
   margin-bottom: 0;
   font-size: 11px;
   font-weight: 500;
   color: #475569;
   white-space: nowrap;
 }
-html.excel .xl-sheet-body .grid > div > p:last-child {
+html.excel .xl-sheet-body .grid.xl-kv > div > p:last-child {
   margin-top: 0;
   font-family: ui-monospace, Consolas, monospace !important;
   font-variant-numeric: tabular-nums;
