@@ -507,6 +507,17 @@
             </div>
             
             <div>
+              <label class="block text-[10px] font-bold text-zinc-400 uppercase mb-0.5">Strikes</label>
+              <select id="strike-count-select" onchange="loadOptionsGreeks()" class="px-2.5 py-1 text-xs font-semibold bg-zinc-105 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500">
+                <option value="20">20 near spot</option>
+                <option value="40">40 near spot</option>
+                <option value="60">60 near spot</option>
+                <option value="" selected>Default (±30%)</option>
+                <option value="all">All strikes</option>
+              </select>
+            </div>
+
+            <div>
               <label class="block text-[10px] font-bold text-zinc-400 uppercase mb-0.5">Risk-free Rate</label>
               <div class="flex items-center gap-1.5">
                 <input id="rf-rate-input" type="number" step="0.001" min="0" max="0.2" value="0.045" onchange="loadOptionsGreeks()" class="w-16 px-2 py-0.5 text-xs bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-center font-mono font-semibold" />
@@ -1446,7 +1457,7 @@
     const date = select.value;
     const rfRate = document.getElementById('rf-rate-input')?.value || '0.045';
     try {
-      const res = await fetch(`/api/options-greeks/${ticker}?expiration=${date}&rf_rate=${rfRate}`);
+      const res = await fetch(`/api/options-greeks/${ticker}?expiration=${date}&rf_rate=${rfRate}${strikeCountParam()}`);
       if (!res.ok) return;
       const fresh = await res.json();
       // Only re-render if the data actually changed (avoid flicker on identical data)
@@ -1839,6 +1850,14 @@
 
   // --- TAB 2: OPTION GREEKS LOGIC ---
   
+  // Selected strike window, as the /api/options-greeks `strikes` param.
+  // Empty string means "use the server default band", so it is omitted.
+  function strikeCountParam() {
+    const el = document.getElementById('strike-count-select');
+    const v = el ? el.value : '';
+    return v ? `&strikes=${encodeURIComponent(v)}` : '';
+  }
+
   async function loadExpirationDates() {
     const res = await fetch(`/api/options-greeks/${ticker}`);
     if (!res.ok) return;
@@ -1882,7 +1901,7 @@
       </tr>
     `;
 
-    const res = await fetch(`/api/options-greeks/${ticker}?expiration=${date}&rf_rate=${rfRate}`);
+    const res = await fetch(`/api/options-greeks/${ticker}?expiration=${date}&rf_rate=${rfRate}${strikeCountParam()}`);
     if (!res.ok) {
       document.getElementById('option-chain-body').innerHTML = `
         <tr class="text-center text-zinc-400">
