@@ -2368,13 +2368,19 @@ def calculate_greeks(s, k, t, v, r=0.045):
         return None
 
 
-def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045):
+def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045, strike_count=None):
     """Retrieve option chain and compute Black-Scholes Greeks for strikes around the spot price.
 
     Persists the raw option chain (calls/puts records + spot price) through the
     shared chain cache — S3 when S3_CACHE_BUCKET is configured, SQLite api_cache
     otherwise — so the app still works after hours or when yfinance is
     rate-limited. Stale-but-present beats a blank table.
+
+    strike_count controls how much of the chain comes back:
+      None    the default +/-30% moneyness band
+      'all'   every strike the expiration lists
+      int N   the N strikes nearest spot, so the window stays centred on the
+              money rather than drifting to one wing on a skewed chain
     """
     try:
         stock = _get_yf_ticker(ticker)
@@ -2399,13 +2405,20 @@ def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045):
         days_to_exp = (exp_dt - today).days + 1
         t_years = max(1e-5, days_to_exp / 365.0)
         
-        lower_bound = spot_price * 0.70
-        upper_bound = spot_price * 1.30
-        
         call_strikes = calls['strike'].tolist() if not calls.empty else []
         put_strikes = puts['strike'].tolist() if not puts.empty else []
         all_strikes = sorted(list(set(call_strikes + put_strikes)))
-        filtered_strikes = [s for s in all_strikes if lower_bound <= s <= upper_bound]
+
+        if strike_count == 'all':
+            filtered_strikes = all_strikes
+        elif isinstance(strike_count, int) and strike_count > 0:
+            # Nearest-to-spot, then back into ascending order for display.
+            nearest = sorted(all_strikes, key=lambda s: abs(s - spot_price))[:strike_count]
+            filtered_strikes = sorted(nearest)
+        else:
+            lower_bound = spot_price * 0.70
+            upper_bound = spot_price * 1.30
+            filtered_strikes = [s for s in all_strikes if lower_bound <= s <= upper_bound]
         
         call_dict = calls.set_index('strike').to_dict('index') if not calls.empty else {}
         put_dict = puts.set_index('strike').to_dict('index') if not puts.empty else {}
@@ -3507,8 +3520,20 @@ def options_greeks_api(ticker):
         rf_rate = float(rf_rate_raw)
     except ValueError:
         rf_rate = 0.045
-        
-    data = get_options_greeks_data(ticker, expiration, rf_rate)
+
+    # ?strikes=all | <positive int>; anything else falls back to the default band.
+    strikes_raw = request.args.get('strikes', '').strip().lower()
+    if strikes_raw == 'all':
+        strike_count = 'all'
+    else:
+        try:
+            strike_count = int(strikes_raw) if strikes_raw else None
+            if strike_count is not None and strike_count <= 0:
+                strike_count = None
+        except ValueError:
+            strike_count = None
+
+    data = get_options_greeks_data(ticker, expiration, rf_rate, strike_count=strike_count)
     if not data:
         return jsonify({"error": f"Could not retrieve options data for {ticker}"}), 404
         

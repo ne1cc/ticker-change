@@ -23,6 +23,31 @@
     animation: flash-red 0.6s ease-out;
   }
   
+  /* Sticky option-chain header.
+     The chain can run to 277 rows with "All strikes", so the scroll box owns
+     the vertical overflow and both header rows pin to its top. Two rows means
+     two offsets: the group row at 0, the column row below it at the measured
+     height of the first (--chain-head-h, set by syncChainHeaderOffset()).
+     border-collapse drops borders on sticky cells in Chrome, so the header
+     rules are painted with an inset box-shadow instead. */
+  #option-chain-scroll {
+    --chain-rule: rgb(228 228 231);
+  }
+  html.dark #option-chain-scroll {
+    --chain-rule: rgb(39 39 42);
+  }
+  #option-chain-scroll thead th {
+    position: sticky;
+    z-index: 2;
+    box-shadow: inset 0 -1px 0 var(--chain-rule);
+  }
+  #option-chain-scroll thead tr:first-child th {
+    top: 0;
+  }
+  #option-chain-scroll thead tr:last-child th {
+    top: var(--chain-head-h, 30px);
+  }
+
   /* Microstructure Table Layout */
   .depth-bar-bid {
     position: absolute;
@@ -509,6 +534,17 @@
             </div>
             
             <div>
+              <label class="block text-[10px] font-bold text-zinc-400 uppercase mb-0.5">Strikes</label>
+              <select id="strike-count-select" onchange="loadOptionsGreeks()" class="px-2.5 py-1 text-xs font-semibold bg-zinc-105 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500">
+                <option value="20">20 near spot</option>
+                <option value="40">40 near spot</option>
+                <option value="60">60 near spot</option>
+                <option value="" selected>Default (±30%)</option>
+                <option value="all">All strikes</option>
+              </select>
+            </div>
+
+            <div>
               <label class="block text-[10px] font-bold text-zinc-400 uppercase mb-0.5">Risk-free Rate</label>
               <div class="flex items-center gap-1.5">
                 <input id="rf-rate-input" type="number" step="0.001" min="0" max="0.2" value="0.045" onchange="loadOptionsGreeks()" class="w-16 px-2 py-0.5 text-xs bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-center font-mono font-semibold" />
@@ -524,7 +560,7 @@
         </div>
 
         <!-- Table Container -->
-        <div class="flex-1 overflow-x-auto no-scrollbar font-mono text-[11px] leading-relaxed">
+        <div id="option-chain-scroll" class="flex-1 max-h-[70vh] overflow-auto font-mono text-[11px] leading-relaxed">
           <table class="w-full text-left whitespace-nowrap table-auto border-collapse">
             <thead>
               <tr class="text-[9px] text-zinc-400 bg-zinc-100 dark:bg-zinc-850 border-b border-zinc-200 dark:border-zinc-800 uppercase">
@@ -532,7 +568,7 @@
                 <th class="py-2 px-3 text-center">Center</th>
                 <th colspan="8" class="py-2 px-3 text-center border-l border-zinc-200 dark:border-zinc-800 text-rose-500">Put Options</th>
               </tr>
-              <tr class="text-[9px] text-zinc-400 bg-zinc-50 dark:bg-zinc-900/40 border-b border-zinc-200 dark:border-zinc-800 uppercase">
+              <tr class="text-[9px] text-zinc-400 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 uppercase">
                 <!-- Calls -->
                 <th class="py-1.5 px-2 text-right">Delta</th>
                 <th class="py-1.5 px-2 text-right">Gamma</th>
@@ -968,6 +1004,16 @@
       loadOptionsAnalysis();
     }
   }
+
+  // Deep link: /live?tab=greeks lands straight on the options chain, which is
+  // what lets the Options pillar link to it. Any other value keeps the default
+  // microstructure tab, so plain /live links are unaffected.
+  (function applyTabFromQuery() {
+    const requested = new URLSearchParams(window.location.search).get('tab');
+    if (requested === 'greeks' || requested === 'options-ai') {
+      switchTab(requested);
+    }
+  })();
 
   let optionsAnalysisData = null;
 
@@ -1438,7 +1484,7 @@
     const date = select.value;
     const rfRate = document.getElementById('rf-rate-input')?.value || '0.045';
     try {
-      const res = await fetch(`/api/options-greeks/${ticker}?expiration=${date}&rf_rate=${rfRate}`);
+      const res = await fetch(`/api/options-greeks/${ticker}?expiration=${date}&rf_rate=${rfRate}${strikeCountParam()}`);
       if (!res.ok) return;
       const fresh = await res.json();
       // Only re-render if the data actually changed (avoid flicker on identical data)
@@ -1831,6 +1877,25 @@
 
   // --- TAB 2: OPTION GREEKS LOGIC ---
   
+  // The second header row pins below the first, so it needs the first row's
+  // real height -- which changes with zoom, font settings and wrapping.
+  function syncChainHeaderOffset() {
+    const box = document.getElementById('option-chain-scroll');
+    const firstRow = box && box.querySelector('thead tr:first-child');
+    if (!firstRow) return;
+    const h = firstRow.getBoundingClientRect().height;
+    if (h > 0) box.style.setProperty('--chain-head-h', `${Math.round(h)}px`);
+  }
+  window.addEventListener('resize', syncChainHeaderOffset);
+
+  // Selected strike window, as the /api/options-greeks `strikes` param.
+  // Empty string means "use the server default band", so it is omitted.
+  function strikeCountParam() {
+    const el = document.getElementById('strike-count-select');
+    const v = el ? el.value : '';
+    return v ? `&strikes=${encodeURIComponent(v)}` : '';
+  }
+
   async function loadExpirationDates() {
     const res = await fetch(`/api/options-greeks/${ticker}`);
     if (!res.ok) return;
@@ -1874,7 +1939,7 @@
       </tr>
     `;
 
-    const res = await fetch(`/api/options-greeks/${ticker}?expiration=${date}&rf_rate=${rfRate}`);
+    const res = await fetch(`/api/options-greeks/${ticker}?expiration=${date}&rf_rate=${rfRate}${strikeCountParam()}`);
     if (!res.ok) {
       document.getElementById('option-chain-body').innerHTML = `
         <tr class="text-center text-zinc-400">
@@ -1941,6 +2006,8 @@
     });
     
     tbody.innerHTML = html;
+    // Header offset depends on the rendered first row, so measure after paint.
+    syncChainHeaderOffset();
   }
 
   function updateSimulatorPremium() {
