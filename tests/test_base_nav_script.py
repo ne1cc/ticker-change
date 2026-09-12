@@ -1,0 +1,132 @@
+"""Executable checks for the inline <script> blocks in templates/base.html.
+
+Two bugs shipped to production in one commit and neither was caught:
+
+  SyntaxError: Identifier 'path' has already been declared
+  ReferenceError: ticker is not defined
+
+The first stops the entire script from parsing, so the topbar stops appending
+?ticker= and every pillar link drops the active ticker. Flask still returns
+HTTP 200 for all of it, and `test_navigation.py` only asserts status codes --
+which is exactly why both slipped through.
+
+These tests parse and then actually run the navigation block, so a dead script
+fails the suite instead of the page.
+"""
+import json
+import pathlib
+import re
+import shutil
+import subprocess
+import unittest
+
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+BASE_HTML = REPO_ROOT / "templates" / "base.html"
+NODE = shutil.which("node")
+
+# Inline blocks only -- <script src=...> pulls in Tailwind/Plotly from a CDN.
+INLINE_SCRIPT = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S)
+
+
+def inline_scripts() -> list:
+    """Inline script bodies from base.html, with Jinja expressions neutralised."""
+    out = []
+    for m in INLINE_SCRIPT.finditer(BASE_HTML.read_text()):
+        body = m.group(1)
+        body = re.sub(r"\{\{.*?\}\}", '"JINJA"', body, flags=re.S)
+        body = re.sub(r"\{%.*?%\}", "", body, flags=re.S)
+        out.append(body)
+    return out
+
+
+def nav_script() -> str:
+    """The block that owns pillar state and ticker propagation."""
+    for body in inline_scripts():
+        if "PILLARS" in body and "ROUTE_MAP" in body:
+            return body
+    raise AssertionError("navigation block not found in base.html")
+
+
+# A DOM thin enough to stay maintainable, real enough that the block runs its
+# whole ticker path rather than short-circuiting on null guards.
+DOM_STUB = """
+const makeEl = (id) => ({
+  id, href: '', className: '', innerText: '', value: '',
+  classList: { add(){}, remove(){}, toggle(){}, contains(){ return false; } },
+});
+const els = {};
+globalThis.document = { getElementById: (id) => (els[id] ||= makeEl(id)) };
+globalThis.localStorage = { store: {}, getItem(k){ return this.store[k] ?? null; },
+                            setItem(k,v){ this.store[k] = String(v); },
+                            removeItem(k){ delete this.store[k]; } };
+globalThis.window = {
+  location: { pathname: PATHNAME, search: SEARCH, href: '' },
+  addEventListener(){},
+};
+"""
+
+
+@unittest.skipUnless(NODE, "node is required to parse/run the inline scripts")
+class TestBaseInlineScripts(unittest.TestCase):
+
+    def test_every_inline_script_parses(self):
+        """A SyntaxError anywhere kills the whole block, silently, at HTTP 200."""
+        failures = []
+        for i, body in enumerate(inline_scripts()):
+            proc = subprocess.run(
+                [NODE, "--check", "-"], input=body,
+                capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                first = next(
+                    (ln for ln in proc.stderr.splitlines() if "Error" in ln),
+                    proc.stderr.strip().splitlines()[:1] or ["unknown"],
+                )
+                failures.append(f"block {i}: {first if isinstance(first, str) else first[0]}")
+        self.assertEqual([], failures, "\n".join(failures))
+
+    def _run_nav(self, pathname: str, search: str):
+        stub = (DOM_STUB
+                .replace("PATHNAME", json.dumps(pathname))
+                .replace("SEARCH", json.dumps(search)))
+        return subprocess.run(
+            [NODE, "--input-type=module", "-e", stub + "\n" + nav_script()],
+            capture_output=True, text=True,
+        )
+
+    def test_nav_runs_with_a_ticker(self):
+        """The path that ReferenceError'd: every consumer of `ticker` executes."""
+        proc = self._run_nav("/analytics", "?ticker=MU")
+        self.assertEqual(0, proc.returncode, proc.stderr.strip()[:600])
+
+    def test_nav_runs_without_a_ticker(self):
+        proc = self._run_nav("/analytics", "")
+        self.assertEqual(0, proc.returncode, proc.stderr.strip()[:600])
+
+    def test_nav_runs_on_the_homepage(self):
+        """Root clears saved state and returns early."""
+        proc = self._run_nav("/", "")
+        self.assertEqual(0, proc.returncode, proc.stderr.strip()[:600])
+
+    def test_nav_runs_on_the_options_chain_deep_link(self):
+        """/live?tab=greeks is the one child route carrying its own query string."""
+        proc = self._run_nav("/live", "?ticker=MU&tab=greeks")
+        self.assertEqual(0, proc.returncode, proc.stderr.strip()[:600])
+
+    def test_pillar_links_carry_the_active_ticker(self):
+        """The user-visible symptom: nav links losing ?ticker= when this breaks."""
+        stub = (DOM_STUB
+                .replace("PATHNAME", json.dumps("/analytics"))
+                .replace("SEARCH", json.dumps("?ticker=MU")))
+        probe = "\nconsole.log(JSON.stringify(document.getElementById('nav-analytics').href));"
+        proc = subprocess.run(
+            [NODE, "--input-type=module", "-e", stub + "\n" + nav_script() + probe],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr.strip()[:600])
+        self.assertIn("ticker=MU", json.loads(proc.stdout.strip()))
+
+
+if __name__ == "__main__":
+    unittest.main()

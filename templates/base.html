@@ -507,8 +507,9 @@
           }
         }
 
-        // Ticker persistence and sub-navbar setup
-        const path = window.location.pathname;
+        // Ticker persistence and sub-navbar setup.
+        // Reuses the `path` declared above; re-declaring it here was a
+        // SyntaxError that took the entire script down.
         const isRoot = path === '/' || path === '';
 
         // If visiting the homepage, clear any saved ticker and leave navigation pristine
@@ -526,6 +527,8 @@
         if (!urlTicker) {
           return;
         }
+
+        const ticker = urlTicker.toUpperCase();
 
         // The options-chain route already carries ?tab=greeks, so the ticker has
         // to join with & rather than blindly appending a second '?'.
