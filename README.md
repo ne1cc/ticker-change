@@ -1,12 +1,12 @@
 # ticker/change
 
-**A personal equity research terminal for solo and swing traders.**
+**An equity research terminal for retail traders and investors.**
 
 Enter a ticker, understand the context, sanity-check a trade before you take it.
-ticker/change pulls free market data into six connected views — prices,
-fundamentals, options positioning, momentum, and risk — so you can decide
-whether a name is worth your attention. It explains what the data shows; it
-does not predict the market or execute trades.
+ticker/change pulls free market data into seven connected views — prices,
+fundamentals, options positioning, strategy backtests, and risk — so you can
+decide whether a name is worth your attention. It explains what the data
+shows; it does not predict the market or execute trades.
 
 - **Live demo:** https://ticker-change.fly.dev
 
@@ -16,8 +16,8 @@ does not predict the market or execute trades.
 
 | | |
 | --- | --- |
-| **Category** | Personal equity research terminal / pre-trade context cockpit |
-| **Built for** | Solo traders and swing traders researching their own ideas |
+| **Category** | Equity research terminal / pre-trade context cockpit |
+| **Built for** | Retail traders and investors researching their own ideas |
 | **Data** | Free-tier sources (`yfinance`, Finnhub, FMP, SEC EDGAR) |
 | **Architecture** | Single-process Flask app, SQLite cache, no frontend build step |
 
@@ -29,15 +29,16 @@ forecasts. See [What we don't claim](#what-we-dont-claim).
 
 ## How you'll use it
 
-One mode, one app: **Pre-trade** — is this swing worth taking? Enter a
+One mode, one app: **Pre-trade** — is this position worth taking? Enter a
 ticker, deep dive, go or pass.
 
 ```
-Enter a ticker  →  Six views  →  Checklist on /analytics
+Enter a ticker  →  Seven views  →  Checklist on /analytics
 ```
 
-**Workflow:** enter a symbol → work through the six views → pre-trade
-checklist on `/analytics`.
+**Workflow:** enter a symbol → work through the views → pre-trade checklist on
+`/analytics`. Your ticker follows you across every view for the length of the
+browser session, and the homepage clears it.
 
 ---
 
@@ -59,17 +60,22 @@ Everything maps to one of three layers:
 
 ## Views
 
-Enter a ticker and navigate six connected views. The sub-navbar carries your
-symbol across every page.
+Enter a ticker and navigate seven connected views, grouped into four
+navigation pillars — Markets, Options, Analytics, Strategies. The sub-navbar
+carries your symbol across every page.
 
-| View | Route | Purpose |
-| --- | --- | --- |
-| **Price Table** | `/stock` | Multi-period change, candlestick chart, fundamentals glance |
-| **Risk Analytics** | `/analytics` | Volatility, VaR, GEX, Monte Carlo, **pre-trade checklist**, Buyer Signals |
-| **Market Positioning** | `/positioning` | Valuation, analyst ratings, insider activity, 13F holders |
-| **Live & Options** | `/live` | Trades feed, option chain + Greeks, IV rank, strategy posture |
-| **Strategies** | `/strategies` | Cross-sectional relative-strength rank, screener, single-ticker backtest |
-| **AI Report** | `/ai-summary` | LLM desk note synthesising metrics (optional; needs AI key) |
+| View | Pillar | Route | Purpose |
+| --- | --- | --- | --- |
+| **Price Table** | Markets | `/stock` | Multi-period change, candlestick chart, fundamentals glance |
+| **Live Microstructure** | Markets | `/live` | L2 depth, trades feed, options chain + Greeks, payoff simulator |
+| **Options Terminal** | Options | `/options` | Dollar GEX by strike, IV term structure, 3D vol surface, Greek matrix |
+| **Risk Analytics** | Analytics | `/analytics` | Volatility, VaR, GEX, Monte Carlo, **pre-trade checklist**, Buyer Signals, institutional suite |
+| **Market Positioning** | Analytics | `/positioning` | Valuation, analyst ratings, insider activity, 13F holders |
+| **Strategy Backtests** | Strategies | `/strategies` | Three selectable strategies, leaderboard, screener, single-ticker backtest |
+| **AI Report** | Strategies | `/ai-summary` | LLM desk note synthesising metrics (optional; needs AI key) |
+
+The Options pillar also links **Options Chain** straight to `/live?tab=greeks`
+— the chain is a tab of the Live view, not a route of its own.
 
 Also: [`/glossary`](https://ticker-change.fly.dev/glossary) (metric reference),
 [`/settings`](https://ticker-change.fly.dev/settings) (API keys),
@@ -106,23 +112,50 @@ SEC EDGAR panels work with **no API keys**.
 - Monte Carlo forward paths (3m / 6m / 1y)
 - **Buyer Signals** — transparent multi-factor tally (`signals.py`), not a black box
 - ML Buy/Hold/Sell signal (optional; train with `ml.py`)
+- **Institutional Quantitative Analytics** — microstructure (VPIN toxicity,
+  Corwin-Schultz spread, Amihud illiquidity, squeeze-risk gauge), macro regime
+  and asymmetric bull/bear betas, higher-order Greeks (Vanna, Charm, Vomma),
+  variance risk premium, and SEC Form 8-K material events
 
-**`/live`**
+**`/live`** — three tabs: L2 microstructure, option Greeks, options AI analyst
 - Streaming trades (Finnhub WebSocket when keyed; simulated fallback)
-- Full option chain with Greeks, IV smile, GEX charts, payoff simulator
+- Simulated Level 2 order book with depth chart and liquidity analytics
+- **Options chain**: bid/ask, volume, open interest, IV and full Greeks per
+  strike, calls and puts mirrored around a centred strike column. Pick 20/40/60
+  strikes nearest spot or the whole chain; the header stays pinned while you
+  scroll. Deep-linkable at `/live?tab=greeks`
 - IV rank / percentile, expected move, max pain, put-call ratios
+- Payoff simulator — click any contract to load it
 - Strategy posture suggestions based on IV vs HV
 
-**`/strategies`**
-- Universe relative-strength leaderboard (12-1 month rank) with rotation backtest vs SPY/QQQ
-- Cross-sectional screener with minimum momentum filters
-- Single-ticker trend backtest with alpha/beta vs SPY
+**`/options`** — server-rendered options terminal
+- Strike-by-strike dollar gamma exposure ($M per 1% move)
+- ATM implied-volatility term structure and 3D volatility surface mesh
+- Multi-window realised volatility vs current ATM IV
+- Strike Greek matrix with Vanna and Charm columns
+
+**`/strategies`** — three selectable strategies over one shared engine
+  (`momentum_engine.py`)
+
+| Strategy | Signal |
+| --- | --- |
+| 12-1 Relative Strength | Cross-sectional rank, top-5 monthly rotation |
+| Dual Momentum | Relative rank plus an absolute cash hurdle; failing names sit in cash |
+| SMA Trend Following | 50/200 golden cross, ranked by `(SMA50 - SMA200) / SMA200` |
+
+- Universe leaderboard with rotation backtest vs SPY/QQQ, turnover-scaled costs
+- Cross-sectional screener with momentum and cash-hurdle filters
+- Single-ticker backtest with alpha/beta vs SPY, CSV export on both tables
 
 **`/ai-summary`**
 - LLM analyst note grounded in computed metrics (multi-provider fallback)
 - Raw data tables rendered alongside for verification
 
 Every metric has an `(i)` tooltip linking to [`/glossary`](/glossary).
+
+**Three display modes** — light, dark, and an Excel mode that re-renders cards
+as spreadsheet-style grids with accounting-style negatives. Stored in
+`localStorage` and mirrored to a cookie so the server can branch structurally.
 
 ### Decide — go/no-go support
 
@@ -169,7 +202,10 @@ pip install -r requirements.txt -r requirements-test.txt
 pytest tests/ -v
 ```
 
-Runs on every push and pull request via `.github/workflows/tests.yml`.
+122 tests, run on every push and pull request via
+`.github/workflows/tests.yml`. A few of them shell out to `node` to parse and
+execute the inline navigation JavaScript in `templates/base.html`; those skip
+cleanly if node is absent.
 
 ---
 
@@ -215,9 +251,15 @@ JSON twins of every view, plus health and config:
 | `GET /api/stock/<ticker>` | Price, period changes, chart metadata |
 | `GET /api/analytics/<ticker>` | Risk stats and metrics |
 | `GET /api/positioning/<ticker>` | Valuation, insider, institutional data |
-| `GET /api/options-greeks/<ticker>` | Option chain + Greeks |
+| `GET /api/options-greeks/<ticker>` | Option chain + Greeks (`?expiration=`, `?strikes=N\|all`) |
 | `GET /api/options-analysis/<ticker>` | IV rank, expected move, GEX, strategy posture |
+| `GET /api/options-terminal/<ticker>` | Dollar GEX, term structure, vol surface, Greek matrix |
+| `GET /api/options-ai-report/<ticker>` | LLM options note (needs an AI key) |
+| `GET /api/institutional/<ticker>` | Microstructure, macro regime, signals backtest, 8-K events |
+| `GET /api/corporate-actions/<ticker>` | Point-in-time identity and split/dividend history |
+| `GET /api/raw-sec-filings/<ticker>` | Unfiltered SEC EDGAR submissions |
 | `GET /api/chart-data/<ticker>` | OHLCV history |
+| `GET /api/active-tickers` | Symbols currently cached (used by the cache warmer) |
 | `GET /health` | `{"status": "ok"}` |
 
 Full schema: [`/api/docs`](/api/docs)
@@ -235,7 +277,10 @@ Full schema: [`/api/docs`](/api/docs)
 ```
 
 - **Caching:** 1h price freshness, 24h provider cache, 45s in-process memo
-- **Option chains:** S3 first (4h TTL, survives redeploys), then SQLite, then live fetch
+- **Option chains:** S3 first (4h TTL, survives redeploys) when
+  `S3_CACHE_BUCKET` is set, then SQLite, then a live fetch, then stale reads of
+  either store. With no bucket configured the S3 layer no-ops and SQLite on the
+  mounted volume carries the cache on its own
 - **Resilience:** stale-while-error — serves cached data when refresh fails
 - **ML:** triple-barrier labels, walk-forward validation, LightGBM/sklearn
 
@@ -259,15 +304,32 @@ Fly.io mounts a persistent volume at `/data` for `stocks.db`. Also ships with
 ## Project structure
 
 ```
-decide.py       Pre-trade checklist
-app.py          Routes, analytics, charts, options pricing, momentum backtest
-providers.py    Finnhub / FMP / SEC / AI clients (fail gracefully)
-db.py           SQLite: prices, api_cache, settings
-signals.py      Buyer Signals factor tally
-ml.py           Offline ML training and inference
-ai.py           LLM analyst reports
-glossary.py     Metric definitions (tooltips + /glossary)
-templates/      Jinja2 + Tailwind CDN + Plotly
+app.py               Routes, charts, GEX/options pricing, page data assembly
+db.py                SQLite: daily_prices, api_cache, app_settings, locks
+providers.py         Finnhub / FMP / SEC EDGAR / AI clients (fail gracefully)
+
+decide.py            Pre-trade checklist
+signals.py           Buyer Signals factor tally
+momentum_engine.py   Shared scoring + backtests for all three strategies
+backtest_engine.py   Signals walk-forward simulation
+event_study.py       Event-study / CAR engine
+
+microstructure.py    VPIN, Corwin-Schultz, Amihud, squeeze risk
+macro_engine.py      Macro regime, dual betas, capture ratios
+derivatives_alpha.py Higher-order Greeks, variance risk premium
+sec_8k.py            SEC 8-K material-event parsing and classification
+corporate_actions.py Splits, dividends, point-in-time ticker identity
+
+options/             Options terminal engine (gex, greeks, vol, cones, storage)
+s3_cache.py          Optional S3 option-chain cache
+warm_s3_cache.py     Cache warmer run by the hourly GitHub Action
+
+ml.py                Offline ML training and inference
+ai.py                LLM analyst reports
+glossary.py          Metric definitions (tooltips + /glossary)
+api_docs.py          OpenAPI spec behind /api/docs
+warehouse.py         DuckDB warehouse experiment (not wired into the app)
+templates/           Jinja2 + Tailwind CDN + Plotly
 ```
 
 ---
@@ -289,9 +351,9 @@ delayed data.
 
 | Doc | Contents |
 | --- | --- |
-| [`docs/PRODUCT_IDENTITY.md`](docs/PRODUCT_IDENTITY.md) | Category, positioning, principles, vocabulary |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | DuckDB / dbt analytics pipeline (separate track) |
 | [`CLAUDE.md`](CLAUDE.md) | Architecture guide for contributors |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Engineering roadmap and sprint plan |
+| [`docs/ORCHESTRATION.md`](docs/ORCHESTRATION.md) | Planned DuckDB / dbt ELT pipeline — design notes, not built |
 
 ---
 
