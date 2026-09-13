@@ -75,6 +75,8 @@ const report = () => console.log(JSON.stringify({
   session: sessionStorage.store,
   brandHref: els['brand-link'] ? els['brand-link'].href : null,
   analyticsHref: els['nav-analytics'] ? els['nav-analytics'].href : null,
+  subLinkChainClass: els['sub-link-chain'] ? els['sub-link-chain'].className : null,
+  subLinkOptionsClass: els['sub-link-options'] ? els['sub-link-options'].className : null,
 }));
 """
 
@@ -129,9 +131,21 @@ class TestBaseInlineScripts(unittest.TestCase):
         self.assertEqual(0, proc.returncode, proc.stderr.strip()[:600])
 
     def test_nav_runs_on_the_options_chain_deep_link(self):
-        """/live?tab=greeks is the one child route carrying its own query string."""
-        proc = self._run_nav("/live", "?ticker=MU&tab=greeks")
+        """/options?tab=chain is the one child route carrying its own query string."""
+        proc = self._run_nav("/options", "?ticker=MU&tab=chain")
         self.assertEqual(0, proc.returncode, proc.stderr.strip()[:600])
+
+    def test_options_chain_deep_link_highlights_the_chain_pill(self):
+        """?tab=chain must resolve to the chain sub-nav pill, not the bare terminal."""
+        st = self._state("/options", "?ticker=MU&tab=chain")
+        self.assertIn("bg-amber-500", st["subLinkChainClass"])
+        self.assertNotIn("bg-amber-500", st["subLinkOptionsClass"])
+
+    def test_bare_options_route_highlights_the_terminal_pill(self):
+        """Without ?tab=chain, the GEX/vol-surface terminal pill stays active."""
+        st = self._state("/options", "?ticker=MU")
+        self.assertIn("bg-amber-500", st["subLinkOptionsClass"])
+        self.assertNotIn("bg-amber-500", st["subLinkChainClass"])
 
     def test_pillar_links_carry_the_active_ticker(self):
         """The user-visible symptom: nav links losing ?ticker= when this breaks."""
@@ -161,9 +175,9 @@ class TestSessionScopedTickerBinding(unittest.TestCase):
         self.assertEqual([], st["redirects"])
 
     def test_rebinding_preserves_an_existing_query_string(self):
-        """The options-chain deep link must keep tab=greeks through the rebind."""
-        st = self._state("/live", "?tab=greeks", session={"active_ticker": "MU"})
-        self.assertEqual(["/live?tab=greeks&ticker=MU"], st["redirects"])
+        """The options-chain deep link must keep tab=chain through the rebind."""
+        st = self._state("/options", "?tab=chain", session={"active_ticker": "MU"})
+        self.assertEqual(["/options?tab=chain&ticker=MU"], st["redirects"])
 
     def test_utility_routes_never_rebind(self):
         st = self._state("/glossary", "", session={"active_ticker": "MU"})

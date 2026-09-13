@@ -280,7 +280,7 @@
             <div class="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 px-2 mb-1">Options</div>
             <div class="grid grid-cols-2 gap-1.5">
               <a id="mobile-nav-options" href="/options" class="mobile-nav-link">Options Terminal</a>
-              <a id="mobile-nav-chain" href="/live?tab=greeks" class="mobile-nav-link">Options Chain</a>
+              <a id="mobile-nav-chain" href="/options?tab=chain" class="mobile-nav-link">Options Chain</a>
             </div>
           </div>
           <div>
@@ -461,10 +461,10 @@
         }
 
         let routeInfo = ROUTE_MAP[path];
-        // /live backs two different pillars: bare it is Markets -> Live
-        // Microstructure, with ?tab=greeks it is the Options pillar's chain.
-        if (path === '/live'
-            && new URLSearchParams(window.location.search).get('tab') === 'greeks') {
+        // /options backs two sub-views: bare it is the GEX/vol-surface
+        // terminal, with ?tab=chain it is the Live Option Chain.
+        if (path === '/options'
+            && new URLSearchParams(window.location.search).get('tab') === 'chain') {
           routeInfo = { pillar: 'options', sub: 'chain' };
         }
         if (!routeInfo && path.startsWith('/api/docs')) {
@@ -552,7 +552,7 @@
           return;
         }
 
-        // The options-chain route already carries ?tab=greeks, so the ticker has
+        // The options-chain route already carries ?tab=chain, so the ticker has
         // to join with & rather than blindly appending a second '?'.
         const withTicker = (route, t) =>
           route + (route.includes('?') ? '&' : '?') + 'ticker=' + encodeURIComponent(t);
@@ -569,7 +569,7 @@
           stock:       '/stock',
           live:        '/live',
           options:     '/options',
-          chain:       '/live?tab=greeks',
+          chain:       '/options?tab=chain',
           analytics:   '/analytics',
           positioning: '/positioning',
           strategies:  '/strategies',
