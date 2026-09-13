@@ -217,10 +217,18 @@ class TestAnalyticalModules(unittest.TestCase):
             self.assertIn('Vanna', rendered_html)
             self.assertIn('SEC Form 8-K Material Events', rendered_html)
 
-            live_html = render_template('live.html', ticker='AAPL')
-            self.assertIn("switchGreeksChart('vanna')", live_html)
-            self.assertIn("switchGreeksChart('charm')", live_html)
-            self.assertIn("switchGreeksChart('vomma')", live_html)
+            # The Greeks Visualizer (incl. vanna/charm/vomma chart tabs) lives on
+            # /options' Live Option Chain tab, not /live -- it moved there along
+            # with the rest of the option chain UI.
+            import dataclasses
+            from options import compute_options_terminal
+            terminal_res = compute_options_terminal("AAPL", 185.50, None, None)
+            options_html = render_template(
+                'options.html', ticker='AAPL', data=dataclasses.asdict(terminal_res)
+            )
+            self.assertIn("switchGreeksChart('vanna')", options_html)
+            self.assertIn("switchGreeksChart('charm')", options_html)
+            self.assertIn("switchGreeksChart('vomma')", options_html)
 
 
 if __name__ == "__main__":
