@@ -425,5 +425,12 @@ GLOSSARY: dict[str, dict] = {
         "short": "Material unscheduled corporate events filed with the SEC EDGAR system.",
         "long": "Material corporate disclosures including Item 1.01 (Material Contracts), 2.01 (M&A), 4.02 (Restatements), 5.02 (Executive/Director Departures), and 7.01/8.01 (Regulation FD & Other Events).",
     },
+    "car": {
+        "term": "Cumulative Abnormal Return (CAR)",
+        "section": "Institutional Analytics",
+        "short": "How far a stock moved around an event beyond what its normal relationship with SPY would predict.",
+        "long": "Event-study methodology (Market Model / CAPM). A stock's 'normal' expected return is estimated from its alpha/beta to SPY over a pre-event estimation window (trading days -120 to -21 before the filing). CAR sums the daily gap between actual and expected return over the event window (-10 to +30 trading days around the filing date) — a large CAR with a t-stat outside roughly ±2 (p<0.05) suggests the market reacted to genuinely new information rather than noise. Needs about 140 trading days of price history before the event and 30 trading days after it to compute; filings newer than that show as pending until enough time has passed.",
+        "formula": "CAR = Σ (R_it − (α + β·R_mt)) over the event window",
+    },
 }
 
