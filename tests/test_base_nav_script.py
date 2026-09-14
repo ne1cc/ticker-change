@@ -189,6 +189,16 @@ class TestSessionScopedTickerBinding(unittest.TestCase):
         self.assertNotIn("active_ticker", st["session"])
         self.assertEqual([], st["redirects"])
 
+    def test_bare_options_route_defaults_to_spy_chain_when_no_session(self):
+        """A visitor with no session on /options defaults to the SPY option chain."""
+        st = self._state("/options", "")
+        self.assertEqual(["/options?tab=chain&ticker=SPY"], st["redirects"])
+
+    def test_options_chain_route_defaults_to_spy_when_no_session(self):
+        """Deep link /options?tab=chain without a session ticker rebinds to SPY."""
+        st = self._state("/options", "?tab=chain")
+        self.assertEqual(["/options?tab=chain&ticker=SPY"], st["redirects"])
+
     def test_brand_link_is_not_given_a_ticker(self):
         """The logo must keep its '/' template href, or the reset is unreachable.
 
