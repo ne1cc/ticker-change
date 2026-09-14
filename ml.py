@@ -19,7 +19,17 @@ Design (see README → "ML signal"):
 This is a directional, educational signal on delayed end-of-day data — not advice.
 
 Train offline:   python ml.py train AAPL MSFT NVDA SPY ...
+                  python ml.py train --sp500
 Predict (used by the app):   ml.predict("AAPL")
+
+`train` only reads price history already cached in SQLite (db.get_prices) --
+it never fetches from yfinance itself. `--sp500` expands to the live S&P 500
+constituent list (see sp500.py), but most of those tickers have never been
+looked up on the dashboard and so have no cached history yet. Backfill it
+first:
+
+    python ml.py backfill --sp500
+    python ml.py train --sp500
 """
 from __future__ import annotations
 
@@ -495,9 +505,24 @@ def predict(ticker: str) -> dict | None:
     return result
 
 
+def _resolve_tickers(args: list[str]) -> list[str]:
+    """--sp500 expands to the live S&P 500 constituent list; otherwise the
+    tickers given on the command line are used verbatim."""
+    if args == ["--sp500"]:
+        from sp500 import fetch_sp500_tickers
+        tickers = fetch_sp500_tickers()
+        print(f"Resolved --sp500 to {len(tickers)} tickers.")
+        return tickers
+    return [t.upper() for t in args]
+
+
 if __name__ == "__main__":
-    if len(sys.argv) >= 3 and sys.argv[1] == "train":
-        train([t.upper() for t in sys.argv[2:]])
+    if len(sys.argv) >= 3 and sys.argv[1] == "backfill":
+        from sp500 import backfill
+        backfill(_resolve_tickers(sys.argv[2:]))
+    elif len(sys.argv) >= 3 and sys.argv[1] == "train":
+        train(_resolve_tickers(sys.argv[2:]))
     else:
         print(__doc__)
-        print("\nUsage: python ml.py train TICKER [TICKER ...]")
+        print("\nUsage: python ml.py backfill TICKER [TICKER ...] | --sp500")
+        print("       python ml.py train TICKER [TICKER ...] | --sp500")

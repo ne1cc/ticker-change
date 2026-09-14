@@ -29,6 +29,11 @@ gunicorn app:app --bind 0.0.0.0:5001 --workers 2
 # Train the ML signal model (optional; without it the ML section is omitted)
 python ml.py train AAPL MSFT NVDA SPY ...
 
+# Train on the whole S&P 500 -- backfill first, since train only reads
+# price history already cached in SQLite, never fetching from yfinance itself
+python ml.py backfill --sp500
+python ml.py train --sp500
+
 # Warm the S3 option-chain cache manually (same script the hourly GH Action runs)
 python warm_s3_cache.py
 ```
@@ -67,8 +72,12 @@ Supporting modules:
   weighted, 0–100). Pure function of already-computed analytics, no LLM.
 - `ml.py` — gradient-boosted (LightGBM, falls back to sklearn) Buy/Hold/Sell
   model trained offline via `python ml.py train ...` on triple-barrier labels;
-  serialized to `model.pkl` (gitignored). Predictions older than 30 days are
-  suppressed.
+  serialized to `model.pkl` (gitignored).
+- `sp500.py` — fetches the live S&P 500 constituent list and backfills price
+  history for tickers the dashboard has never been pointed at. `ml.py train`
+  only reads from SQLite, so `python ml.py train --sp500` needs
+  `python ml.py backfill --sp500` run first. Kept independent of `app.py`
+  (importing `app.py` triggers its background cache-warmer threads).
 - `ai.py` — LLM analyst report generation (standard/comprehensive/options
   variants), multi-provider fallback chain, results cached in `api_cache`.
 - `glossary.py` — single source of truth for every metric's tooltip text and
