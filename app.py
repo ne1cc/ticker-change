@@ -2107,15 +2107,30 @@ def analytics_page():
     # Machine-learning Buy/Hold/Sell signal (None until a model is trained)
     data['ml'] = ml.predict(ticker)
 
-    # Attach Institutional Analytics Suite (Microstructure, Macro Conditioning, Higher-Order Greeks, 8-K)
+    # Attach Institutional Analytics Suite (Microstructure, Macro Conditioning, Higher-Order Greeks, 8-K + Event Study)
     try:
         spy_df = get_or_fetch_prices("SPY", period="2y")
         stock_inst_df = price_df if price_df is not None else get_or_fetch_prices(ticker, period="2y")
         if stock_inst_df is not None and not stock_inst_df.empty:
+            benchmark_df = spy_df if spy_df is not None else stock_inst_df
             micro_res = microstructure.get_microstructure_analytics(stock_inst_df)
-            macro_res = macro_engine.get_macro_financial_report(stock_inst_df, spy_df if spy_df is not None else stock_inst_df)
+            macro_res = macro_engine.get_macro_financial_report(stock_inst_df, benchmark_df)
             events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
-            
+
+            # Cumulative Abnormal Return (Market Model) around each 8-K filing date.
+            # None is expected (not an error) when the filing is too recent to have
+            # a full post-event window, or too close to the start of price history
+            # to have a full pre-event estimation window.
+            sec_8k_events_with_car = []
+            for event in events_8k:
+                car_result = event_study.run_event_study(
+                    stock_inst_df, benchmark_df, event.filing_date,
+                    event_type="SEC_8K", ticker=ticker,
+                )
+                event_dict = event.__dict__.copy()
+                event_dict['car_result'] = car_result.__dict__ if car_result else None
+                sec_8k_events_with_car.append(event_dict)
+
             # Higher-order Greeks & VRP
             atm_iv = (data['gex']['spot'] * 0.01) if (data.get('gex') and data['gex'].get('spot')) else 0.25
             spot_p = data.get('current_price', 100.0)
@@ -2147,7 +2162,7 @@ def analytics_page():
                 },
                 'higher_order_greeks': hog.__dict__,
                 'vrp': vrp_res,
-                'sec_8k_events': [e.__dict__ for e in events_8k],
+                'sec_8k_events': sec_8k_events_with_car,
             }
     except Exception as e:
         print(f"Error computing institutional analytics for {ticker}: {e}")
