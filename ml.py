@@ -32,7 +32,7 @@ import pandas as pd
 
 import db
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.pkl")
+MODEL_PATH = os.environ.get("MODEL_PATH", os.path.join(os.path.dirname(__file__), "model.pkl"))
 
 HORIZON = 10        # trading days to the time barrier (multi-day "swing" target)
 PT_MULT = 1.5       # profit-take barrier = PT_MULT × daily vol

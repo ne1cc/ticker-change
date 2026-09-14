@@ -132,7 +132,12 @@ Fly.io is the live target (`fly.toml`): a `stocks_data` volume mounted at
 `/data`, single machine (`fly deploy --ha=false`) because SQLite can't handle
 multi-writer. `fly.toml` sets `DB_PATH=/data/stocks.db`; `db.py` reads
 `DB_PATH` from the environment (falling back to `stocks.db` for local dev),
-so the volume mount is what makes `stocks.db` survive redeploys.
+so the volume mount is what makes `stocks.db` survive redeploys. `model.pkl`
+follows the same pattern (`MODEL_PATH=/data/model.pkl` in `fly.toml`, read by
+`ml.py`) -- it's excluded from the Docker build context (`.dockerignore`), so
+without this the ML Signal section would have no model on a fresh deploy;
+train it once in place with `fly ssh console -C "python ml.py train ..."` and
+it persists across redeploys same as the database.
 `Dockerfile`/`Procfile`/`render.yaml` also exist for Render as an alternative
 target. API keys are optional everywhere and can be set via environment,
 `.env`, or the `/settings` page (settings-page values override env vars); see

@@ -23,6 +23,7 @@ primary_region = 'sjc'
 
 [env]
   DB_PATH = '/data/stocks.db'
+  MODEL_PATH = '/data/model.pkl'
   PORT = '8000'
 
 [[mounts]]
