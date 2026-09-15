@@ -52,6 +52,17 @@ def init_db():
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS gex_snapshots (
+                ticker      TEXT NOT NULL,
+                date        TEXT NOT NULL,
+                gamma_flip  REAL,
+                call_wall   REAL,
+                put_wall    REAL,
+                spot        REAL,
+                created_at  TEXT NOT NULL,
+                PRIMARY KEY (ticker, date)
+            );
         """)
 
 
@@ -241,4 +252,24 @@ def store_prices(symbol: str, df: pd.DataFrame):
         conn.execute(
             "INSERT OR REPLACE INTO tickers (symbol, last_fetched) VALUES (?, ?)",
             (symbol, datetime.utcnow().isoformat()),
+        )
+
+
+def insert_gex_snapshot(
+    ticker: str,
+    date: str,
+    gamma_flip: float | None,
+    call_wall: float | None,
+    put_wall: float | None,
+    spot: float | None,
+):
+    """Insert-or-ignore one daily GEX snapshot row. Idempotent by design --
+    called multiple times a day by app.py's options-cache warmer."""
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO gex_snapshots "
+            "(ticker, date, gamma_flip, call_wall, put_wall, spot, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ticker.upper(), date, gamma_flip, call_wall, put_wall, spot,
+             datetime.utcnow().isoformat()),
         )
