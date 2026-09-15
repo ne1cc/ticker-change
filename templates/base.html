@@ -226,7 +226,7 @@
             </a>
             <div class="hidden md:flex items-center gap-5 lg:gap-6">
               <a id="nav-markets" href="/stock" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Markets</a>
-              <a id="nav-options" href="/options" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Options</a>
+              <a id="nav-options" href="/options?tab=chain" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Options</a>
               <a id="nav-analytics" href="/analytics" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Analytics</a>
               <a id="nav-strategies" href="/strategies" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Strategies</a>
             </div>
@@ -436,7 +436,7 @@
       (function () {
         const PILLARS = {
           markets:    { id: 'nav-markets', defaultRoute: '/stock', children: ['stock', 'live'] },
-          options:    { id: 'nav-options', defaultRoute: '/options', children: ['options', 'chain'] },
+          options:    { id: 'nav-options', defaultRoute: '/options?tab=chain', children: ['options', 'chain'] },
           analytics:  { id: 'nav-analytics', defaultRoute: '/analytics', children: ['analytics', 'positioning'] },
           strategies: { id: 'nav-strategies', defaultRoute: '/strategies', children: ['strategies', 'ai-summary'] }
         };
@@ -540,10 +540,15 @@
           // server-side from ?ticker=, so this has to be a redirect rather than a
           // DOM update. It cannot loop -- the destination always carries the param.
           const remembered = readTicker();
-          if (remembered) {
-            const sep = window.location.search ? '&' : '?';
+          const effectiveTicker = remembered || (ROUTE_MAP[path].pillar === 'options' ? 'SPY' : null);
+          if (effectiveTicker) {
+            let targetSearch = window.location.search;
+            if (path === '/options' && !params.has('tab')) {
+              targetSearch = '?tab=chain';
+            }
+            const sep = targetSearch ? (targetSearch.includes('?') ? '&' : '?') : '?';
             window.location.replace(
-              path + window.location.search + sep + 'ticker=' + encodeURIComponent(remembered)
+              path + targetSearch + sep + 'ticker=' + encodeURIComponent(effectiveTicker)
             );
           }
           return;
