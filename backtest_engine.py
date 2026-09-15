@@ -36,6 +36,15 @@ class BacktestSummary:
     fold_returns: List[float] = field(default_factory=list)
 
 
+@dataclass
+class PermutationResult:
+    real_sharpe: float
+    null_mean: float
+    null_std: float
+    p_value: float
+    n_permutations: int
+
+
 def _historical_composite_signal(df: pd.DataFrame) -> Tuple[pd.Series, List[str]]:
     """Per-bar 0-100 composite score, restricted to the factors that are
     honestly and cheaply computable from OHLCV history alone: trend,
@@ -397,3 +406,65 @@ def run_walkforward_backtest(
     summary.fold_returns = fold_return_pcts
     summary.factors_used = sorted(fold_factors_used)
     return summary, combined
+
+
+def _block_shuffle(df: pd.DataFrame, block_size: int, rng: np.random.Generator) -> pd.DataFrame:
+    """Reorder df's rows in contiguous blocks of block_size (the last block
+    may be shorter). Keeps each block's OHLC relationships internally
+    consistent -- only block ORDER is randomized, never individual rows or
+    columns independently. Returns a new frame reindexed with df's original
+    index truncated to the shuffled length (index values are unused by
+    run_signals_backtest beyond length/ordering)."""
+    n = len(df)
+    n_blocks = max(n // block_size, 1)
+    block_order = rng.permutation(n_blocks)
+    rows = []
+    for b in block_order:
+        start = b * block_size
+        end = min(start + block_size, n)
+        rows.append(df.iloc[start:end])
+    shuffled = pd.concat(rows).reset_index(drop=True)
+    shuffled.index = df.index[: len(shuffled)]
+    return shuffled
+
+
+def run_permutation_test(
+    prices_df: pd.DataFrame,
+    n_permutations: int = 300,
+    block_size: int = 20,
+    entry_threshold: float = 65.0,
+    exit_threshold: float = 45.0,
+    slippage_bps: float = 5.0,
+    commission_bps: float = 1.0,
+    seed: int = 42,
+) -> PermutationResult:
+    """Block-bootstrap null test: is the strategy's Sharpe distinguishable
+    from running the identical rule on a randomly reordered version of the
+    same bars? Calls run_signals_backtest as a black box -- once on the real
+    data, n_permutations times on block-shuffled copies -- so this needs no
+    coordination with whatever signal-generation logic is canonical at
+    merge time (see Global Constraints)."""
+    real_summary, _ = run_signals_backtest(
+        prices_df, entry_threshold, exit_threshold, slippage_bps, commission_bps
+    )
+    real_sharpe = real_summary.annualized_sharpe
+
+    rng = np.random.default_rng(seed)
+    null_sharpes: List[float] = []
+    for _ in range(n_permutations):
+        shuffled = _block_shuffle(prices_df, block_size, rng)
+        summary, _ = run_signals_backtest(
+            shuffled, entry_threshold, exit_threshold, slippage_bps, commission_bps
+        )
+        null_sharpes.append(summary.annualized_sharpe)
+
+    null_arr = np.array(null_sharpes)
+    p_value = float((null_arr >= real_sharpe).mean())
+
+    return PermutationResult(
+        real_sharpe=real_sharpe,
+        null_mean=round(float(null_arr.mean()), 3),
+        null_std=round(float(null_arr.std()), 3),
+        p_value=round(p_value, 4),
+        n_permutations=n_permutations,
+    )
