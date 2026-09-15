@@ -34,6 +34,8 @@ class BacktestSummary:
     oos_sharpe_mean: float = 0.0
     oos_sharpe_std: float = 0.0
     fold_returns: List[float] = field(default_factory=list)
+    deflated_sharpe: float = 0.0
+    n_trials_assumed: int = 1
 
 
 @dataclass
@@ -43,6 +45,51 @@ class PermutationResult:
     null_std: float
     p_value: float
     n_permutations: int
+
+
+def _norm_cdf(x: float) -> float:
+    """Standard normal CDF via math.erf -- matches this repo's existing
+    in-house Black-Scholes convention (app.py:2315, derivatives_alpha.py:25);
+    no scipy dependency."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def deflated_sharpe_ratio(returns: pd.Series, n_trials: int = 1) -> float:
+    """Bailey & Lopez de Prado's closed-form Deflated Sharpe Ratio, reduced
+    to n_trials=1 (the only case implemented here -- see Global Constraints).
+
+    At n_trials=1 this is the Probabilistic Sharpe Ratio: the probability
+    that the TRUE (population) Sharpe ratio exceeds zero, given the sample
+    Sharpe, sample length, skew, and kurtosis of `returns`. Returns a
+    probability in [0, 1], NOT a Sharpe-ratio-scaled value.
+
+    `returns` must be per-period (e.g. daily) returns, not annualized.
+    """
+    if n_trials != 1:
+        raise NotImplementedError(
+            "n_trials > 1 needs the trial-adjusted expected-max-Sharpe term "
+            "(Bailey & Lopez de Prado eq. 8), which requires an inverse "
+            "normal CDF this app doesn't currently implement. This app also "
+            "doesn't grid-search entry/exit thresholds today (see spec "
+            "'Explicitly out of scope'), so there is no honest n_trials>1 "
+            "value to compute yet. Pass n_trials=1."
+        )
+    r = returns.dropna().to_numpy()
+    n = len(r)
+    if n < 2:
+        return 0.0
+    std = r.std(ddof=1)  # sample std, matching this file's other Sharpe calcs (pandas .std() default) -- numpy's default ddof=0 understates it
+    if std <= 0:
+        return 0.0
+    sr = r.mean() / std
+    skew = float(pd.Series(r).skew())
+    kurt = float(pd.Series(r).kurtosis()) + 3.0  # pandas kurtosis() is excess; DSR wants raw (Pearson) kurtosis
+
+    sr_std = math.sqrt(max((1 - skew * sr + (kurt - 1) / 4.0 * sr ** 2) / (n - 1), 0.0))
+    if sr_std <= 0:
+        return 0.0
+    z = sr / sr_std
+    return round(_norm_cdf(z), 4)
 
 
 def _historical_composite_signal(df: pd.DataFrame) -> Tuple[pd.Series, List[str]]:
@@ -134,6 +181,8 @@ def run_signals_backtest(
             profit_factor=0.0,
             total_trades=0,
             factors_used=[],
+            deflated_sharpe=0.0,
+            n_trials_assumed=1,
         )
         return empty_res, pd.DataFrame()
 
@@ -214,6 +263,8 @@ def run_signals_backtest(
     gross_losses = abs(sum(loss_trades))
     profit_factor = (gross_profits / gross_losses) if gross_losses > 0 else 2.5
 
+    deflated_sharpe = deflated_sharpe_ratio(df["strat_ret"], n_trials=1)
+
     summary = BacktestSummary(
         total_return_pct=round(total_strat_ret, 2),
         cagr_pct=round(cagr, 2),
@@ -227,6 +278,8 @@ def run_signals_backtest(
         profit_factor=round(profit_factor, 2),
         total_trades=len(trades),
         factors_used=factors_used,
+        deflated_sharpe=deflated_sharpe,
+        n_trials_assumed=1,
     )
 
     return summary, df
