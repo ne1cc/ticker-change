@@ -73,6 +73,19 @@ class TestNavigation(unittest.TestCase):
                 f"Pillar nav-strategies not found in response for {path}",
             )
 
+    def test_top_nav_search_bar_present_to_the_left_of_glossary(self):
+        """Verify that a visible searchbar is present in top right navigation to the left of glossary."""
+        resp = self.client.get("/glossary")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+
+        self.assertIn('id="top-nav-search-form"', html)
+        self.assertIn('id="top-nav-search-input"', html)
+
+        pos_search = html.find('id="top-nav-search-form"')
+        pos_glossary = html.find('id="nav-glossary"')
+        self.assertTrue(pos_search < pos_glossary, "Top nav searchbar should be to the left of glossary")
+
     def test_desktop_navigation_links_present(self):
         """Verify that desktop navigation contains all 4 pillar links, utilities, and theme toggle, with no legacy IDs."""
         resp = self.client.get("/glossary")

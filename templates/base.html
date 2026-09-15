@@ -232,6 +232,22 @@
             </div>
           </div>
           <div class="flex items-center gap-2">
+            <!-- Visible Ticker Search in Top Navbar -->
+            <form id="top-nav-search-form" class="flex items-center m-0" onsubmit="handleTopNavSearch(event)">
+              <div class="relative flex items-center">
+                <input 
+                  id="top-nav-search-input"
+                  type="text" 
+                  placeholder="Search ticker..." 
+                  autocomplete="off"
+                  spellcheck="false"
+                  class="w-28 sm:w-36 px-2.5 py-1 pl-7 text-xs bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono font-bold uppercase tracking-wider text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 transition-colors"
+                />
+                <svg class="w-3.5 h-3.5 text-zinc-400 absolute left-2 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+            </form>
             <a id="nav-glossary" href="/glossary" class="hidden md:inline text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium mr-1 border-b-2 border-transparent pb-0.5">Glossary</a>
             <a id="nav-apidocs" href="/api/docs" class="hidden md:inline text-sm text-amber-500 dark:text-amber-400 hover:text-amber-600 dark:hover:text-amber-300 font-semibold transition-colors mr-2 border-b-2 border-transparent pb-0.5">API Docs</a>
             <a id="nav-settings" href="/settings" class="p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors duration-200" title="API key settings" aria-label="Settings">
@@ -624,10 +640,7 @@
         }
       })();
 
-      function handleSubNavSearch(e) {
-        e.preventDefault();
-        const input = document.getElementById('sub-nav-search-input');
-        const val = input ? input.value.trim().toUpperCase() : '';
+      function executeTickerSearch(val) {
         if (!val) return;
         try {
           sessionStorage.setItem('active_ticker', val);
@@ -648,10 +661,24 @@
         let dest = target + '?ticker=' + encodeURIComponent(val);
         // Keep the options-chain deep link intact when switching tickers from it.
         const tab = new URLSearchParams(window.location.search).get('tab');
-        if (target === '/live' && tab) {
+        if ((target === '/live' || target === '/options') && tab) {
           dest += '&tab=' + encodeURIComponent(tab);
         }
         window.location.href = dest;
+      }
+
+      function handleSubNavSearch(e) {
+        e.preventDefault();
+        const input = document.getElementById('sub-nav-search-input');
+        const val = input ? input.value.trim().toUpperCase() : '';
+        executeTickerSearch(val);
+      }
+
+      function handleTopNavSearch(e) {
+        e.preventDefault();
+        const input = document.getElementById('top-nav-search-input');
+        const val = input ? input.value.trim().toUpperCase() : '';
+        executeTickerSearch(val);
       }
     </script>
     {% block scripts %}{% endblock %}
