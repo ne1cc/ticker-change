@@ -165,6 +165,7 @@ def run_signals_backtest(
             strat_returns.append(0.0)
 
     df["strat_ret"] = strat_returns
+    df["position"] = positions
     df["cum_strat"] = (1.0 + df["strat_ret"]).cumprod()
     df["cum_bench"] = (1.0 + df["ret"]).cumprod()
 

@@ -105,5 +105,15 @@ class TestHistoricalCompositeSignal(unittest.TestCase):
         self.assertFalse(df.empty)
 
 
+class TestPositionColumn(unittest.TestCase):
+
+    def test_position_column_present_and_binary(self):
+        df = _make_ohlcv()
+        summary, df = run_signals_backtest(df)
+        self.assertIn("position", df.columns)
+        self.assertTrue(set(df["position"].unique()).issubset({0, 1}))
+        self.assertEqual(len(df["position"]), len(df))
+
+
 if __name__ == "__main__":
     unittest.main()
