@@ -30,6 +30,10 @@ class BacktestSummary:
     profit_factor: float
     total_trades: int
     factors_used: List[str] = field(default_factory=list)
+    n_folds: int = 0
+    oos_sharpe_mean: float = 0.0
+    oos_sharpe_std: float = 0.0
+    fold_returns: List[float] = field(default_factory=list)
 
 
 def _historical_composite_signal(df: pd.DataFrame) -> Tuple[pd.Series, List[str]]:
@@ -217,3 +221,141 @@ def run_signals_backtest(
     )
 
     return summary, df
+
+
+def run_walkforward_backtest(
+    prices_df: pd.DataFrame,
+    train_days: int = 252,
+    test_days: int = 63,
+    step_days: int = 63,
+    entry_threshold: float = 65.0,
+    exit_threshold: float = 45.0,
+    slippage_bps: float = 5.0,
+    commission_bps: float = 1.0,
+) -> Tuple[BacktestSummary, pd.DataFrame]:
+    """Rolling walk-forward OOS evaluation. entry_threshold/exit_threshold
+    are FIXED constants, not fit per fold -- this app doesn't grid-search
+    thresholds today (see spec). train_days is warm-up burn-in only: each
+    fold runs run_signals_backtest on a (train_days + test_days) window and
+    keeps only the last test_days rows for scoring, so indicators and
+    position state are realistic entering the OOS period without any
+    parameter being fit on it.
+
+    Falls back to a single run_signals_backtest call on the whole series if
+    there isn't enough history for even one fold.
+    """
+    if len(prices_df) < train_days + test_days:
+        summary, df = run_signals_backtest(
+            prices_df, entry_threshold, exit_threshold, slippage_bps, commission_bps
+        )
+        summary.n_folds = 0
+        summary.oos_sharpe_mean = summary.annualized_sharpe
+        summary.oos_sharpe_std = 0.0
+        summary.fold_returns = []
+        return summary, df
+
+    fold_sharpes: List[float] = []
+    fold_return_pcts: List[float] = []
+    oos_frames: List[pd.DataFrame] = []
+    fold_factors_used: set = set()
+
+    start = 0
+    while start + train_days + test_days <= len(prices_df):
+        window = prices_df.iloc[start: start + train_days + test_days]
+        fold_summary, fold_df = run_signals_backtest(
+            window, entry_threshold, exit_threshold, slippage_bps, commission_bps
+        )
+        if not fold_df.empty:
+            oos = fold_df.iloc[train_days:]
+            if not oos.empty:
+                oos_ret = oos["strat_ret"]
+                mean_ret = oos_ret.mean() * 252.0
+                std_ret = oos_ret.std() * math.sqrt(252.0)
+                fold_sharpe = float(mean_ret / std_ret) if std_ret > 0 else 0.0
+                fold_total_ret = float((1.0 + oos_ret).prod() - 1.0) * 100.0
+                fold_sharpes.append(fold_sharpe)
+                fold_return_pcts.append(round(fold_total_ret, 2))
+                oos_frames.append(oos)
+                fold_factors_used.update(fold_summary.factors_used)
+        start += step_days
+
+    if not fold_sharpes:
+        summary, df = run_signals_backtest(
+            prices_df, entry_threshold, exit_threshold, slippage_bps, commission_bps
+        )
+        summary.n_folds = 0
+        summary.oos_sharpe_mean = summary.annualized_sharpe
+        summary.oos_sharpe_std = 0.0
+        summary.fold_returns = []
+        return summary, df
+
+    combined = pd.concat(oos_frames)
+
+    # Reconstruct closed-trade returns from the OOS-only position column
+    # (Task 1) so win_rate/profit_factor reflect OOS trades only, not
+    # trades opened during the train warm-up.
+    pos = combined["position"].to_numpy()
+    strat_ret = combined["strat_ret"].to_numpy()
+    trades: List[float] = []
+    current_trade: List[float] = []
+    prev = 0
+    for p, r in zip(pos, strat_ret):
+        if p == 1 and prev == 0:
+            current_trade = [float(r)]
+        elif p == 1 and prev == 1:
+            current_trade.append(float(r))
+        elif p == 0 and prev == 1:
+            current_trade.append(float(r))
+            trades.append(float(np.prod([1.0 + x for x in current_trade]) - 1.0))
+            current_trade = []
+        prev = p
+
+    total_strat_ret = float((1.0 + combined["strat_ret"]).prod() - 1.0) * 100.0
+    total_bench_ret = float((1.0 + combined["ret"]).prod() - 1.0) * 100.0
+    alpha = total_strat_ret - total_bench_ret
+
+    n_days = len(combined)
+    n_years = max(n_days / 252.0, 0.1)
+    cum_strat = (1.0 + combined["strat_ret"]).cumprod()
+    cagr = (float(cum_strat.iloc[-1]) ** (1.0 / n_years) - 1.0) * 100.0
+
+    rolling_peak = cum_strat.cummax()
+    drawdown = (cum_strat - rolling_peak) / rolling_peak
+    max_dd = abs(float(drawdown.min())) * 100.0
+
+    mean_ret = combined["strat_ret"].mean() * 252.0
+    std_ret = combined["strat_ret"].std() * math.sqrt(252.0)
+    sharpe = float(mean_ret / std_ret) if std_ret > 0 else 0.0
+
+    downside_ret = combined[combined["strat_ret"] < 0]["strat_ret"]
+    downside_std = downside_ret.std() * math.sqrt(252.0) if len(downside_ret) > 1 else std_ret
+    sortino = float(mean_ret / downside_std) if downside_std > 0 else 0.0
+
+    calmar = float(cagr / max_dd) if max_dd > 0 else 0.0
+
+    win_trades = [t for t in trades if t > 0]
+    loss_trades = [t for t in trades if t <= 0]
+    win_rate = (len(win_trades) / len(trades) * 100.0) if trades else 0.0
+    gross_profits = sum(win_trades)
+    gross_losses = abs(sum(loss_trades))
+    profit_factor = (gross_profits / gross_losses) if gross_losses > 0 else 2.5
+
+    summary = BacktestSummary(
+        total_return_pct=round(total_strat_ret, 2),
+        cagr_pct=round(cagr, 2),
+        benchmark_return_pct=round(total_bench_ret, 2),
+        alpha_pct=round(alpha, 2),
+        annualized_sharpe=round(sharpe, 2),
+        annualized_sortino=round(sortino, 2),
+        max_drawdown_pct=round(max_dd, 2),
+        calmar_ratio=round(calmar, 2),
+        win_rate_pct=round(win_rate, 1),
+        profit_factor=round(profit_factor, 2),
+        total_trades=len(trades),
+    )
+    summary.n_folds = len(fold_sharpes)
+    summary.oos_sharpe_mean = round(float(np.mean(fold_sharpes)), 3)
+    summary.oos_sharpe_std = round(float(np.std(fold_sharpes)), 3)
+    summary.fold_returns = fold_return_pcts
+    summary.factors_used = sorted(fold_factors_used)
+    return summary, combined

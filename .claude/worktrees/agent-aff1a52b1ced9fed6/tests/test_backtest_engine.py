@@ -115,5 +115,49 @@ class TestPositionColumn(unittest.TestCase):
         self.assertEqual(len(df["position"]), len(df))
 
 
+from backtest_engine import run_walkforward_backtest
+
+
+class TestWalkForwardBacktest(unittest.TestCase):
+
+    def setUp(self):
+        self.df = _make_ohlcv(n=700, seed=9)  # long enough for several folds
+
+    def test_produces_multiple_folds(self):
+        summary, oos_df = run_walkforward_backtest(
+            self.df, train_days=252, test_days=63, step_days=63
+        )
+        expected_folds = (len(self.df) - 252) // 63
+        self.assertEqual(summary.n_folds, expected_folds)
+        self.assertEqual(len(summary.fold_returns), expected_folds)
+        self.assertFalse(oos_df.empty)
+
+    def test_fold_windows_do_not_overlap_train(self):
+        """Each fold's OOS slice must start strictly after that fold's
+        train_days warm-up -- i.e. the concatenated OOS frame's length
+        equals n_folds * test_days (step_days == test_days here, so no
+        overlap and no gaps)."""
+        summary, oos_df = run_walkforward_backtest(
+            self.df, train_days=252, test_days=63, step_days=63
+        )
+        self.assertEqual(len(oos_df), summary.n_folds * 63)
+
+    def test_oos_sharpe_distribution_fields_populated(self):
+        summary, _ = run_walkforward_backtest(
+            self.df, train_days=252, test_days=63, step_days=63
+        )
+        self.assertIsInstance(summary.oos_sharpe_mean, float)
+        self.assertIsInstance(summary.oos_sharpe_std, float)
+        self.assertGreaterEqual(summary.oos_sharpe_std, 0.0)
+
+    def test_insufficient_history_falls_back_to_single_pass(self):
+        short_df = _make_ohlcv(n=100, seed=2)
+        summary, df = run_walkforward_backtest(
+            short_df, train_days=252, test_days=63, step_days=63
+        )
+        self.assertEqual(summary.n_folds, 0)
+        self.assertFalse(df.empty)  # fell back to run_signals_backtest, not an error
+
+
 if __name__ == "__main__":
     unittest.main()
