@@ -76,7 +76,7 @@ def deflated_sharpe_ratio(returns: pd.Series, n_trials: int = 1) -> float:
         )
     r = returns.dropna().to_numpy()
     n = len(r)
-    if n < 2:
+    if n < 4:
         return 0.0
     std = r.std(ddof=1)  # sample std, matching this file's other Sharpe calcs (pandas .std() default) -- numpy's default ddof=0 understates it
     if std <= 0:

@@ -506,6 +506,8 @@ class TestDeflatedSharpeRatio(unittest.TestCase):
     def test_too_few_observations_returns_zero(self):
         self.assertEqual(deflated_sharpe_ratio(pd.Series([0.01]), n_trials=1), 0.0)
         self.assertEqual(deflated_sharpe_ratio(pd.Series([], dtype=float), n_trials=1), 0.0)
+        self.assertEqual(deflated_sharpe_ratio(pd.Series([0.01, -0.01]), n_trials=1), 0.0)
+        self.assertEqual(deflated_sharpe_ratio(pd.Series([0.01, -0.01, 0.02]), n_trials=1), 0.0)
 
     def test_backtest_summary_has_deflated_sharpe_fields(self):
         summary = BacktestSummary(
