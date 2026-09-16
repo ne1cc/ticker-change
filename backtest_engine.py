@@ -416,7 +416,7 @@ def _block_shuffle(df: pd.DataFrame, block_size: int, rng: np.random.Generator) 
     index truncated to the shuffled length (index values are unused by
     run_signals_backtest beyond length/ordering)."""
     n = len(df)
-    n_blocks = max(n // block_size, 1)
+    n_blocks = max(math.ceil(n / block_size), 1)
     block_order = rng.permutation(n_blocks)
     rows = []
     for b in block_order:

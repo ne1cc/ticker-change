@@ -75,6 +75,19 @@ class TestPermutationTest(unittest.TestCase):
         self.assertTrue((shuffled["high"] >= shuffled["low"]).all())
         self.assertTrue((shuffled["high"] >= shuffled["close"]).all())
 
+    def test_shuffled_frame_covers_all_rows_for_non_divisible_length(self):
+        """Regression guard: when len(df) is not an exact multiple of
+        block_size, the trailing partial block must still be included --
+        not silently dropped. n=253 against block_size=20 leaves a
+        remainder of 13 rows that a floor-division n_blocks computation
+        would omit."""
+        from backtest_engine import _block_shuffle
+        df = _make_ohlcv(n=253)
+        rng = np.random.default_rng(5)
+        shuffled = _block_shuffle(df, block_size=20, rng=rng)
+        self.assertEqual(len(shuffled), len(df))
+        self.assertEqual(len(shuffled), 253)
+
 
 if __name__ == "__main__":
     unittest.main()
