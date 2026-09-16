@@ -49,7 +49,7 @@ class PermutationResult:
 
 def _norm_cdf(x: float) -> float:
     """Standard normal CDF via math.erf -- matches this repo's existing
-    in-house Black-Scholes convention (app.py:2315, derivatives_alpha.py:25);
+    in-house Black-Scholes convention (app.py:2330, derivatives_alpha.py:25);
     no scipy dependency."""
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
@@ -74,16 +74,16 @@ def deflated_sharpe_ratio(returns: pd.Series, n_trials: int = 1) -> float:
             "'Explicitly out of scope'), so there is no honest n_trials>1 "
             "value to compute yet. Pass n_trials=1."
         )
-    r = returns.dropna().to_numpy()
-    n = len(r)
+    s = returns.dropna()
+    n = len(s)
     if n < 4:
         return 0.0
-    std = r.std(ddof=1)  # sample std, matching this file's other Sharpe calcs (pandas .std() default) -- numpy's default ddof=0 understates it
+    std = s.std()  # pandas default ddof=1, matching this file's other Sharpe calcs
     if std <= 0:
         return 0.0
-    sr = r.mean() / std
-    skew = float(pd.Series(r).skew())
-    kurt = float(pd.Series(r).kurtosis()) + 3.0  # pandas kurtosis() is excess; DSR wants raw (Pearson) kurtosis
+    sr = s.mean() / std
+    skew = float(s.skew())
+    kurt = float(s.kurtosis()) + 3.0  # pandas kurtosis() is excess; DSR wants raw (Pearson) kurtosis
 
     sr_std = math.sqrt(max((1 - skew * sr + (kurt - 1) / 4.0 * sr ** 2) / (n - 1), 0.0))
     if sr_std <= 0:
