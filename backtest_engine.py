@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -257,7 +257,8 @@ def run_walkforward_backtest(
     fold_sharpes: List[float] = []
     fold_return_pcts: List[float] = []
     oos_frames: List[pd.DataFrame] = []
-    fold_factors_used: set = set()
+    fold_factors_used: Set[str] = set()
+    trades: List[float] = []
 
     start = 0
     while start + train_days + test_days <= len(prices_df):
@@ -277,6 +278,26 @@ def run_walkforward_backtest(
                 fold_return_pcts.append(round(fold_total_ret, 2))
                 oos_frames.append(oos)
                 fold_factors_used.update(fold_summary.factors_used)
+
+                # Reconstruct closed-trade returns from this fold's own OOS
+                # slice only (Task 1's position column) so a position still
+                # open at the end of one fold's OOS window is never spliced
+                # onto the next fold's unrelated first trade -- each fold's
+                # trade-reconstruction state starts fresh.
+                fold_pos = oos["position"].to_numpy()
+                fold_strat_ret = oos["strat_ret"].to_numpy()
+                current_trade: List[float] = []
+                prev = 0
+                for p, r in zip(fold_pos, fold_strat_ret):
+                    if p == 1 and prev == 0:
+                        current_trade = [float(r)]
+                    elif p == 1 and prev == 1:
+                        current_trade.append(float(r))
+                    elif p == 0 and prev == 1:
+                        current_trade.append(float(r))
+                        trades.append(float(np.prod([1.0 + x for x in current_trade]) - 1.0))
+                        current_trade = []
+                    prev = p
         start += step_days
 
     if not fold_sharpes:
@@ -290,25 +311,6 @@ def run_walkforward_backtest(
         return summary, df
 
     combined = pd.concat(oos_frames)
-
-    # Reconstruct closed-trade returns from the OOS-only position column
-    # (Task 1) so win_rate/profit_factor reflect OOS trades only, not
-    # trades opened during the train warm-up.
-    pos = combined["position"].to_numpy()
-    strat_ret = combined["strat_ret"].to_numpy()
-    trades: List[float] = []
-    current_trade: List[float] = []
-    prev = 0
-    for p, r in zip(pos, strat_ret):
-        if p == 1 and prev == 0:
-            current_trade = [float(r)]
-        elif p == 1 and prev == 1:
-            current_trade.append(float(r))
-        elif p == 0 and prev == 1:
-            current_trade.append(float(r))
-            trades.append(float(np.prod([1.0 + x for x in current_trade]) - 1.0))
-            current_trade = []
-        prev = p
 
     total_strat_ret = float((1.0 + combined["strat_ret"]).prod() - 1.0) * 100.0
     total_bench_ret = float((1.0 + combined["ret"]).prod() - 1.0) * 100.0

@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 import signals
-from backtest_engine import _historical_composite_signal, run_signals_backtest
+from backtest_engine import _historical_composite_signal, run_signals_backtest, BacktestSummary
 
 
 def _make_ohlcv(n=300, seed=3):
@@ -157,6 +157,86 @@ class TestWalkForwardBacktest(unittest.TestCase):
         )
         self.assertEqual(summary.n_folds, 0)
         self.assertFalse(df.empty)  # fell back to run_signals_backtest, not an error
+
+    def test_factors_used_reflects_union_of_contributing_folds(self):
+        summary, _ = run_walkforward_backtest(
+            self.df, train_days=252, test_days=63, step_days=63
+        )
+        self.assertIsInstance(summary.factors_used, list)
+        self.assertTrue(len(summary.factors_used) > 0)
+        for key in ("trend", "momentum", "volatility", "tail_risk"):
+            self.assertIn(key, summary.factors_used)
+
+    def test_trade_reconstruction_does_not_leak_across_fold_boundary(self):
+        """Regression test: a position still open (position==1) on the last
+        row of one fold's OOS slice must never be spliced onto a fresh,
+        unrelated position opened on the first row of the next fold's OOS
+        slice. Each fold's trade-reconstruction state must reset at the
+        fold boundary.
+
+        Mocks run_signals_backtest so the two folds' OOS position/strat_ret
+        columns are fully controlled:
+          - fold 1's OOS slice is [1, 1, 1, 1, 1] -- a position that never
+            closes within the fold (dangling at the fold boundary). Under
+            correct per-fold accounting this contributes 0 closed trades.
+          - fold 2's OOS slice is [0, 1, 0] -- flat, then a fresh open/close
+            pair, contributing exactly 1 closed trade on its own.
+
+        With the bug (single prev/current_trade state run once across the
+        concatenated OOS frame), fold 2's leading flat (0) row is
+        misinterpreted as the close of fold 1's dangling position (since
+        the carried-over `prev` is 1), producing a spurious extra trade and
+        total_trades == 2. The fix must yield total_trades == 1.
+        """
+        from unittest.mock import patch
+
+        dates1 = pd.date_range("2023-01-01", periods=6, freq="B")
+        fold1_df = pd.DataFrame(
+            {
+                "close": [100.0] * 6,
+                "ret": [0.0, 0.005, 0.005, 0.005, 0.005, 0.005],
+                "strat_ret": [0.0, 0.01, 0.01, 0.01, 0.01, 0.01],
+                "position": [0, 1, 1, 1, 1, 1],
+            },
+            index=dates1,
+        )
+        fold1_summary = BacktestSummary(
+            total_return_pct=0.0, cagr_pct=0.0, benchmark_return_pct=0.0,
+            alpha_pct=0.0, annualized_sharpe=0.0, annualized_sortino=0.0,
+            max_drawdown_pct=0.0, calmar_ratio=0.0, win_rate_pct=0.0,
+            profit_factor=0.0, total_trades=0, factors_used=["trend"],
+        )
+
+        dates2 = pd.date_range("2023-02-01", periods=4, freq="B")
+        fold2_df = pd.DataFrame(
+            {
+                "close": [100.0] * 4,
+                "ret": [0.0, 0.0, 0.01, -0.005],
+                "strat_ret": [0.0, 0.0, 0.02, -0.01],
+                "position": [0, 0, 1, 0],
+            },
+            index=dates2,
+        )
+        fold2_summary = BacktestSummary(
+            total_return_pct=0.0, cagr_pct=0.0, benchmark_return_pct=0.0,
+            alpha_pct=0.0, annualized_sharpe=0.0, annualized_sortino=0.0,
+            max_drawdown_pct=0.0, calmar_ratio=0.0, win_rate_pct=0.0,
+            profit_factor=0.0, total_trades=0, factors_used=["momentum"],
+        )
+
+        prices_df = _make_ohlcv(n=3, seed=1)  # only needs len >= train+test
+
+        with patch(
+            "backtest_engine.run_signals_backtest",
+            side_effect=[(fold1_summary, fold1_df), (fold2_summary, fold2_df)],
+        ):
+            summary, combined = run_walkforward_backtest(
+                prices_df, train_days=1, test_days=1, step_days=1
+            )
+
+        self.assertEqual(summary.n_folds, 2)
+        self.assertEqual(summary.total_trades, 1)
+        self.assertEqual(len(combined), 5 + 3)  # both folds' full OOS slices
 
 
 if __name__ == "__main__":
