@@ -4003,8 +4003,25 @@ def api_institutional(ticker):
     # 2. Macro Conditioning
     macro_res = macro_engine.get_macro_financial_report(stock_df, spy_df if spy_df is not None else stock_df)
 
-    # 3. Signals Walk-Forward Simulation
-    sim_res, _ = backtest_engine.run_walkforward_backtest(stock_df)
+    # 3. Signals Walk-Forward Simulation + block-bootstrap permutation null
+    # test (cached: the permutation test reruns the backtest ~300x, so this
+    # is expensive -- see docs/superpowers/specs/2026-09-14-
+    # backtest-engine-statistical-rigor-design.md, WT3)
+    cache_key = ticker
+    cached = db.cache_get("institutional_backtest", cache_key, ttl_hours=24)
+    if cached is not None:
+        sim_res_dict = cached["signals_backtest"]
+        perm_res_dict = cached["permutation_test"]
+    else:
+        sim_res, _ = backtest_engine.run_walkforward_backtest(stock_df)
+        perm_res = backtest_engine.run_permutation_test(stock_df)
+        sim_res_dict = sim_res.__dict__
+        perm_res_dict = perm_res.__dict__
+        db.cache_set(
+            "institutional_backtest",
+            cache_key,
+            {"signals_backtest": sim_res_dict, "permutation_test": perm_res_dict},
+        )
 
     # 4. Recent SEC 8-K Events
     events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
@@ -4022,7 +4039,8 @@ def api_institutional(ticker):
             "upside_capture": macro_res.upside_capture_ratio,
             "downside_capture": macro_res.downside_capture_ratio,
         },
-        "signals_backtest": sim_res.__dict__,
+        "signals_backtest": sim_res_dict,
+        "permutation_test": perm_res_dict,
         "sec_8k_events": [e.__dict__ for e in events_8k],
     }), 200
 
