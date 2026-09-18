@@ -599,7 +599,19 @@ def index():
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "ok"}), 200
+    try:
+        with db.get_conn() as conn:
+            conn.execute("SELECT 1")
+        db_status = "ok"
+    except Exception:
+        db_status = "error"
+
+    body = {
+        "status": "ok" if db_status == "ok" else "degraded",
+        "db": db_status,
+        "s3_cache": "enabled" if s3_cache.enabled() else "disabled",
+    }
+    return jsonify(body), 200 if db_status == "ok" else 503
 
 
 @app.route('/api/openapi.json')
