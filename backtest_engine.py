@@ -409,28 +409,70 @@ def run_walkforward_backtest(
 
 
 def _block_shuffle(df: pd.DataFrame, block_size: int, rng: np.random.Generator) -> pd.DataFrame:
-    """Reorder df's rows in contiguous blocks of block_size (the last block
-    may be shorter). Keeps each block's OHLC relationships internally
-    consistent -- only block ORDER is randomized, never individual rows or
-    columns independently. Returns a new frame reindexed with df's original
-    index truncated to the shuffled length (index values are unused by
-    run_signals_backtest beyond length/ordering)."""
+    """Block-bootstrap the RETURN series and rebuild an OHLCV frame from it.
+
+    Permuting contiguous blocks of raw price *levels* would splice a block
+    ending near one price onto a block starting near another, manufacturing
+    a large fake return at every block boundary (measured: ~94% annualized
+    vol on a shuffled AAPL path vs ~29% real), which makes the null
+    distribution far too wide/erratic and the resulting p-value meaningless.
+    So, per the spec, the permutation is applied to log returns instead:
+
+      1. bar 0 is the ANCHOR: it keeps its original close, OHLC ratios and
+         volume, and is never moved. The n-1 log returns after it are what
+         get permuted, in contiguous blocks of block_size (the last block
+         may be shorter).
+      2. the shuffled close path is rebuilt as
+         ``close[0] * exp(cumsum(permuted_logret))`` -- so the shuffled
+         path's return distribution is exactly the real one's, only the
+         ORDER changes (block-wise, preserving short-run autocorrelation
+         and vol clustering within each block).
+      3. open/high/low travel with their return: each permuted slot carries
+         its original row's ratio-to-its-own-close
+         (``open/close``, ``high/close``, ``low/close``), re-applied to that
+         slot's new reconstructed close. Row-internal OHLC relationships
+         (high >= low, high >= close, ...) are therefore preserved exactly.
+         Volume (and any other column) is carried row-aligned with the same
+         permutation.
+
+    Returns a new frame with df's columns, length and DatetimeIndex, so it is
+    drop-in for run_signals_backtest.
+    """
     n = len(df)
-    n_blocks = max(math.ceil(n / block_size), 1)
+    if n < 3:
+        return df.copy()
+
+    lower_to_actual = {str(c).lower(): c for c in df.columns}
+    c_col = lower_to_actual["close"]
+    close = df[c_col].to_numpy(dtype=float)
+
+    # Block-permute the POSITIONS of returns 1..n-1; position 0 is the anchor.
+    ret_positions = np.arange(1, n)
+    n_blocks = max(math.ceil(len(ret_positions) / block_size), 1)
     block_order = rng.permutation(n_blocks)
-    rows = []
-    for b in block_order:
-        start = b * block_size
-        end = min(start + block_size, n)
-        rows.append(df.iloc[start:end])
-    shuffled = pd.concat(rows).reset_index(drop=True)
-    shuffled.index = df.index[: len(shuffled)]
+    perm = np.concatenate(
+        [np.array([0], dtype=int)]
+        + [ret_positions[b * block_size: (b + 1) * block_size] for b in block_order]
+    )
+
+    logret = np.zeros(n, dtype=float)
+    logret[1:] = np.log(close[1:] / close[:-1])
+
+    shuffled = df.iloc[perm].copy()  # carries volume + any extra column row-aligned
+    new_close = close[0] * np.exp(np.cumsum(logret[perm]))
+    for name in ("open", "high", "low"):
+        col = lower_to_actual.get(name)
+        if col is not None:
+            ratio = (df[col].to_numpy(dtype=float) / close)[perm]
+            shuffled[col] = ratio * new_close
+    shuffled[c_col] = new_close
+    shuffled.index = df.index
     return shuffled
 
 
 def run_permutation_test(
     prices_df: pd.DataFrame,
-    n_permutations: int = 300,
+    n_permutations: int = 100,
     block_size: int = 20,
     entry_threshold: float = 65.0,
     exit_threshold: float = 45.0,
@@ -444,6 +486,11 @@ def run_permutation_test(
     data, n_permutations times on block-shuffled copies -- so this needs no
     coordination with whatever signal-generation logic is canonical at
     merge time (see Global Constraints)."""
+    if block_size < 1:
+        raise ValueError(f"block_size must be >= 1, got {block_size}")
+    if n_permutations < 1:
+        raise ValueError(f"n_permutations must be >= 1, got {n_permutations}")
+
     real_summary, _ = run_signals_backtest(
         prices_df, entry_threshold, exit_threshold, slippage_bps, commission_bps
     )
@@ -459,7 +506,9 @@ def run_permutation_test(
         null_sharpes.append(summary.annualized_sharpe)
 
     null_arr = np.array(null_sharpes)
-    p_value = float((null_arr >= real_sharpe).mean())
+    # Bias-corrected Monte Carlo p-value: the honest floor with N draws is
+    # 1/(N+1), never exactly 0 (North et al. 2002).
+    p_value = float((1 + int((null_arr >= real_sharpe).sum())) / (1 + n_permutations))
 
     return PermutationResult(
         real_sharpe=real_sharpe,

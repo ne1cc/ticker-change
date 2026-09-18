@@ -4,12 +4,13 @@ Each worktree (WT1-WT4) that implements a piece of the backtest-engine spec
 (docs/superpowers/specs/2026-09-14-backtest-engine-statistical-rigor-design.md)
 adds its tests to this file.
 """
+import math
 import unittest
 
 import numpy as np
 import pandas as pd
 
-from backtest_engine import run_permutation_test, PermutationResult
+from backtest_engine import _block_shuffle, run_permutation_test, PermutationResult
 
 
 def _make_ohlcv(n=300, seed=1, trend=0.0006):
@@ -41,20 +42,80 @@ class TestPermutationTest(unittest.TestCase):
         relationship), the p-value should land somewhere plausible under the
         null, not always near 0 -- a p-value that's always ~0 regardless of
         input would indicate a broken null model (e.g. insufficient
-        shuffling, or a leak that lets the 'real' run always look best)."""
-        np.random.seed(123)
+        shuffling, or a leak that lets the 'real' run always look best).
+
+        This is the headline regression guard for the level-shuffle defect:
+        shuffling blocks of raw price levels manufactured huge fake returns
+        at block boundaries, which pushed p to ~0.00 on zero-signal data.
+        """
         p_values = []
-        for trial_seed in range(5):
+        for trial_seed in range(6):
             df = _make_ohlcv(n=300, seed=100 + trial_seed, trend=0.0)
             result = run_permutation_test(
                 df, n_permutations=30, block_size=20, seed=trial_seed
             )
             p_values.append(result.p_value)
-        # Not a strict statistical guarantee with only 5 trials, but a
-        # regression guard: if every trial comes back p<0.05, something in
-        # the null construction is broken (e.g. real run isn't actually
-        # comparable to the shuffled runs).
-        self.assertFalse(all(p < 0.05 for p in p_values))
+        # Under a correct null on zero-signal data these are ~U[0,1]; the
+        # seeds are fixed, so these bounds are deterministic, not flaky.
+        self.assertFalse(all(p < 0.05 for p in p_values), p_values)
+        self.assertGreater(max(p_values), 0.5, p_values)
+        self.assertGreater(
+            sum(1 for p in p_values if p > 0.10), len(p_values) / 2, p_values
+        )
+        self.assertGreater(sum(p_values) / len(p_values), 0.15, p_values)
+
+    def test_p_value_is_never_exactly_zero(self):
+        """The bias-corrected estimator (1+c)/(1+N) floors at 1/(N+1); a raw
+        `(null >= real).mean()` can report exactly 0.0, which is not a valid
+        p-value for a Monte Carlo test with finitely many draws."""
+        df = _make_ohlcv(n=300, seed=42, trend=0.004)  # strong fake uptrend
+        result = run_permutation_test(df, n_permutations=20, block_size=20, seed=3)
+        self.assertGreaterEqual(result.p_value, 1.0 / 21.0)
+
+    def test_rejects_degenerate_parameters(self):
+        df = _make_ohlcv(n=100)
+        for kwargs in ({"block_size": 0}, {"block_size": -5}, {"n_permutations": 0}):
+            with self.subTest(**kwargs):
+                with self.assertRaises(ValueError):
+                    run_permutation_test(df, **{"n_permutations": 5, **kwargs})
+
+    def test_shuffled_path_preserves_return_volatility(self):
+        """Regression guard for the level-shuffle defect: permuting blocks of
+        raw price LEVELS splices unrelated price levels together, so every
+        block boundary fabricates a large return (measured ~94% annualized
+        vol on a shuffled AAPL path vs ~29% real). Permuting the RETURN
+        series leaves the return distribution -- and so its volatility --
+        intact; only the ordering changes."""
+        df = _make_ohlcv(n=500, seed=11)
+        shuffled = _block_shuffle(df, block_size=20, rng=np.random.default_rng(3))
+
+        real_vol = df["close"].pct_change().std() * math.sqrt(252)
+        shuffled_vol = shuffled["close"].pct_change().std() * math.sqrt(252)
+        self.assertLess(
+            abs(shuffled_vol - real_vol) / real_vol, 0.15,
+            f"shuffled vol {shuffled_vol:.3f} vs real {real_vol:.3f}",
+        )
+
+    def test_shuffled_returns_are_a_permutation_of_the_originals(self):
+        """Set-equality, not just length: a duplicated-block or dropped-block
+        bug keeps len() correct while silently changing the return
+        distribution the null is drawn from."""
+        df = _make_ohlcv(n=253, seed=9)
+        shuffled = _block_shuffle(df, block_size=20, rng=np.random.default_rng(5))
+
+        real_close, shuf_close = df["close"].to_numpy(), shuffled["close"].to_numpy()
+        # Bar 0 is the anchor: same starting price, returns after it permuted.
+        self.assertAlmostEqual(shuf_close[0], real_close[0], places=10)
+        np.testing.assert_allclose(
+            np.sort(np.log(shuf_close[1:] / shuf_close[:-1])),
+            np.sort(np.log(real_close[1:] / real_close[:-1])),
+            rtol=1e-9, atol=1e-12,
+        )
+        np.testing.assert_array_equal(
+            np.sort(shuffled["volume"].to_numpy()), np.sort(df["volume"].to_numpy())
+        )
+        self.assertTrue(shuffled.index.equals(df.index))
+        self.assertEqual(list(shuffled.columns), list(df.columns))
 
     def test_reproducible_with_same_seed(self):
         df = _make_ohlcv(n=300)
@@ -64,28 +125,26 @@ class TestPermutationTest(unittest.TestCase):
         self.assertEqual(r1.p_value, r2.p_value)
 
     def test_shuffled_frame_preserves_ohlc_consistency(self):
-        """Block shuffling must not break high >= low, high >= close, etc.
-        within any row -- rows are moved as whole blocks, never sliced
-        across columns."""
-        from backtest_engine import _block_shuffle
+        """Each row's open/high/low keep their original ratio to their own
+        close, re-anchored to the row's new reconstructed close -- so
+        high >= low, high >= close, low <= close survive the shuffle."""
         df = _make_ohlcv(n=100)
-        rng = np.random.default_rng(3)
-        shuffled = _block_shuffle(df, block_size=20, rng=rng)
+        shuffled = _block_shuffle(df, block_size=20, rng=np.random.default_rng(3))
         self.assertEqual(len(shuffled), len(df))
         self.assertTrue((shuffled["high"] >= shuffled["low"]).all())
         self.assertTrue((shuffled["high"] >= shuffled["close"]).all())
+        self.assertTrue((shuffled["low"] <= shuffled["close"]).all())
+        self.assertTrue((shuffled["high"] >= shuffled["open"]).all())
+        self.assertTrue((shuffled["low"] <= shuffled["open"]).all())
+        self.assertTrue((shuffled[["open", "high", "low", "close"]] > 0).all().all())
 
     def test_shuffled_frame_covers_all_rows_for_non_divisible_length(self):
-        """Regression guard: when len(df) is not an exact multiple of
-        block_size, the trailing partial block must still be included --
-        not silently dropped. n=253 against block_size=20 leaves a
-        remainder of 13 rows that a floor-division n_blocks computation
-        would omit."""
-        from backtest_engine import _block_shuffle
+        """Regression guard: when the return series' length is not an exact
+        multiple of block_size, the trailing partial block must still be
+        included -- not silently dropped. n=253 against block_size=20 leaves
+        a remainder that a floor-division n_blocks computation would omit."""
         df = _make_ohlcv(n=253)
-        rng = np.random.default_rng(5)
-        shuffled = _block_shuffle(df, block_size=20, rng=rng)
-        self.assertEqual(len(shuffled), len(df))
+        shuffled = _block_shuffle(df, block_size=20, rng=np.random.default_rng(5))
         self.assertEqual(len(shuffled), 253)
 
 
