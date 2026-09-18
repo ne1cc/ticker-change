@@ -132,7 +132,6 @@ class TestNavigation(unittest.TestCase):
             'id="sub-nav-search-input"',
             'id="sub-link-stock"',
             'id="sub-link-live"',
-            'id="sub-link-options"',
             'id="sub-link-analytics"',
             'id="sub-link-positioning"',
             'id="sub-link-strategies"',
@@ -144,6 +143,13 @@ class TestNavigation(unittest.TestCase):
                 html,
                 f"Missing ticker sub-navbar element: {sub_id}",
             )
+
+        # Options has no sub-nav pills: with the pillar collapsed to a single
+        # child (Options Terminal, no separate Options Chain peer), a pill
+        # that just points back to the page you're already on is dead
+        # weight -- dropped entirely instead of shown as an inert pill.
+        self.assertNotIn('id="sub-link-options"', html)
+        self.assertNotIn('id="sub-link-chain"', html)
 
     def test_mobile_navigation_links_present(self):
         """Verify that mobile navigation drawer contains all core view links organized by pillar."""
@@ -169,6 +175,10 @@ class TestNavigation(unittest.TestCase):
                 html,
                 f"Missing mobile navigation element: {m_id}",
             )
+
+        # "Options Chain" is no longer a distinct mobile nav destination --
+        # it's tab 0 of the Options Terminal page, not a peer of it.
+        self.assertNotIn('id="mobile-nav-chain"', html)
 
     def test_analytics_view_structure_and_ticker_preservation(self):
         """Verify that /analytics?ticker=AAPL renders proper structure, retains ticker, and includes nav elements."""
