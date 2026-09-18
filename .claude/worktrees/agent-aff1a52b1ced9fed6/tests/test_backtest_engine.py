@@ -177,16 +177,22 @@ class TestWalkForwardBacktest(unittest.TestCase):
         Mocks run_signals_backtest so the two folds' OOS position/strat_ret
         columns are fully controlled:
           - fold 1's OOS slice is [1, 1, 1, 1, 1] -- a position that never
-            closes within the fold (dangling at the fold boundary). Under
-            correct per-fold accounting this contributes 0 closed trades.
+            closes within the fold (dangling at the fold boundary). Correct
+            per-fold accounting flushes this as its own mark-to-market
+            closed trade using only fold 1's own returns (see the
+            dangling-trade-flush test below) rather than dropping it or
+            splicing it onto fold 2.
           - fold 2's OOS slice is [0, 1, 0] -- flat, then a fresh open/close
             pair, contributing exactly 1 closed trade on its own.
 
-        With the bug (single prev/current_trade state run once across the
-        concatenated OOS frame), fold 2's leading flat (0) row is
-        misinterpreted as the close of fold 1's dangling position (since
-        the carried-over `prev` is 1), producing a spurious extra trade and
-        total_trades == 2. The fix must yield total_trades == 1.
+        With the leak bug (single prev/current_trade state run once across
+        the concatenated OOS frame instead of resetting per fold), fold 2's
+        leading flat (0) row would be misinterpreted as the close of fold
+        1's dangling position (since the carried-over `prev` is 1),
+        fabricating a trade value that mixes fold 1's and fold 2's returns.
+        The fix must yield two DISTINCT trades with values computed purely
+        from each fold's own returns -- not one trade whose value blends
+        both folds.
         """
         from unittest.mock import patch
 
@@ -235,8 +241,97 @@ class TestWalkForwardBacktest(unittest.TestCase):
             )
 
         self.assertEqual(summary.n_folds, 2)
-        self.assertEqual(summary.total_trades, 1)
+        # Fold 1's dangling position is flushed as its own closed trade
+        # (5 bars of +0.01 strat_ret compounded) and fold 2 contributes its
+        # own genuine closed trade (+0.02 then -0.01 compounded) -- two
+        # distinct trades, neither dropped nor blended together.
+        self.assertEqual(summary.total_trades, 2)
+        # Both the flushed dangling trade ((1.01**5)-1 > 0) and fold 2's
+        # closed trade ((1.02*0.99)-1 > 0) are winners -- confirms neither
+        # was dropped nor corrupted by blending returns across the boundary
+        # (a blended/misfired trade could easily land negative or missing).
+        self.assertEqual(summary.win_rate_pct, 100.0)
         self.assertEqual(len(combined), 5 + 3)  # both folds' full OOS slices
+
+    def test_dangling_open_trade_at_fold_end_is_flushed_not_dropped(self):
+        """Regression test for Finding 2: a position still open (never
+        closes) on the last row of a fold's OOS slice must be flushed into
+        the trade ledger as a mark-to-market close rather than silently
+        discarded -- otherwise total_trades/win_rate_pct/profit_factor
+        diverge from the returns actually included in total_return_pct and
+        annualized_sharpe (which already count those bars).
+
+        Single fold, mocked so its entire OOS slice is one never-closed
+        winning position: total_trades must be 1 (the flushed dangling
+        trade), not 0.
+        """
+        from unittest.mock import patch
+
+        dates = pd.date_range("2023-01-01", periods=4, freq="B")
+        fold_df = pd.DataFrame(
+            {
+                "close": [100.0] * 4,
+                "ret": [0.0, 0.004, 0.004, 0.004],
+                "strat_ret": [0.0, 0.008, 0.008, 0.008],
+                "position": [0, 1, 1, 1],
+            },
+            index=dates,
+        )
+        fold_summary = BacktestSummary(
+            total_return_pct=0.0, cagr_pct=0.0, benchmark_return_pct=0.0,
+            alpha_pct=0.0, annualized_sharpe=0.0, annualized_sortino=0.0,
+            max_drawdown_pct=0.0, calmar_ratio=0.0, win_rate_pct=0.0,
+            profit_factor=0.0, total_trades=0, factors_used=["trend"],
+        )
+
+        # len == train_days + test_days exactly, so the fold loop runs
+        # exactly once (matching the single mocked side_effect).
+        prices_df = _make_ohlcv(n=2, seed=1)
+
+        with patch(
+            "backtest_engine.run_signals_backtest",
+            side_effect=[(fold_summary, fold_df)],
+        ):
+            summary, _ = run_walkforward_backtest(
+                prices_df, train_days=1, test_days=1, step_days=1
+            )
+
+        self.assertEqual(summary.n_folds, 1)
+        self.assertEqual(summary.total_trades, 1)
+        self.assertEqual(summary.win_rate_pct, 100.0)  # the flushed trade is a winner
+
+    def test_step_days_less_than_test_days_deduplicates_overlapping_dates(self):
+        """Regression test for Finding 1: when step_days < test_days,
+        consecutive folds' OOS windows overlap and share calendar dates.
+        The returned combined OOS frame must have a unique, non-duplicated
+        index so aggregate metrics don't triple-count overlapping bars."""
+        summary, oos_df = run_walkforward_backtest(
+            self.df, train_days=252, test_days=63, step_days=21
+        )
+        self.assertGreater(summary.n_folds, 1)
+        self.assertTrue(oos_df.index.is_unique)
+
+    def test_step_days_zero_raises_value_error(self):
+        """Regression test for Finding 1: step_days <= 0 never advances the
+        fold loop's `start` cursor, which would otherwise hang forever.
+        Must raise ValueError instead of looping."""
+        with self.assertRaises(ValueError):
+            run_walkforward_backtest(self.df, train_days=252, test_days=63, step_days=0)
+
+    def test_step_days_negative_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            run_walkforward_backtest(self.df, train_days=252, test_days=63, step_days=-5)
+
+    def test_oos_sharpe_std_not_nan_with_single_fold(self):
+        """Regression test for Finding 4: ddof=1 stddev on a single-element
+        array is NaN; a lone fold must report 0.0 dispersion instead."""
+        single_fold_df = _make_ohlcv(n=320, seed=11)
+        summary, _ = run_walkforward_backtest(
+            single_fold_df, train_days=252, test_days=63, step_days=63
+        )
+        self.assertEqual(summary.n_folds, 1)
+        self.assertEqual(summary.oos_sharpe_std, 0.0)
+        self.assertFalse(np.isnan(summary.oos_sharpe_std))
 
 
 if __name__ == "__main__":

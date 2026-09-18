@@ -243,12 +243,23 @@ def run_walkforward_backtest(
 
     Falls back to a single run_signals_backtest call on the whole series if
     there isn't enough history for even one fold.
+
+    NOTE on the fallback branches below (`n_folds == 0`): in that case
+    `oos_sharpe_mean` is set to the in-sample Sharpe from the single
+    whole-series `run_signals_backtest` call, NOT a cross-validated
+    out-of-sample statistic -- there wasn't enough history to run even one
+    fold. Callers must check `n_folds` before treating `oos_sharpe_mean` as
+    OOS-validated.
     """
+    if step_days <= 0:
+        raise ValueError("step_days must be a positive integer")
+
     if len(prices_df) < train_days + test_days:
         summary, df = run_signals_backtest(
             prices_df, entry_threshold, exit_threshold, slippage_bps, commission_bps
         )
         summary.n_folds = 0
+        # See NOTE in docstring: this is in-sample Sharpe, not OOS.
         summary.oos_sharpe_mean = summary.annualized_sharpe
         summary.oos_sharpe_std = 0.0
         summary.fold_returns = []
@@ -298,6 +309,17 @@ def run_walkforward_backtest(
                         trades.append(float(np.prod([1.0 + x for x in current_trade]) - 1.0))
                         current_trade = []
                     prev = p
+
+                # A position still open when this fold's OOS slice ends is
+                # never closed by the loop above -- its accumulated returns
+                # ARE included in combined["strat_ret"] (and therefore in
+                # total_return_pct/annualized_sharpe/etc.), so flush it here
+                # as a mark-to-market close rather than silently dropping it
+                # from the trade ledger (which would bias win_rate_pct /
+                # profit_factor / total_trades low).
+                if current_trade:
+                    trades.append(float(np.prod([1.0 + x for x in current_trade]) - 1.0))
+                    current_trade = []
         start += step_days
 
     if not fold_sharpes:
@@ -305,12 +327,20 @@ def run_walkforward_backtest(
             prices_df, entry_threshold, exit_threshold, slippage_bps, commission_bps
         )
         summary.n_folds = 0
+        # See NOTE in docstring: this is in-sample Sharpe, not OOS.
         summary.oos_sharpe_mean = summary.annualized_sharpe
         summary.oos_sharpe_std = 0.0
         summary.fold_returns = []
         return summary, df
 
     combined = pd.concat(oos_frames)
+    # Fold OOS windows overlap whenever step_days < test_days (the caller is
+    # allowed to request this for denser fold sampling), which would
+    # otherwise leave duplicate calendar dates in `combined` and
+    # triple-count those bars' returns in every aggregate metric below.
+    # Keep the first occurrence of each date -- the earliest fold's value,
+    # since that fold has the least train warm-up staleness.
+    combined = combined[~combined.index.duplicated(keep="first")]
 
     total_strat_ret = float((1.0 + combined["strat_ret"]).prod() - 1.0) * 100.0
     total_bench_ret = float((1.0 + combined["ret"]).prod() - 1.0) * 100.0
@@ -357,7 +387,13 @@ def run_walkforward_backtest(
     )
     summary.n_folds = len(fold_sharpes)
     summary.oos_sharpe_mean = round(float(np.mean(fold_sharpes)), 3)
-    summary.oos_sharpe_std = round(float(np.std(fold_sharpes)), 3)
+    # Sample stddev (ddof=1) for consistency with the pandas .std() calls
+    # used elsewhere in this file. ddof=1 on a single-element array is NaN
+    # (division by zero), so a lone fold has zero measurable dispersion.
+    if len(fold_sharpes) == 1:
+        summary.oos_sharpe_std = 0.0
+    else:
+        summary.oos_sharpe_std = round(float(np.std(fold_sharpes, ddof=1)), 3)
     summary.fold_returns = fold_return_pcts
     summary.factors_used = sorted(fold_factors_used)
     return summary, combined
