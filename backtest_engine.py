@@ -458,6 +458,12 @@ def run_walkforward_backtest(
         summary.oos_sharpe_std = round(float(np.std(fold_sharpes, ddof=1)), 3)
     summary.fold_returns = fold_return_pcts
     summary.factors_used = sorted(fold_factors_used)
+    # Deflated Sharpe on the concatenated OOS-only series -- the main-path
+    # BacktestSummary(...) call above doesn't set this (it predates WT4),
+    # so without this it silently stays at the dataclass default (0.0),
+    # which reads as "0% probability of true skill" instead of "not computed".
+    summary.deflated_sharpe = deflated_sharpe_ratio(combined["strat_ret"], n_trials=1)
+    summary.n_trials_assumed = 1
     return summary, combined
 
 

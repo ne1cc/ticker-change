@@ -998,9 +998,11 @@
     window.dispatchEvent(new Event('resize'));
   }
 
-  // Deep link: /options?tab=chain lands straight on the option chain, which is
-  // what lets the Options pillar's "Options Chain" pill link to it. Any other
-  // value keeps the default GEX tab, so plain /options links are unaffected.
+  // Deep link: /options?tab=chain lands straight on the option chain tab.
+  // No nav pill points here anymore (Options Chain is just tab 0 of this
+  // page now), but the URL stays supported for anyone with it bookmarked.
+  // Any other value keeps the default GEX tab, so plain /options links are
+  // unaffected.
   (function applyTabFromQuery() {
     const requested = new URLSearchParams(window.location.search).get('tab');
     if (requested === 'chain' || requested === 'ai') {

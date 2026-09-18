@@ -135,17 +135,18 @@ class TestBaseInlineScripts(unittest.TestCase):
         proc = self._run_nav("/options", "?ticker=MU&tab=chain")
         self.assertEqual(0, proc.returncode, proc.stderr.strip()[:600])
 
-    def test_options_chain_deep_link_highlights_the_chain_pill(self):
-        """?tab=chain must resolve to the chain sub-nav pill, not the bare terminal."""
-        st = self._state("/options", "?ticker=MU&tab=chain")
-        self.assertIn("bg-amber-500", st["subLinkChainClass"])
-        self.assertNotIn("bg-amber-500", st["subLinkOptionsClass"])
-
-    def test_bare_options_route_highlights_the_terminal_pill(self):
-        """Without ?tab=chain, the GEX/vol-surface terminal pill stays active."""
-        st = self._state("/options", "?ticker=MU")
-        self.assertIn("bg-amber-500", st["subLinkOptionsClass"])
-        self.assertNotIn("bg-amber-500", st["subLinkChainClass"])
+    def test_options_route_never_highlights_a_sub_nav_pill(self):
+        """Options collapsed to zero sub-nav pills: with Options Chain no
+        longer a peer destination (it's tab 0 of Options Terminal, not a
+        sibling page), the pillar's only remaining child would just point
+        back to the page you're already on -- dead weight, so it's dropped
+        entirely rather than shown as a single inert pill. Neither the bare
+        terminal view nor the ?tab=chain deep link should resolve to a
+        highlighted pill, since none exist for this pillar."""
+        for search in ("?ticker=MU", "?ticker=MU&tab=chain"):
+            st = self._state("/options", search)
+            self.assertNotIn("bg-amber-500", st["subLinkOptionsClass"] or "")
+            self.assertIsNone(st["subLinkChainClass"])
 
     def test_pillar_links_carry_the_active_ticker(self):
         """The user-visible symptom: nav links losing ?ticker= when this breaks."""
@@ -189,10 +190,13 @@ class TestSessionScopedTickerBinding(unittest.TestCase):
         self.assertNotIn("active_ticker", st["session"])
         self.assertEqual([], st["redirects"])
 
-    def test_bare_options_route_defaults_to_spy_chain_when_no_session(self):
-        """A visitor with no session on /options defaults to the SPY option chain."""
+    def test_bare_options_route_defaults_to_spy_when_no_session(self):
+        """A visitor with no session on /options defaults to SPY, landing on
+        the normal Terminal/GEX tab -- no forced ?tab=chain, since Options
+        Chain is no longer treated as a distinct landing identity anywhere
+        else in the nav."""
         st = self._state("/options", "")
-        self.assertEqual(["/options?tab=chain&ticker=SPY"], st["redirects"])
+        self.assertEqual(["/options?ticker=SPY"], st["redirects"])
 
     def test_options_chain_route_defaults_to_spy_when_no_session(self):
         """Deep link /options?tab=chain without a session ticker rebinds to SPY."""
