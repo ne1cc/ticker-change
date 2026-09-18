@@ -7,17 +7,34 @@ from unittest.mock import patch
 class TestInstitutionalCaching(unittest.TestCase):
 
     def setUp(self):
+        import db
+        # Importing app is what creates the schema in normal operation; call
+        # init_db explicitly too so this file passes when run standalone
+        # against a fresh DB (otherwise: no such table: api_cache).
+        import app as app_module
+
+        db.init_db()
+
+        # No network (or a rate-limited yfinance) means the route 404s on
+        # missing prices -- that's an environment problem, not a regression.
+        prices = app_module.get_or_fetch_prices("AAPL", period="2y")
+        if prices is None or prices.empty:
+            self.skipTest("no AAPL price data available (offline or rate-limited)")
+
         # Evict any pre-existing cache entry for this ticker so the test is
         # idempotent across repeated local/CI runs within the same 24h TTL
         # window -- without this, a rerun on the same day would start from
         # a warm cache and never observe the "first request populates the
-        # cache" half of the behavior being tested.
-        import db
-
+        # cache" half of the behavior being tested. The lock row goes too,
+        # so a leftover claim can't send this run down the wait-for-peer path.
         with db.get_conn() as conn:
             conn.execute(
                 "DELETE FROM api_cache WHERE provider = ? AND key = ?",
-                ("institutional_backtest", "AAPL"),
+                (app_module._INSTITUTIONAL_CACHE_PROVIDER, "AAPL"),
+            )
+            conn.execute(
+                "DELETE FROM api_cache WHERE provider = 'internal' AND key = ?",
+                ("institutional_backtest:AAPL",),
             )
 
     def test_second_call_within_ttl_does_not_recompute(self):
@@ -57,6 +74,23 @@ class TestInstitutionalCaching(unittest.TestCase):
                 "real_sharpe", "null_mean", "null_std", "p_value", "n_permutations",
             ):
                 self.assertIn(field, permutation_test)
+
+
+    def test_cache_row_with_unexpected_shape_is_treated_as_a_miss(self):
+        """A cached payload missing an expected key (e.g. written by an older
+        build before the field existed) must recompute, not KeyError -> 500."""
+        import db
+        from app import app, _INSTITUTIONAL_CACHE_PROVIDER
+
+        db.cache_set(
+            _INSTITUTIONAL_CACHE_PROVIDER, "AAPL", {"signals_backtest": {"stale": True}}
+        )
+
+        resp = app.test_client().get("/api/institutional/AAPL")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertIn("permutation_test", body)
+        self.assertNotIn("stale", body["signals_backtest"])
 
 
 if __name__ == "__main__":

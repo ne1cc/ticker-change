@@ -3987,6 +3987,62 @@ def api_corporate_actions(ticker):
     }), 200
 
 
+# Provider namespace is versioned: the cached payload's shape is part of the
+# contract, so a future field addition (e.g. WT4's Deflated Sharpe) bumps to
+# _v2 and self-invalidates instead of serving up to 24h of incompatible rows.
+_INSTITUTIONAL_CACHE_PROVIDER = "institutional_backtest_v1"
+_INSTITUTIONAL_CACHE_KEYS = ("signals_backtest", "permutation_test")
+_INSTITUTIONAL_LOCK_TTL_HOURS = 0.02  # ~72s; longer than one cold computation
+_INSTITUTIONAL_LOCK_WAIT_S = 20.0
+
+
+def _institutional_backtest(ticker, stock_df):
+    """Signals backtest + block-bootstrap permutation null test, cached 24h.
+
+    The permutation test reruns the backtest 100x, so a cold computation is
+    seconds of CPU (see docs/superpowers/specs/2026-09-14-backtest-engine-
+    statistical-rigor-design.md, WT3). Two guards on top of the cache:
+
+    - stampede protection: concurrent cold requests for the same ticker race
+      for a cross-process lock (same db.try_claim_lock idiom the options
+      warmer uses); the losers wait for the winner's cache write rather than
+      each paying the full cost. If that write never lands (winner crashed,
+      or is slower than the wait budget) they compute it themselves -- slow
+      beats failing, per the "always render something" contract.
+    - a cache row missing an expected key is treated as a miss, so a
+      shape change can never turn into a KeyError -> 500.
+    """
+    def _read_cache():
+        cached = db.cache_get(_INSTITUTIONAL_CACHE_PROVIDER, ticker, ttl_hours=24)
+        if isinstance(cached, dict) and all(k in cached for k in _INSTITUTIONAL_CACHE_KEYS):
+            return cached
+        return None
+
+    hit = _read_cache()
+    if hit is not None:
+        return hit
+
+    claimed = db.try_claim_lock(
+        f"institutional_backtest:{ticker}", ttl_hours=_INSTITUTIONAL_LOCK_TTL_HOURS
+    )
+    if not claimed:
+        deadline = time.time() + _INSTITUTIONAL_LOCK_WAIT_S
+        while time.time() < deadline:
+            time.sleep(0.5)
+            hit = _read_cache()
+            if hit is not None:
+                return hit
+
+    sim_res, _ = backtest_engine.run_walkforward_backtest(stock_df)
+    perm_res = backtest_engine.run_permutation_test(stock_df)
+    payload = {
+        "signals_backtest": sim_res.__dict__,
+        "permutation_test": perm_res.__dict__,
+    }
+    db.cache_set(_INSTITUTIONAL_CACHE_PROVIDER, ticker, payload)
+    return payload
+
+
 @app.route('/api/institutional/<ticker>')
 def api_institutional(ticker):
     """Institutional quantitative analytics suite: Microstructure, Macro, CAR, and Greeks."""
@@ -4003,25 +4059,10 @@ def api_institutional(ticker):
     # 2. Macro Conditioning
     macro_res = macro_engine.get_macro_financial_report(stock_df, spy_df if spy_df is not None else stock_df)
 
-    # 3. Signals Walk-Forward Simulation + block-bootstrap permutation null
-    # test (cached: the permutation test reruns the backtest ~300x, so this
-    # is expensive -- see docs/superpowers/specs/2026-09-14-
-    # backtest-engine-statistical-rigor-design.md, WT3)
-    cache_key = ticker
-    cached = db.cache_get("institutional_backtest", cache_key, ttl_hours=24)
-    if cached is not None:
-        sim_res_dict = cached["signals_backtest"]
-        perm_res_dict = cached["permutation_test"]
-    else:
-        sim_res, _ = backtest_engine.run_walkforward_backtest(stock_df)
-        perm_res = backtest_engine.run_permutation_test(stock_df)
-        sim_res_dict = sim_res.__dict__
-        perm_res_dict = perm_res.__dict__
-        db.cache_set(
-            "institutional_backtest",
-            cache_key,
-            {"signals_backtest": sim_res_dict, "permutation_test": perm_res_dict},
-        )
+    # 3. Signals Walk-Forward Simulation + block-bootstrap permutation null test
+    backtest_payload = _institutional_backtest(ticker, stock_df)
+    sim_res_dict = backtest_payload["signals_backtest"]
+    perm_res_dict = backtest_payload["permutation_test"]
 
     # 4. Recent SEC 8-K Events
     events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
