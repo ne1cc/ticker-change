@@ -338,6 +338,20 @@ class TestWalkForwardBacktest(unittest.TestCase):
         self.assertEqual(summary.oos_sharpe_std, 0.0)
         self.assertFalse(np.isnan(summary.oos_sharpe_std))
 
+    def test_deflated_sharpe_is_computed_on_multi_fold_path(self):
+        """Regression test: the main multi-fold success path must set
+        deflated_sharpe from the concatenated OOS series, not silently
+        leave it at the BacktestSummary dataclass default (0.0), which
+        reads as '0% probability of true skill' rather than 'not
+        computed'."""
+        summary, combined = run_walkforward_backtest(
+            self.df, train_days=252, test_days=63, step_days=63
+        )
+        self.assertGreater(summary.n_folds, 1)
+        expected = deflated_sharpe_ratio(combined["strat_ret"], n_trials=1)
+        self.assertEqual(summary.deflated_sharpe, expected)
+        self.assertEqual(summary.n_trials_assumed, 1)
+
 
 class TestPermutationTest(unittest.TestCase):
 
