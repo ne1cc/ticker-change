@@ -9,4 +9,5 @@ model.pkl
 .venv2/
 .env
 .worktrees/
+.claude/worktrees/
 
