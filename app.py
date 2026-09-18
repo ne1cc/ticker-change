@@ -4004,7 +4004,7 @@ def api_institutional(ticker):
     macro_res = macro_engine.get_macro_financial_report(stock_df, spy_df if spy_df is not None else stock_df)
 
     # 3. Signals Walk-Forward Simulation
-    sim_res, _ = backtest_engine.run_signals_backtest(stock_df)
+    sim_res, _ = backtest_engine.run_walkforward_backtest(stock_df)
 
     # 4. Recent SEC 8-K Events
     events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
