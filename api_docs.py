@@ -631,6 +631,22 @@ def get_openapi_spec() -> Dict[str, Any]:
                                 "trade_count": {"type": "integer", "example": 42}
                             }
                         },
+                        "permutation_test": {
+                            "type": "object",
+                            "description": (
+                                "Block-bootstrap permutation null test: the same strategy rerun on "
+                                "block-shuffled copies of the return series. p_value is the "
+                                "bias-corrected fraction of null Sharpes >= the real Sharpe, so its "
+                                "floor is 1/(n_permutations+1), never exactly 0."
+                            ),
+                            "properties": {
+                                "real_sharpe": {"type": "number", "example": 1.65},
+                                "null_mean": {"type": "number", "example": 0.12},
+                                "null_std": {"type": "number", "example": 0.78},
+                                "p_value": {"type": "number", "example": 0.0396},
+                                "n_permutations": {"type": "integer", "example": 100}
+                            }
+                        },
                         "sec_8k_events": {
                             "type": "array",
                             "items": {
