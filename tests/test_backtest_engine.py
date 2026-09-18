@@ -4,6 +4,7 @@ Each worktree (WT1-WT4) that implements a piece of the backtest-engine spec
 (docs/superpowers/specs/2026-09-14-backtest-engine-statistical-rigor-design.md)
 adds its tests to this file.
 """
+import math
 import unittest
 
 import numpy as np
