@@ -11,7 +11,10 @@ COPY . .
 ENV PORT=8000
 EXPOSE 8000
 
+# --threads 4: every worker is mostly blocked on upstream fetches
+# (yfinance/Finnhub/SEC), so gthread lets one worker multiplex concurrent
+# requests instead of stalling while another waits on a cold provider.
 # --timeout 120: /api/institutional's cold path runs a 100-permutation
 # block-bootstrap null test, which can exceed gunicorn's 30s default on a
 # shared-vCPU machine and get the worker killed before it writes its cache.
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120"]
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "2", "--threads", "4", "--timeout", "120"]
