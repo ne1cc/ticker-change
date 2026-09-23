@@ -755,6 +755,10 @@ def get_fundamentals(ticker: str) -> dict | None:
             'Name':              info.get('longName') or info.get('shortName'),
             'Sector':            info.get('sector'),
             'Industry':          info.get('industry'),
+            # ETFs have no sector/industry; Yahoo classifies them this way
+            # instead (consumed as a fallback by the /ai-summary VAL sheet).
+            'Category':          info.get('category'),
+            'Fund Family':       info.get('fundFamily'),
             'Market Cap':        info.get('marketCap'),
             'Trailing P/E':      info.get('trailingPE'),
             'Forward P/E':       info.get('forwardPE'),
@@ -3790,6 +3794,33 @@ def ai_summary_page():
         for k, v in fundamentals.items():
             if k not in valuation_dict:
                 valuation_dict[k] = v
+
+    # The VAL sheet (and the LLM payload) speaks Finnhub's label names, but
+    # Finnhub doesn't cover ETFs and may be unconfigured/rate-limited -- so
+    # alias the yfinance fundamentals already fetched by get_fundamentals
+    # into those labels instead of rendering N/A for data we have.
+    for wb_key, yf_key in (
+        ('P/E (TTM)', 'Trailing P/E'),
+        ('P/B',       'Price / Book'),
+        ('P/S (TTM)', 'Price / Sales'),
+    ):
+        val = fundamentals.get(yf_key)
+        if valuation_dict.get(wb_key) is None and isinstance(val, (int, float)):
+            valuation_dict[wb_key] = round(val, 2)
+    div_yield = fundamentals.get('Dividend Yield')
+    if valuation_dict.get('Div Yield') is None and isinstance(div_yield, (int, float)):
+        valuation_dict['Div Yield'] = f"{div_yield:.2f}%"
+    # ETF fallbacks: yfinance classifies funds by category / fund family
+    # rather than sector / industry.
+    if not valuation_dict.get('Sector') and fundamentals.get('Category'):
+        valuation_dict['Sector'] = fundamentals['Category']
+    if not valuation_dict.get('Industry') and fundamentals.get('Fund Family'):
+        valuation_dict['Industry'] = fundamentals['Fund Family']
+    # Finnhub-only consensus breakdown; yfinance's single rating is the
+    # keyless fallback for the Consensus Reco cell.
+    rating = fundamentals.get('Analyst Rating')
+    if rating and not valuation_dict.get('Consensus Rating'):
+        valuation_dict['Consensus Rating'] = str(rating).replace('_', ' ').title()
 
     # Gather momentum data
     momentum_data = compute_momentum(ticker)
