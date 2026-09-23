@@ -1,7 +1,10 @@
 import os
 import tempfile
 import unittest
+from unittest import mock
+
 import db
+import app as app_module
 from app import app
 
 
@@ -13,6 +16,13 @@ class TestNavigation(unittest.TestCase):
         db.init_db()
         self.client = app.test_client()
         self.client.testing = True
+        # The strategies ticker tab auto-downloads missing history; keep the
+        # ?ticker= nav checks offline and deterministic.
+        fetch_patcher = mock.patch.object(
+            app_module, "_fetch_yfinance_with_retry", return_value=None
+        )
+        fetch_patcher.start()
+        self.addCleanup(fetch_patcher.stop)
 
     def tearDown(self):
         db.DB_PATH = self.orig_db_path

@@ -3355,7 +3355,9 @@ def strategies_page():
     with db.get_conn() as conn:
         rows = conn.execute("SELECT DISTINCT symbol FROM daily_prices").fetchall()
     symbols = [r["symbol"] for r in rows if r["symbol"] not in MOMENTUM_BENCHMARK_ETFS]
-    if not symbols:
+    # An empty cache only blocks the universe-derived tabs; the ticker tab
+    # can bootstrap itself by downloading the requested symbol below.
+    if not symbols and tab != 'ticker':
         return render_template('strategies.html', data=None, error="No stock price data available in the database. Please visit the homepage and search for tickers first.", **shared)
 
     available_symbols = sorted(symbols)
@@ -3363,21 +3365,28 @@ def strategies_page():
     if tab == 'ticker':
         if not symbol:
             symbol = available_symbols[0] if available_symbols else ""
+        if not symbol:
+            return render_template('strategies.html', data=None, tab='ticker', available_symbols=[], searched_symbol='', error="No stock price data available in the database. Please scan a ticker to download its history.", **shared)
 
-        if symbol not in available_symbols:
+        # Auto-download on cache miss: get_or_fetch_prices pulls the ticker's
+        # history from yfinance and stores it in daily_prices, so scanning an
+        # uncached symbol (benchmark ETFs included — they never enter the
+        # universe list below) works without visiting the homepage first.
+        # On fetch failure it falls back to stale rows, keeping the errors
+        # below as the last resort.
+        df = get_or_fetch_prices(symbol, period="5y")
+        min_bars = momentum_engine.MOMENTUM_LOOKBACK + momentum_engine.MOMENTUM_EXCLUDE
+        if df is None or df.empty:
             return render_template(
                 'strategies.html',
                 data=None,
                 tab='ticker',
                 available_symbols=available_symbols,
                 searched_symbol=symbol,
-                error=f"Ticker '{symbol}' is not currently cached in the database. Please search for it on the homepage first to download its history.",
+                error=f"Ticker '{symbol}' is not cached and automatic download failed. Double-check the symbol and try again.",
                 **shared
             )
-
-        df = db.get_prices(symbol)
-        min_bars = momentum_engine.MOMENTUM_LOOKBACK + momentum_engine.MOMENTUM_EXCLUDE
-        if df is None or len(df) < min_bars:
+        if len(df) < min_bars:
             return render_template(
                 'strategies.html',
                 data=None,
@@ -3388,8 +3397,12 @@ def strategies_page():
                 **shared
             )
 
-        price_batch = db.get_prices_batch(symbols)
-        data = _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, period)
+        # Benchmark ETFs are excluded from `symbols`, so add the scanned
+        # ticker back for the rank — a SPY scan should be ranked against the
+        # universe + itself, not pinned to the unranked floor value.
+        rank_symbols = symbols if symbol in symbols else symbols + [symbol]
+        price_batch = db.get_prices_batch(rank_symbols)
+        data = _strategies_ticker_data(symbol, df, price_batch, rank_symbols, strategy_id, period)
         if data is None:
             return render_template(
                 'strategies.html',

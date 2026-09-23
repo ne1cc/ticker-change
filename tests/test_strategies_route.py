@@ -23,6 +23,7 @@ import os
 import re
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -38,6 +39,7 @@ os.close(_warmer_fd)
 db.DB_PATH = _WARMER_DB_PATH
 db.init_db()
 
+import app as app_module  # noqa: E402  (module itself, vs the Flask object below)
 from app import (  # noqa: E402  (must follow the DB_PATH setup above)
     app as flask_app,
     _strategies_ticker_data,
@@ -137,6 +139,19 @@ class TestStrategiesRoute(unittest.TestCase):
         self.client = flask_app.test_client()
         self.client.testing = True
 
+        # Keep the suite offline: the ticker tab now reads through
+        # get_or_fetch_prices, so without this a cache miss or stale symbol
+        # would hit yfinance. Returning None exercises the stale-while-error
+        # fallback (seeded rows are served); the auto-download test patches
+        # the fetcher per-test with a successful response instead.
+        fetch_patcher = mock.patch.object(
+            app_module, "_fetch_yfinance_with_retry", return_value=None
+        )
+        fetch_patcher.start()
+        self.addCleanup(fetch_patcher.stop)
+        app_module._PRICE_MEMO.clear()
+        self.addCleanup(app_module._PRICE_MEMO.clear)
+
     def tearDown(self):
         try:
             os.remove(self.temp_db_path)
@@ -190,9 +205,71 @@ class TestStrategiesRoute(unittest.TestCase):
     # -- 4. error paths render, don't raise --------------------------------
 
     def test_ticker_not_in_cached_universe_renders_error(self):
+        """A symbol with no cached rows AND a failed download renders the
+        error page rather than raising."""
         resp = self.client.get("/strategies?tab=ticker&symbol=NOTREAL")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn(b"is not currently cached in the database", resp.data)
+        self.assertIn(b"is not cached and automatic download failed", resp.data)
+
+    def test_uncached_ticker_auto_downloads_history(self):
+        """Scanning a ticker with no cached rows downloads its history from
+        yfinance and stores it, instead of failing with the cache error."""
+        idx = pd.bdate_range(end=END_DATE, periods=N_BARS)
+        closes = pd.Series(_drift_series(0.20, 0.05, seed=77), index=idx)
+        fetched = pd.DataFrame({
+            "Open": closes, "High": closes, "Low": closes,
+            "Close": closes, "Volume": 1_000_000,
+        })
+        with mock.patch.object(
+            app_module, "_fetch_yfinance_with_retry", return_value=fetched
+        ):
+            resp = self.client.get("/strategies?tab=ticker&symbol=NEW1")
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn(b"Scan Failed", resp.data)
+        self.assertIn(b"NEW1", resp.data)
+        # The download is persisted, so later scans/score runs see it.
+        stored = db.get_prices("NEW1")
+        self.assertIsNotNone(stored)
+        min_bars = momentum_engine.MOMENTUM_LOOKBACK + momentum_engine.MOMENTUM_EXCLUDE
+        self.assertGreaterEqual(len(stored), min_bars)
+
+    def test_benchmark_etf_scan_succeeds_with_genuine_rank(self):
+        """SPY is excluded from the cached universe list (benchmark ETF), so
+        the old available_symbols membership check rejected it even when its
+        history was cached. A direct scan must serve the cached rows and rank
+        it against the universe + itself."""
+        resp = self.client.get("/strategies?tab=ticker&symbol=SPY")
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn(b"Scan Failed", resp.data)
+        m = re.search(rb"Rank #(\d+) of (\d+)", resp.data)
+        self.assertIsNotNone(m, "expected the header badge to carry a universe rank")
+        self.assertEqual(int(m.group(2)), len(STOCK_SYMBOLS) + 1)
+
+    def test_benchmark_only_cache_still_scans(self):
+        """A cache holding only benchmark ETFs yields an EMPTY universe list
+        (benchmarks are filtered out); the old empty-cache guard rejected any
+        request before the ticker tab could run. A direct SPY scan against
+        such a cache must still render with itself as the whole ranking."""
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        orig_db_path = db.DB_PATH
+        db.DB_PATH = path
+        db.init_db()
+
+        def _restore():
+            db.DB_PATH = orig_db_path
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+        self.addCleanup(_restore)
+        self._seed(self.dates, {"SPY": _drift_series(0.08, 0.10, seed=100)})
+
+        resp = self.client.get("/strategies?tab=ticker&symbol=SPY")
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn(b"Scan Failed", resp.data)
+        self.assertIn(b"Rank #1 of 1", resp.data)
 
     def test_ticker_with_insufficient_history_renders_error(self):
         resp = self.client.get("/strategies?tab=ticker&symbol=SHORT1")
