@@ -570,9 +570,9 @@
               <tr>
                 <td class="excel-row-header">1</td>
                 <td class="excel-cell-label">Sector</td>
-                <td class="excel-cell-val excel-blue-input font-sans text-xs" style="font-family: inherit !important;">{{ data.valuation.get('Sector') if data.valuation else 'N/A' }}</td>
+                <td class="excel-cell-val excel-blue-input font-sans text-xs" style="font-family: inherit !important;">{{ (data.valuation.get('Sector') or 'N/A') if data.valuation else 'N/A' }}</td>
                 <td class="excel-cell-label">Industry</td>
-                <td class="excel-cell-val excel-blue-input font-sans text-xs" style="font-family: inherit !important;" title="{{ data.valuation.get('Industry') }}">{{ data.valuation.get('Industry') if data.valuation else 'N/A' }}</td>
+                <td class="excel-cell-val excel-blue-input font-sans text-xs" style="font-family: inherit !important;" title="{{ data.valuation.get('Industry') or '' }}">{{ (data.valuation.get('Industry') or 'N/A') if data.valuation else 'N/A' }}</td>
                 <td class="excel-cell-label">P/E (TTM)</td>
                 <td class="excel-cell-val excel-blue-input">{{ PE if PE else 'N/A' }}</td>
               </tr>
@@ -592,7 +592,8 @@
                 <td class="excel-cell-label">Short % Float</td>
                 <td class="excel-cell-val excel-red-risk">{{ short_float if short_float else 'N/A' }}</td>
                 <td class="excel-cell-label">Consensus Reco</td>
-                <td class="excel-cell-val excel-black-calc font-sans" style="font-family: inherit !important;">{{ data.recommendations.period if data.recommendations else 'N/A' }}</td>
+                {% set reco_label = (data.recommendations.period if data.recommendations else (data.valuation.get('Consensus Rating') if data.valuation else None)) or 'N/A' %}
+                <td class="excel-cell-val excel-black-calc font-sans" style="font-family: inherit !important;">{{ reco_label }}</td>
                 <td class="excel-cell-label">Consensus Buy/Hold/Sell</td>
                 <td class="excel-cell-val excel-black-calc font-sans" style="font-family: inherit !important;">
                   {% if data.recommendations %}
