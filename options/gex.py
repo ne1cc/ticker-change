@@ -15,8 +15,11 @@ CONTRACT_MULTIPLIER = 100.0
 def clean_chain(df: pd.DataFrame) -> pd.DataFrame:
     """Defensively filter and cast an options chain DataFrame.
 
-    Filters out zero-bid and unquoted strikes where IV is uninformative or corrupts net GEX.
+    Filters out unquoted strikes where IV is uninformative or corrupts net GEX.
     Retains 0DTE strikes with zero open interest if volume > 0 (OCC OI is published overnight).
+    Prefers rows with a live bid; when those are a small fraction of the chain
+    (e.g. after-hours zero-bid quotes), keeps every row with valid IV plus
+    open interest or volume instead of collapsing the strike ladder.
     """
     if df is None or df.empty:
         raise ValueError("Options chain is empty or None")
@@ -38,7 +41,7 @@ def clean_chain(df: pd.DataFrame) -> pd.DataFrame:
             out[col] = 0.0
 
     # Defensive filtering
-    valid = out[
+    quoted = out[
         out["cp"].isin(["C", "P"])
         & (out["strike"] > 0)
         & (out["dte"] >= 0)
@@ -47,15 +50,23 @@ def clean_chain(df: pd.DataFrame) -> pd.DataFrame:
         & ((out["open_interest"] > 0) | (out["volume"] > 0))
     ].copy()
 
-    if valid.empty:
-        # Fallback: if bid filter removed everything (e.g. illiquid after-hours quotes), allow non-zero IV and OI
-        valid = out[
-            out["cp"].isin(["C", "P"])
-            & (out["strike"] > 0)
-            & (out["dte"] >= 0)
-            & (out["iv"].between(0.001, 5.0))
-            & ((out["open_interest"] > 0) | (out["volume"] > 0))
-        ].copy()
+    # Fallback: after hours (or on sources that omit quotes) nearly every row
+    # has bid=0, so the bid filter can collapse a full chain to a handful of
+    # strikes. Prefer the quoted subset, but fall back to dropping only the
+    # bid condition whenever that subset is a small fraction of what is
+    # otherwise usable.
+    usable = out[
+        out["cp"].isin(["C", "P"])
+        & (out["strike"] > 0)
+        & (out["dte"] >= 0)
+        & (out["iv"].between(0.001, 5.0))
+        & ((out["open_interest"] > 0) | (out["volume"] > 0))
+    ].copy()
+
+    if quoted.empty or len(quoted) * 4 < len(usable):
+        valid = usable
+    else:
+        valid = quoted
 
     if valid.empty:
         raise ValueError("Chain has no tradable rows after defensive cleaning")
@@ -64,11 +75,12 @@ def clean_chain(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _hedge_weight(df: pd.DataFrame) -> np.ndarray:
-    """0DTE volume-weighted fallback for overnight lagged OCC open interest."""
-    dtes = df["dte"].to_numpy()
+    """Hedge-weighting: OCC open interest, backfilled by volume where the
+    source omits OI (0DTE contracts publish OI overnight; some payloads omit
+    it entirely, which would otherwise zero out the whole GEX profile)."""
     volumes = df["volume"].to_numpy()
     ois = df["open_interest"].to_numpy()
-    return np.where(dtes == 0, np.maximum(volumes, ois), ois).astype(np.float64)
+    return np.maximum(volumes, ois).astype(np.float64)
 
 
 def _dealer_sign(df: pd.DataFrame, convention: Convention, spot: float) -> np.ndarray:
