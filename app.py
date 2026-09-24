@@ -16,6 +16,7 @@ import threading
 import math
 import os
 import hmac
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from db import init_db, is_fresh, get_prices, store_prices
 import db
@@ -1688,7 +1689,27 @@ def get_price_target_chart(ticker: str, current_price: float) -> str | None:
         return None
 
 
-def compute_analytics(ticker: str) -> dict | None:
+def _guard_section(label, fn, default=None):
+    """Run one analytics attachment; on failure log and return default so one
+    broken section never takes down the whole page."""
+    try:
+        return fn()
+    except Exception:
+        print(f"[analytics:{label}] section failed:")
+        traceback.print_exc()
+        return default
+
+
+def compute_analytics(ticker):
+    try:
+        return _compute_analytics_impl(ticker)
+    except Exception:
+        print(f"[analytics] {ticker}: compute failed:")
+        traceback.print_exc()
+        return None
+
+
+def _compute_analytics_impl(ticker: str) -> dict | None:
     """Compute all analytics metrics from cached DB prices."""
     df = get_or_fetch_prices(ticker)
     if df is None or len(df) < 2:
@@ -2095,33 +2116,41 @@ def analytics_page():
                                error=f"Could not retrieve data for {ticker}")
 
     # Attach fundamentals
-    data['fundamentals'] = get_fundamentals(ticker)
+    data['fundamentals'] = _guard_section(
+        "fundamentals", lambda: get_fundamentals(ticker))
 
     # Attach options smile
-    data['charts']['options_smile'] = get_options_smile(ticker, data['current_price'])
+    data['charts']['options_smile'] = _guard_section(
+        "options_smile",
+        lambda: get_options_smile(ticker, data['current_price']))
 
     # Attach dealer Gamma Exposure (GEX) profile
-    gex = get_gex_profile(ticker, data['current_price'])
+    gex = _guard_section("gex", lambda: get_gex_profile(ticker, data['current_price']))
     data['charts']['gex'] = gex['chart'] if gex else None
     data['gex'] = gex['stats'] if gex else None
 
     trade_type = request.args.get('trade_type', 'long_stock')
     if trade_type not in decide.TRADE_TYPES:
         trade_type = 'long_stock'
-    data['checklist'] = decide.build_checklist(ticker, data, trade_type)
+    data['checklist'] = _guard_section(
+        "checklist", lambda: decide.build_checklist(ticker, data, trade_type))
 
     # Attach insider chart (needs price df)
     price_df = get_or_fetch_prices(ticker)
     if price_df is not None:
-        data['charts']['insider'] = get_insider_chart(ticker, price_df)
-        data['insider_summary'] = get_insider_summary(ticker)
-        data['charts']['cumulative_return'] = get_cumulative_return_chart(ticker, price_df)
+        data['charts']['insider'] = _guard_section(
+            "insider", lambda: get_insider_chart(ticker, price_df))
+        data['insider_summary'] = _guard_section(
+            "insider_summary", lambda: get_insider_summary(ticker))
+        data['charts']['cumulative_return'] = _guard_section(
+            "cumulative_return", lambda: get_cumulative_return_chart(ticker, price_df))
 
     # Attach analyst price target
-    data['charts']['price_target'] = get_price_target_chart(ticker, data['current_price'])
+    data['charts']['price_target'] = _guard_section(
+        "price_target", lambda: get_price_target_chart(ticker, data['current_price']))
 
     # Machine-learning Buy/Hold/Sell signal (None until a model is trained)
-    data['ml'] = ml.predict(ticker)
+    data['ml'] = _guard_section("ml", lambda: ml.predict(ticker))
 
     # Attach Institutional Analytics Suite (Microstructure, Macro Conditioning, Higher-Order Greeks, 8-K + Event Study)
     try:
@@ -2686,6 +2715,15 @@ _relative_stats = momentum_engine.relative_stats
 
 
 def compute_momentum(ticker: str) -> dict:
+    try:
+        return _compute_momentum_impl(ticker)
+    except Exception:
+        print(f"[momentum] {ticker}: compute failed:")
+        traceback.print_exc()
+        return {}
+
+
+def _compute_momentum_impl(ticker: str) -> dict:
     """Compute momentum scores and backtest statistics for a ticker."""
     symbol = ticker.upper()
     df = db.get_prices(symbol)
@@ -3800,7 +3838,8 @@ def ai_summary_page():
                                error=f"Could not retrieve data for {ticker}")
 
     # Gather fundamentals & positioning
-    positioning_data = compute_positioning(ticker)
+    positioning_data = _guard_section(
+        "positioning", lambda: compute_positioning(ticker), default={})
     fundamentals = get_fundamentals(ticker) or {}
 
     # Merge finnhub metrics (list of dicts) and yfinance fundamentals into a single dict
@@ -3842,7 +3881,8 @@ def ai_summary_page():
         valuation_dict['Consensus Rating'] = str(rating).replace('_', ' ').title()
 
     # Gather momentum data
-    momentum_data = compute_momentum(ticker)
+    momentum_data = _guard_section(
+        "momentum", lambda: compute_momentum(ticker), default={})
 
     # Gather ML signal
     ml_signal = ml.predict(ticker)
