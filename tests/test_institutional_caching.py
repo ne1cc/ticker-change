@@ -1,5 +1,6 @@
 """Verify /api/institutional caches its (expensive) backtest+permutation
 computation instead of recomputing on every request."""
+import os
 import unittest
 from unittest.mock import patch
 
@@ -49,10 +50,15 @@ class TestInstitutionalCaching(unittest.TestCase):
             return real_run(*args, **kwargs)
 
         client = app.test_client()
-        with patch("backtest_engine.run_signals_backtest", side_effect=counting_run):
-            resp1 = client.get("/api/institutional/AAPL")
+        with patch.dict(os.environ, {"WARM_CACHE_TOKEN": "test-token"}), \
+             patch("backtest_engine.run_signals_backtest", side_effect=counting_run):
+            resp1 = client.get(
+                "/api/institutional/AAPL",
+                headers={"Authorization": "Bearer test-token"})
             first_count = call_count["n"]
-            resp2 = client.get("/api/institutional/AAPL")
+            resp2 = client.get(
+                "/api/institutional/AAPL",
+                headers={"Authorization": "Bearer test-token"})
             second_count = call_count["n"]
 
         self.assertEqual(resp1.status_code, 200)
@@ -86,11 +92,52 @@ class TestInstitutionalCaching(unittest.TestCase):
             _INSTITUTIONAL_CACHE_PROVIDER, "AAPL", {"signals_backtest": {"stale": True}}
         )
 
-        resp = app.test_client().get("/api/institutional/AAPL")
+        with patch.dict(os.environ, {"WARM_CACHE_TOKEN": "test-token"}):
+            resp = app.test_client().get(
+                "/api/institutional/AAPL",
+                headers={"Authorization": "Bearer test-token"})
         self.assertEqual(resp.status_code, 200)
         body = resp.get_json()
         self.assertIn("permutation_test", body)
         self.assertNotIn("stale", body["signals_backtest"])
+
+
+class TestInstitutionalAuth(unittest.TestCase):
+    """P0: /api/institutional triggers seconds of CPU per cold ticker; it must
+    not be an unauthenticated amplification endpoint."""
+
+    def setUp(self):
+        import db
+        db.init_db()
+
+    def _client(self):
+        from app import app
+        return app.test_client()
+
+    def test_disabled_when_no_token_configured(self):
+        from app import app
+        env = {k: v for k, v in os.environ.items() if k != "WARM_CACHE_TOKEN"}
+        with patch.dict(os.environ, env, clear=True):
+            os.environ["WARM_CACHE_TOKEN"] = ""
+            resp = self._client().get("/api/institutional/AAPL")
+        self.assertEqual(resp.status_code, 503)
+        self.assertIn("error", resp.get_json())
+
+    def test_wrong_token_401(self):
+        from app import app
+        with patch.dict(os.environ, {"WARM_CACHE_TOKEN": "test-token"}):
+            resp = self._client().get("/api/institutional/AAPL")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_correct_token_passes_gate(self):
+        import app as app_module
+        with patch.dict(os.environ, {"WARM_CACHE_TOKEN": "test-token"}), \
+             patch.object(app_module, "_institutional_backtest",
+                          return_value={"signals_backtest": {}, "permutation_test": {}}):
+            resp = self._client().get(
+                "/api/institutional/AAPL",
+                headers={"Authorization": "Bearer test-token"})
+        self.assertEqual(resp.status_code, 200)
 
 
 if __name__ == "__main__":

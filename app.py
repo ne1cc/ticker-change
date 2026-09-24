@@ -4083,7 +4083,7 @@ def api_corporate_actions(ticker):
 _INSTITUTIONAL_CACHE_PROVIDER = "institutional_backtest_v1"
 _INSTITUTIONAL_CACHE_KEYS = ("signals_backtest", "permutation_test")
 _INSTITUTIONAL_LOCK_TTL_HOURS = 0.02  # ~72s; longer than one cold computation
-_INSTITUTIONAL_LOCK_WAIT_S = 20.0
+_INSTITUTIONAL_LOCK_WAIT_S = 3.0
 
 
 def _institutional_backtest(ticker, stock_df):
@@ -4133,9 +4133,21 @@ def _institutional_backtest(ticker, stock_df):
     return payload
 
 
+def _institutional_authorized():
+    expected = os.environ.get("WARM_CACHE_TOKEN", "").strip()
+    if not expected:
+        return False
+    header = request.headers.get("Authorization", "")
+    return header.startswith("Bearer ") and hmac.compare_digest(header[len("Bearer "):], expected)
+
+
 @app.route('/api/institutional/<ticker>')
 def api_institutional(ticker):
     """Institutional quantitative analytics suite: Microstructure, Macro, CAR, and Greeks."""
+    if not _institutional_authorized():
+        if not os.environ.get("WARM_CACHE_TOKEN", "").strip():
+            return jsonify({"error": "institutional endpoint disabled: WARM_CACHE_TOKEN not configured"}), 503
+        return jsonify({"error": "unauthorized"}), 401
     ticker = ticker.upper()
     stock_df = get_or_fetch_prices(ticker, period="2y")
     spy_df = get_or_fetch_prices("SPY", period="2y")
