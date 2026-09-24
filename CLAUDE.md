@@ -59,9 +59,10 @@ multi-writer story here.
 Routes, page data-assembly functions, chart generation (Plotly), GEX/dealer
 positioning math, and page orchestration live in `app.py`. Each page route has
 a `get_*`/`compute_*` builder that assembles a data dict passed straight to
-the Jinja template; most pages also have a JSON twin under `/api/*` returning
-the same data minus embedded chart HTML (`/options` and `/strategies` have no
-JSON twin; `/stock`'s twin omits fundamentals).
+the Jinja template; three pages (`/stock`, `/analytics`, `/positioning`)
+also have a JSON twin under `/api/*` returning the same data minus embedded
+chart HTML (`/options`, `/strategies`, `/live`, and `/ai-summary` have no
+twin; `/stock`'s twin omits fundamentals).
 
 Supporting modules:
 
