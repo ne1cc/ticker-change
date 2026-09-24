@@ -152,6 +152,18 @@
 {% endblock %}
 
 {% block content %}
+{% if not data %}
+<div class="space-y-6">
+  <div class="bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 px-4 py-3 rounded-lg text-sm font-semibold">
+    {{ error or ("No options data available for " ~ ticker) }}
+  </div>
+</div>
+{% else %}
+{{ self.options_body() }}
+{% endif %}
+{% endblock %}
+
+{% block options_body %}
 <div class="space-y-6">
 
   <!-- Breadcrumbs & Header -->

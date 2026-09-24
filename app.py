@@ -2666,7 +2666,11 @@ def options_page():
 
     current_price = get_current_price_yfinance(ticker)
     if not current_price:
-        current_price = _spot_price(ticker, _get_yf_ticker(ticker)) or 100.0
+        current_price = _spot_price(ticker, _get_yf_ticker(ticker))
+    if not current_price:
+        return render_template(
+            'options.html', ticker=ticker, data=None,
+            error=f"Could not determine a current price for {ticker}. Options analytics are unavailable right now.")
 
     stock = _get_yf_ticker(ticker)
     chains_df = get_full_option_chain_df(ticker, stock=stock, current_price=current_price)
@@ -3786,7 +3790,9 @@ def api_options_terminal(ticker):
 
     current_price = get_current_price_yfinance(ticker)
     if not current_price:
-        current_price = _spot_price(ticker, _get_yf_ticker(ticker)) or 100.0
+        current_price = _spot_price(ticker, _get_yf_ticker(ticker))
+    if not current_price:
+        return jsonify({"error": f"No price data available for {ticker}; options terminal unavailable"}), 503
 
     stock = _get_yf_ticker(ticker)
     chains_df = get_full_option_chain_df(ticker, stock=stock, current_price=current_price)
@@ -3994,9 +4000,11 @@ def _warm_options_cache(force=False):
                     try:
                         chain_df = get_full_option_chain_df(sym, stock=stock)
                         daily_df = get_or_fetch_prices(sym)
-                        spot = _spot_price(sym, stock) or 100.0
-                        if not chain_df.empty:
+                        spot = _spot_price(sym, stock)
+                        if not chain_df.empty and spot:
                             compute_options_terminal(sym, spot, chain_df, daily_df, record_db=True)
+                        elif not spot:
+                            print(f"[options-cache] {sym}: no spot, skipping IV snapshot")
                     except Exception as snap_err:
                         print(f"[options-cache] snapshot error for {sym}: {snap_err}")
                 except Exception as e:
