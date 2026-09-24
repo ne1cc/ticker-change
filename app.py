@@ -2665,11 +2665,10 @@ def live_page():
 
 @app.route('/api/config')
 def api_config():
-    key = providers.active_finnhub_key()
-    return jsonify({
-        "finnhub_key": key,
-        "has_finnhub": bool(key),
-    })
+    # P0 fix: the raw key used to be served here for the browser-direct
+    # Finnhub websocket; any origin could read it via the open CORS policy.
+    # Only the boolean ships now -- server-side streaming proxy comes later.
+    return jsonify({"has_finnhub": bool(providers.active_finnhub_key())})
 
 
 # Benchmark / index ETFs — used as comparison series, never ranked as alpha names.
@@ -3337,6 +3336,13 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
     }
 
 
+def _safe_float(raw, default):
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 @app.route('/strategies')
 @app.route('/momentum')
 def strategies_page():
@@ -3432,9 +3438,9 @@ def strategies_page():
 
     if tab == 'screener':
         filters = {
-            "min_mom": float(request.args.get('min_mom', '0.0')),
-            "max_vol": float(request.args.get('max_vol', '60.0')),
-            "min_risk_adj": float(request.args.get('min_risk_adj', '0.5')),
+            "min_mom": _safe_float(request.args.get('min_mom'), 0.0),
+            "max_vol": _safe_float(request.args.get('max_vol'), 60.0),
+            "min_risk_adj": _safe_float(request.args.get('min_risk_adj'), 0.5),
             "trend_filter": request.args.get('trend', 'bullish'),
             "abs_only": request.args.get('abs_only', '') == '1',
         }
@@ -3902,7 +3908,7 @@ def raw_sec_filings_api(ticker):
         return jsonify(filings or [])
     except Exception as e:
         print(f"Error fetching raw SEC filings: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "SEC filings temporarily unavailable"}), 502
 
 
 # --- Automatic EOD options chain cache warmer ---

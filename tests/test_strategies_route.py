@@ -306,6 +306,12 @@ class TestStrategiesRoute(unittest.TestCase):
         self.assertGreater(count_on, 0)
         self.assertLess(count_on, count_off)
 
+    def test_screener_non_numeric_filters_do_not_500(self):
+        self.client.get("/strategies?tab=screener&min_mom=abc&max_vol=xyz&min_risk_adj=1.5e999")
+        # assert on the LAST response
+        resp = self.client.get("/strategies?tab=screener&min_mom=abc&max_vol=xyz")
+        self.assertEqual(resp.status_code, 200)
+
     # -- 6. dual_momentum exposes a real passes_absolute split -------------
 
     def test_dual_momentum_universe_leaderboard_has_real_pass_fail_split(self):
