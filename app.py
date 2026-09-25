@@ -35,6 +35,7 @@ import backtest_engine
 import api_docs
 import decide
 import momentum_engine
+import heatmap
 from glossary import GLOSSARY
 
 def _get_yf_ticker(symbol: str) -> yf.Ticker:
@@ -2663,6 +2664,40 @@ def live_page():
     return render_template('live.html', ticker=ticker)
 
 
+@app.route('/heatmap')
+def heatmap_page():
+    """S&P 500 sector treemap. Reads only cached data -- never fetches, so a
+    first-ever load renders instantly with partial coverage and fills in as
+    the background warmer downloads history."""
+    data = heatmap.get_heatmap_payload()
+    chart = None
+    if data:
+        chart = heatmap.render_treemap(data, dark=request.cookies.get('ui_mode') == 'dark')
+    return render_template('heatmap.html', data=data, heatmap_chart=chart)
+
+
+@app.route('/api/heatmap')
+def heatmap_api():
+    """JSON twin of the heatmap page (same payload, no chart HTML).
+
+    Returns a 200 with `status: "warming"` while the universe is still
+    downloading, so the page's poll loop can watch coverage grow."""
+    data = heatmap.get_heatmap_payload()
+    if data is None:
+        return jsonify({
+            "status": "warming",
+            "tiles": [],
+            "sectors": [],
+            "coverage": 0,
+            "universe": 0,
+            "advancers": 0,
+            "decliners": 0,
+            "unchanged": 0,
+            "as_of": None,
+        })
+    return jsonify({**data, "status": "ok"})
+
+
 @app.route('/api/config')
 def api_config():
     key = providers.active_finnhub_key()
@@ -3976,6 +4011,50 @@ def _start_options_cache_warmer():
     threading.Thread(target=_recurring, daemon=True, name="options-cache-recurring").start()
 
 
+def _warm_heatmap():
+    """Background-refresh the whole S&P 500 universe into daily_prices.
+
+    Mirrors _warm_options_cache: background thread, cross-worker lock, never
+    raises. The /heatmap request path itself only ever reads SQLite, so the
+    10-30s bulk download never lands on a page load.
+    """
+    def _worker():
+        try:
+            if not db.try_claim_lock("heatmap_warmer_lock", ttl_hours=1.0):
+                return
+            constituents = heatmap.get_constituents()
+            symbols = [c["symbol"] for c in constituents]
+            if not symbols:
+                return
+            print(f"[heatmap] warming {len(symbols)} S&P 500 tickers ...")
+            result = heatmap.refresh_universe(symbols)
+            print(f"[heatmap] done ({result['fetched']} fetched, "
+                  f"{len(result['failed'])} failed)")
+            if result["fetched"]:
+                heatmap.invalidate_payload()
+        except Exception as e:
+            print(f"[heatmap] warmer error: {e}")
+
+    threading.Thread(target=_worker, daemon=True, name="heatmap-warmer").start()
+
+
+def _start_heatmap_warmer():
+    """Warm once now, then every 45 minutes (just inside the 1h price
+    freshness window, so the map stays a session behind at worst). Import-time
+    call, like the options warmer; the test suite sets HEATMAP_WARM_ON_BOOT=0
+    to keep pytest offline."""
+    if os.environ.get("HEATMAP_WARM_ON_BOOT", "1") != "1":
+        return
+    _warm_heatmap()
+
+    def _recurring():
+        while True:
+            time.sleep(45 * 60)
+            _warm_heatmap()
+
+    threading.Thread(target=_recurring, daemon=True, name="heatmap-recurring").start()
+
+
 @app.route('/api/warm-cache', methods=['POST'])
 def api_warm_cache():
     """Trigger a forced EOD options-chain warm (see .github/workflows/warm-cache.yml).
@@ -4154,6 +4233,7 @@ def api_active_tickers():
 # this is what activates the warmer in production (each worker starts the
 # threads; the api_cache lock makes only one actually fetch).
 _start_options_cache_warmer()
+_start_heatmap_warmer()
 
 
 if __name__ == '__main__':

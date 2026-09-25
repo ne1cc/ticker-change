@@ -52,6 +52,51 @@ def _parse_tickers_csv(csv_text: str) -> list[str]:
     return sorted(set(tickers))
 
 
+def _parse_constituents_csv(csv_text: str) -> list[dict]:
+    """Full constituent rows ({symbol, name, sector}) from the raw CSV.
+
+    Same yfinance symbol normalisation as `_parse_tickers_csv` ('.' -> '-');
+    a missing/blank sector falls back to "Other" so heatmap grouping never
+    drops a name. Column names have fallbacks in case the source renames
+    them again.
+    """
+    reader = csv.DictReader(io.StringIO(csv_text))
+    rows = []
+    for row in reader:
+        symbol = (row.get("Symbol") or "").strip().replace(".", "-")
+        if not symbol:
+            continue
+        rows.append({
+            "symbol": symbol,
+            "name": (row.get("Security") or row.get("Name") or "").strip(),
+            "sector": (row.get("GICS Sector") or row.get("Sector") or "").strip() or "Other",
+        })
+    return rows
+
+
+def fetch_sp500_constituents() -> list[dict]:
+    """Return the S&P 500 as [{symbol, name, sector}], yfinance-normalised.
+
+    Raises RuntimeError on fetch/parse failure, same contract as
+    `fetch_sp500_tickers`.
+    """
+    try:
+        resp = requests.get(_SP500_CSV_URL, timeout=15)
+        resp.raise_for_status()
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not fetch the S&P 500 list from {_SP500_CSV_URL}: {e}."
+        ) from e
+
+    rows = _parse_constituents_csv(resp.text)
+    if len(rows) < 400:
+        raise RuntimeError(
+            f"Fetched an implausibly short S&P 500 list ({len(rows)} "
+            "rows) -- the source's CSV format may have changed."
+        )
+    return rows
+
+
 def fetch_sp500_tickers() -> list[str]:
     """Return the current S&P 500 constituent tickers, yfinance-normalised.
 

@@ -40,6 +40,7 @@ class TestNavigation(unittest.TestCase):
             "/analytics",
             "/positioning",
             "/live",
+            "/heatmap",
             "/momentum",
             "/strategies",
             "/ai-summary",
@@ -142,6 +143,7 @@ class TestNavigation(unittest.TestCase):
             'id="sub-nav-search-input"',
             'id="sub-link-stock"',
             'id="sub-link-live"',
+            'id="sub-link-heatmap"',
             'id="sub-link-analytics"',
             'id="sub-link-positioning"',
             'id="sub-link-strategies"',
@@ -161,6 +163,14 @@ class TestNavigation(unittest.TestCase):
         self.assertNotIn('id="sub-link-options"', html)
         self.assertNotIn('id="sub-link-chain"', html)
 
+        # Markets ordering: Heatmap sits to the right of Live Microstructure.
+        pos_live = html.find('id="sub-link-live"')
+        pos_heatmap = html.find('id="sub-link-heatmap"')
+        self.assertTrue(
+            0 <= pos_live < pos_heatmap,
+            "sub-link-heatmap should render after sub-link-live in the Markets group",
+        )
+
     def test_mobile_navigation_links_present(self):
         """Verify that mobile navigation drawer contains all core view links organized by pillar."""
         resp = self.client.get("/glossary")
@@ -170,6 +180,7 @@ class TestNavigation(unittest.TestCase):
         expected_mobile_ids = [
             'id="mobile-nav-stock"',
             'id="mobile-nav-live"',
+            'id="mobile-nav-heatmap"',
             'id="mobile-nav-options"',
             'id="mobile-nav-analytics"',
             'id="mobile-nav-positioning"',
@@ -212,9 +223,21 @@ class TestNavigation(unittest.TestCase):
         self.assertIn('id="nav-markets"', html, "Missing id='nav-markets' in /stock response")
         self.assertIn('id="sub-link-stock"', html, "Missing sub-link-stock in /stock response")
         self.assertIn('id="sub-link-live"', html, "Missing sub-link-live in /stock response")
+        self.assertIn('id="sub-link-heatmap"', html, "Missing sub-link-heatmap in /stock response")
         self.assertIn('id="sub-nav-ticker"', html, "Missing sub-nav-ticker in /stock response")
         self.assertIn('id="sub-nav-search-input"', html, "Missing sub-nav-search-input in /stock response")
         self.assertIn("AAPL", html, "Ticker AAPL not rendered in /stock response")
+
+    def test_heatmap_view_renders_markets_nav(self):
+        """Verify that /heatmap renders proper Markets structure and its nav pill."""
+        resp = self.client.get("/heatmap")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+
+        self.assertIn('id="nav-markets"', html, "Missing id='nav-markets' in /heatmap response")
+        self.assertIn('id="sub-link-heatmap"', html, "Missing sub-link-heatmap in /heatmap response")
+        self.assertIn('id="mobile-nav-heatmap"', html, "Missing mobile-nav-heatmap in /heatmap response")
+        self.assertIn('id="sub-nav-ticker"', html, "Missing sub-nav-ticker in /heatmap response")
 
     def test_excel_mode_stylesheet_rules(self):
         """Verify that excel-mode.css strictly hides .hidden elements in #ticker-sub-nav and styles nav links."""

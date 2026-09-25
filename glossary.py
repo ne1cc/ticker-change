@@ -432,5 +432,18 @@ GLOSSARY: dict[str, dict] = {
         "long": "Event-study methodology (Market Model / CAPM). A stock's 'normal' expected return is estimated from its alpha/beta to SPY over a pre-event estimation window (trading days -120 to -21 before the filing). CAR sums the daily gap between actual and expected return over the event window (-10 to +30 trading days around the filing date) — a large CAR with a t-stat outside roughly ±2 (p<0.05) suggests the market reacted to genuinely new information rather than noise. Needs about 140 trading days of price history before the event and 30 trading days after it to compute; filings newer than that show as pending until enough time has passed.",
         "formula": "CAR = Σ (R_it − (α + β·R_mt)) over the event window",
     },
+    # ----------------------------------------------------------------- Markets
+    "heatmap_coverage": {
+        "term": "Heatmap Coverage",
+        "section": "Markets",
+        "short": "How many S&P 500 constituents have cached price history and appear as tiles on the heatmap.",
+        "long": "The heatmap renders from price history cached in the app's SQLite store, refreshed in the background a few times an hour. While the universe is still downloading, the grid shows the names it already has and fills in automatically — coverage below the full ~503 names means the warm-up is still in flight (or some tickers failed to download).",
+    },
+    "market_breadth": {
+        "term": "Market Breadth (Advancers / Decliners)",
+        "section": "Markets",
+        "short": "How many index constituents closed higher versus lower versus flat on the latest session.",
+        "long": "Breadth reads the market's internal health beyond what a cap-weighted index shows: when a handful of mega-caps lift the index while most constituents fall, advancers/decliners expose the divergence. A heatmap makes the same point visually — breadth is its numeric summary.",
+    },
 }
 

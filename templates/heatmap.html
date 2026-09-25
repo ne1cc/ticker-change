@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% from "_macros.html" import metric %}
+{% block title %}S&P 500 Heatmap{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Header: title, as-of, breadth, legend -->
+  <section class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 sm:p-5 shadow-sm">
+    <div class="flex flex-wrap items-baseline justify-between gap-3">
+      <div class="flex items-baseline gap-3">
+        <h1 class="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">S&amp;P 500 Heatmap</h1>
+        <span class="text-xs text-zinc-400 font-medium">
+          {% if data %}as of {{ data.as_of }}{% else %}warming up{% endif %}
+        </span>
+      </div>
+      <div class="flex items-center gap-2 text-[10px] font-mono text-zinc-500 dark:text-zinc-400">
+        <span>−3%</span>
+        <div class="h-2 w-32 sm:w-44 rounded-full" style="background: linear-gradient(90deg, #7a0c22, #d9534f, #b0b0b6, #3f9d63, #0b6e4f);"></div>
+        <span>+3%</span>
+      </div>
+    </div>
+
+    <div class="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-xs font-mono">
+      <span class="text-zinc-500 dark:text-zinc-400">
+        {{ metric('Coverage', 'heatmap_coverage') }}
+        <span class="text-zinc-900 dark:text-zinc-100 font-semibold">{{ data.coverage if data else 0 }} / {{ data.universe if data else '—' }}</span>
+      </span>
+      <span class="text-zinc-500 dark:text-zinc-400">
+        {{ metric('Advancers', 'market_breadth') }}
+        <span class="text-emerald-600 font-semibold">{{ data.advancers if data else 0 }}</span>
+      </span>
+      <span class="text-zinc-500 dark:text-zinc-400">
+        {{ metric('Decliners', 'market_breadth') }}
+        <span class="text-red-500 font-semibold">{{ data.decliners if data else 0 }}</span>
+      </span>
+      <span class="text-zinc-500 dark:text-zinc-400">
+        {{ metric('Unchanged', 'market_breadth') }}
+        <span class="text-zinc-900 dark:text-zinc-100 font-semibold">{{ data.unchanged if data else 0 }}</span>
+      </span>
+    </div>
+  </section>
+
+  <!-- Treemap -->
+  {% if heatmap_chart %}
+  <section class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-2 sm:p-3 shadow-sm">
+    {{ heatmap_chart | safe }}
+  </section>
+  {% endif %}
+
+  <!-- Warming banner: shown until the universe is (nearly) complete -->
+  {% set cov = data.coverage if data else 0 %}
+  {% set uni = data.universe if data and data.universe else 503 %}
+  {% if not data or cov < uni * 0.9 %}
+  <div id="heatmap-warming" class="rounded-xl border border-dashed border-amber-500/40 bg-amber-500/5 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+    <p class="text-xs text-zinc-600 dark:text-zinc-300">
+      Warming the S&amp;P 500 universe — <span class="font-mono font-semibold">{{ cov }} of {{ uni }}</span> tickers loaded.
+      The grid fills in as price history downloads in the background; this page reloads automatically.
+    </p>
+    <button id="heatmap-refresh-btn" class="px-3 py-1.5 text-xs font-semibold rounded-lg border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:border-amber-500 hover:text-amber-600 dark:hover:text-amber-400 transition-colors">
+      Refresh now
+    </button>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Poll while the universe is warming; reload once coverage is (nearly) complete.
+  (function () {
+    const banner = document.getElementById('heatmap-warming');
+    if (!banner) return;
+
+    let stopped = false;
+    async function poll() {
+      if (stopped) return;
+      try {
+        const res = await fetch('/api/heatmap');
+        const d = await res.json();
+        if (d && d.universe && d.coverage >= d.universe * 0.9) {
+          stopped = true;
+          window.location.reload();
+        }
+      } catch (err) { /* transient — try again next tick */ }
+    }
+
+    const timer = setInterval(poll, 60000);
+    const btn = document.getElementById('heatmap-refresh-btn');
+    if (btn) btn.addEventListener('click', function () {
+      stopped = true;
+      clearInterval(timer);
+      window.location.reload();
+    });
+  })();
+
+  // Tile click → deep-link into the ticker page. Sector rows carry an empty
+  // customdata[1], so only leaf tiles navigate.
+  (function () {
+    const el = document.getElementById('heatmap-treemap');
+    if (!el || !el.on) return;
+    el.on('plotly_click', function (ev) {
+      const point = ev && ev.points && ev.points[0];
+      const symbol = point && point.customdata && point.customdata[1];
+      if (symbol) {
+        window.location.href = '/stock?ticker=' + encodeURIComponent(symbol);
+      }
+    });
+  })();
+</script>
+{% endblock %}

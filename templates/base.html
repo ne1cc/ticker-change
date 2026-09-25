@@ -290,6 +290,7 @@
             <div class="grid grid-cols-2 gap-1.5">
               <a id="mobile-nav-stock" href="/stock" class="mobile-nav-link">Price Table</a>
               <a id="mobile-nav-live" href="/live" class="mobile-nav-link">Live Microstructure</a>
+              <a id="mobile-nav-heatmap" href="/heatmap" class="mobile-nav-link">Heatmap</a>
             </div>
           </div>
           <div>
@@ -339,6 +340,7 @@
         <div id="sub-nav-links-container" class="mobile-horizontal-scroll order-3 w-full lg:order-none lg:w-auto flex items-center gap-1 sm:gap-2">
           <a id="sub-link-stock" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Price Table</a>
           <a id="sub-link-live" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Live Microstructure</a>
+          <a id="sub-link-heatmap" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Heatmap</a>
           <a id="sub-link-analytics" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Risk Analytics</a>
           <a id="sub-link-positioning" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Market Positioning</a>
           <a id="sub-link-strategies" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Strategy Backtests</a>
@@ -448,7 +450,7 @@
       // Navigation state, active indicators, and ticker persistence
       (function () {
         const PILLARS = {
-          markets:    { id: 'nav-markets', defaultRoute: '/stock', children: ['stock', 'live'] },
+          markets:    { id: 'nav-markets', defaultRoute: '/stock', children: ['stock', 'live', 'heatmap'] },
           options:    { id: 'nav-options', defaultRoute: '/options', children: [] },
           analytics:  { id: 'nav-analytics', defaultRoute: '/analytics', children: ['analytics', 'positioning'] },
           strategies: { id: 'nav-strategies', defaultRoute: '/strategies', children: ['strategies', 'ai-summary'] }
@@ -458,6 +460,7 @@
           '/':            { pillar: 'markets', sub: 'stock' },
           '/stock':       { pillar: 'markets', sub: 'stock' },
           '/live':        { pillar: 'markets', sub: 'live' },
+          '/heatmap':     { pillar: 'markets', sub: 'heatmap' },
           '/options':     { pillar: 'options', sub: 'options' },
           '/analytics':   { pillar: 'analytics', sub: 'analytics' },
           '/positioning': { pillar: 'analytics', sub: 'positioning' },
@@ -577,6 +580,7 @@
         const childRoutes = {
           stock:       '/stock',
           live:        '/live',
+          heatmap:     '/heatmap',
           options:     '/options',
           analytics:   '/analytics',
           positioning: '/positioning',
@@ -640,7 +644,7 @@
           path = path.slice(0, -1);
         }
 
-        const coreRoutes = ['/stock', '/live', '/options', '/analytics', '/positioning', '/strategies', '/momentum', '/ai-summary'];
+        const coreRoutes = ['/stock', '/live', '/heatmap', '/options', '/analytics', '/positioning', '/strategies', '/momentum', '/ai-summary'];
         let target = '/stock';
         if (coreRoutes.includes(path)) {
           target = path;
