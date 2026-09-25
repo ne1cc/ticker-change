@@ -68,6 +68,7 @@ carries your symbol across every page.
 | --- | --- | --- | --- |
 | **Price Table** | Markets | `/stock` | Multi-period change, candlestick chart, fundamentals glance |
 | **Live Microstructure** | Markets | `/live` | L2 depth, trades feed, options chain + Greeks, payoff simulator |
+| **S&P Heatmap** | Markets | `/heatmap` | Sector-grouped S&P 500 treemap, colored by daily % change, sized by dollar volume |
 | **Options Terminal** | Options | `/options` | Dollar GEX by strike, IV term structure, 3D vol surface, Greek matrix |
 | **Risk Analytics** | Analytics | `/analytics` | Volatility, VaR, GEX, Monte Carlo, **pre-trade checklist**, Buyer Signals, institutional suite |
 | **Market Positioning** | Analytics | `/positioning` | Valuation, analyst ratings, insider activity, 13F holders |

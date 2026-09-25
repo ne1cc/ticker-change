@@ -459,6 +459,23 @@ def get_openapi_spec() -> Dict[str, Any]:
                     }
                 }
             },
+            "/api/heatmap": {
+                "get": {
+                    "tags": ["Market Data & Analytics"],
+                    "summary": "S&P 500 Heatmap",
+                    "description": "Sector-grouped S&P 500 treemap payload: per-constituent daily % change (colour), trailing average dollar volume (tile size), plus breadth counts and universe coverage. Served from cache; returns status 'warming' with empty tiles while the universe is still downloading.",
+                    "responses": {
+                        "200": {
+                            "description": "Heatmap payload",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"type": "object"}
+                                }
+                            }
+                        }
+                    }
+                }
+            },
             "/api/config": {
                 "get": {
                     "tags": ["System & Cache Operations"],
