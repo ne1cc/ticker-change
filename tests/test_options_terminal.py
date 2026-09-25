@@ -119,6 +119,35 @@ class TestGexRealismAndConventions:
         assert flip is not None
         assert 50.0 <= flip <= 150.0
 
+    def test_clean_chain_falls_back_when_bid_filter_collapses_chain(self):
+        """After hours nearly every quote has bid=0; the strict bid>0 pass must
+        not collapse a 10-strike chain down to its single quoted row."""
+        rows = [
+            # One row with a live bid; nine zero-bid rows that are still
+            # perfectly usable for GEX (valid IV + volume).
+            {"strike": 100.0, "dte": 0, "expiration": "2026-09-10", "cp": "C", "bid": 1.5, "ask": 1.6, "iv": 0.25, "open_interest": 0, "volume": 12000},
+        ]
+        for k in range(90, 117, 3):
+            if k == 100:
+                continue
+            rows.append({"strike": float(k), "dte": 0, "expiration": "2026-09-10", "cp": "C", "bid": 0.0, "ask": 0.0, "iv": 0.28, "open_interest": 0, "volume": 9000})
+
+        df = pd.DataFrame(rows)
+        cleaned = clean_chain(df)
+        assert len(cleaned) == len(rows)
+        assert cleaned["strike"].nunique() == len(rows)
+
+    def test_hedge_weight_uses_volume_when_oi_missing_all_expirations(self):
+        """Volume must backfill weight for non-0DTE rows too when the source
+        omits open interest entirely (e.g. after-hours yfinance payloads)."""
+        df = pd.DataFrame([
+            {"strike": 95.0, "dte": 30, "cp": "P", "open_interest": 0, "volume": 500},
+            {"strike": 100.0, "dte": 30, "cp": "C", "open_interest": 0, "volume": 700},
+        ])
+        weights = _hedge_weight(df)
+        assert weights[0] == 500.0
+        assert weights[1] == 700.0
+
 
 class TestVolatilityAndCones:
     @pytest.fixture
@@ -248,6 +277,13 @@ class TestOptionsTerminalFlaskRoutes:
             assert 'gex' in data
             assert 'vol' in data
             assert 'cones' in data
+
+    def test_workspace_charts_enable_plotly_modebar(self):
+        """Zoom/Reset requires the modebar; every newPlot on this page must
+        keep it enabled (regression: charts were zoomable but un-restorable)."""
+        from pathlib import Path
+        template = Path(__file__).resolve().parents[1] / "templates" / "options.html"
+        assert "displayModeBar: false" not in template.read_text()
 
     def test_get_full_option_chain_df_handles_nan_values(self):
         from app import get_full_option_chain_df

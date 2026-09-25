@@ -1096,7 +1096,7 @@
       font: { family: 'monospace', size: 11, color: '#a1a1aa' }
     };
 
-    Plotly.newPlot('gex-plot-container', [traceCall, tracePut, traceNet], layout, { responsive: true, displayModeBar: false });
+    Plotly.newPlot('gex-plot-container', [traceCall, tracePut, traceNet], layout, { responsive: true, displayModeBar: true });
   }
 
   function renderTermPlot() {
@@ -1122,7 +1122,7 @@
       font: { family: 'monospace', size: 11, color: '#a1a1aa' }
     };
 
-    Plotly.newPlot('term-plot-container', [trace], layout, { responsive: true, displayModeBar: false });
+    Plotly.newPlot('term-plot-container', [trace], layout, { responsive: true, displayModeBar: true });
   }
 
   function renderSurfacePlot() {
@@ -1149,7 +1149,7 @@
       font: { family: 'monospace', size: 10, color: '#a1a1aa' }
     };
 
-    Plotly.newPlot('surface-plot-container', data, layout, { responsive: true, displayModeBar: false });
+    Plotly.newPlot('surface-plot-container', data, layout, { responsive: true, displayModeBar: true });
   }
 
   function renderConesPlot() {
@@ -1186,7 +1186,7 @@
       font: { family: 'monospace', size: 11, color: '#a1a1aa' }
     };
 
-    Plotly.newPlot('cones-plot-container', [traceHV, traceIV], layout, { responsive: true, displayModeBar: false });
+    Plotly.newPlot('cones-plot-container', [traceHV, traceIV], layout, { responsive: true, displayModeBar: true });
   }
   // --- LIVE OPTION CHAIN (ported from /live's former Option Greeks tab) ---
 
@@ -1794,7 +1794,7 @@
       hovermode: 'x unified'
     };
 
-    Plotly.newPlot('greeks-chart', traces, layout, { displayModeBar: false, responsive: true });
+    Plotly.newPlot('greeks-chart', traces, layout, { displayModeBar: true, responsive: true });
   }
 
   function initPayoffSimulator() {
@@ -1949,7 +1949,7 @@
       hovermode: 'x unified'
     };
 
-    Plotly.newPlot('payoff-chart', [traceLine], layout, { displayModeBar: false, responsive: true });
+    Plotly.newPlot('payoff-chart', [traceLine], layout, { displayModeBar: true, responsive: true });
   }
 
   // Options greeks poll — refreshes the chain every 60s while the chain tab
