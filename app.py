@@ -16,6 +16,7 @@ import threading
 import math
 import os
 import hmac
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from db import init_db, is_fresh, get_prices, store_prices
 import db
@@ -1688,7 +1689,27 @@ def get_price_target_chart(ticker: str, current_price: float) -> str | None:
         return None
 
 
-def compute_analytics(ticker: str) -> dict | None:
+def _guard_section(label, fn, default=None):
+    """Run one analytics attachment; on failure log and return default so one
+    broken section never takes down the whole page."""
+    try:
+        return fn()
+    except Exception:
+        print(f"[analytics:{label}] section failed:")
+        traceback.print_exc()
+        return default
+
+
+def compute_analytics(ticker):
+    try:
+        return _compute_analytics_impl(ticker)
+    except Exception:
+        print(f"[analytics] {ticker}: compute failed:")
+        traceback.print_exc()
+        return None
+
+
+def _compute_analytics_impl(ticker: str) -> dict | None:
     """Compute all analytics metrics from cached DB prices."""
     df = get_or_fetch_prices(ticker)
     if df is None or len(df) < 2:
@@ -2095,33 +2116,41 @@ def analytics_page():
                                error=f"Could not retrieve data for {ticker}")
 
     # Attach fundamentals
-    data['fundamentals'] = get_fundamentals(ticker)
+    data['fundamentals'] = _guard_section(
+        "fundamentals", lambda: get_fundamentals(ticker))
 
     # Attach options smile
-    data['charts']['options_smile'] = get_options_smile(ticker, data['current_price'])
+    data['charts']['options_smile'] = _guard_section(
+        "options_smile",
+        lambda: get_options_smile(ticker, data['current_price']))
 
     # Attach dealer Gamma Exposure (GEX) profile
-    gex = get_gex_profile(ticker, data['current_price'])
+    gex = _guard_section("gex", lambda: get_gex_profile(ticker, data['current_price']))
     data['charts']['gex'] = gex['chart'] if gex else None
     data['gex'] = gex['stats'] if gex else None
 
     trade_type = request.args.get('trade_type', 'long_stock')
     if trade_type not in decide.TRADE_TYPES:
         trade_type = 'long_stock'
-    data['checklist'] = decide.build_checklist(ticker, data, trade_type)
+    data['checklist'] = _guard_section(
+        "checklist", lambda: decide.build_checklist(ticker, data, trade_type))
 
     # Attach insider chart (needs price df)
     price_df = get_or_fetch_prices(ticker)
     if price_df is not None:
-        data['charts']['insider'] = get_insider_chart(ticker, price_df)
-        data['insider_summary'] = get_insider_summary(ticker)
-        data['charts']['cumulative_return'] = get_cumulative_return_chart(ticker, price_df)
+        data['charts']['insider'] = _guard_section(
+            "insider", lambda: get_insider_chart(ticker, price_df))
+        data['insider_summary'] = _guard_section(
+            "insider_summary", lambda: get_insider_summary(ticker))
+        data['charts']['cumulative_return'] = _guard_section(
+            "cumulative_return", lambda: get_cumulative_return_chart(ticker, price_df))
 
     # Attach analyst price target
-    data['charts']['price_target'] = get_price_target_chart(ticker, data['current_price'])
+    data['charts']['price_target'] = _guard_section(
+        "price_target", lambda: get_price_target_chart(ticker, data['current_price']))
 
     # Machine-learning Buy/Hold/Sell signal (None until a model is trained)
-    data['ml'] = ml.predict(ticker)
+    data['ml'] = _guard_section("ml", lambda: ml.predict(ticker))
 
     # Attach Institutional Analytics Suite (Microstructure, Macro Conditioning, Higher-Order Greeks, 8-K + Event Study)
     try:
@@ -2637,7 +2666,11 @@ def options_page():
 
     current_price = get_current_price_yfinance(ticker)
     if not current_price:
-        current_price = _spot_price(ticker, _get_yf_ticker(ticker)) or 100.0
+        current_price = _spot_price(ticker, _get_yf_ticker(ticker))
+    if not current_price:
+        return render_template(
+            'options.html', ticker=ticker, data=None,
+            error=f"Could not determine a current price for {ticker}. Options analytics are unavailable right now.")
 
     stock = _get_yf_ticker(ticker)
     chains_df = get_full_option_chain_df(ticker, stock=stock, current_price=current_price)
@@ -2665,11 +2698,10 @@ def live_page():
 
 @app.route('/api/config')
 def api_config():
-    key = providers.active_finnhub_key()
-    return jsonify({
-        "finnhub_key": key,
-        "has_finnhub": bool(key),
-    })
+    # P0 fix: the raw key used to be served here for the browser-direct
+    # Finnhub websocket; any origin could read it via the open CORS policy.
+    # Only the boolean ships now -- server-side streaming proxy comes later.
+    return jsonify({"has_finnhub": bool(providers.active_finnhub_key())})
 
 
 # Benchmark / index ETFs — used as comparison series, never ranked as alpha names.
@@ -2687,6 +2719,15 @@ _relative_stats = momentum_engine.relative_stats
 
 
 def compute_momentum(ticker: str) -> dict:
+    try:
+        return _compute_momentum_impl(ticker)
+    except Exception:
+        print(f"[momentum] {ticker}: compute failed:")
+        traceback.print_exc()
+        return {}
+
+
+def _compute_momentum_impl(ticker: str) -> dict:
     """Compute momentum scores and backtest statistics for a ticker."""
     symbol = ticker.upper()
     df = db.get_prices(symbol)
@@ -3337,6 +3378,13 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
     }
 
 
+def _safe_float(raw, default):
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 @app.route('/strategies')
 @app.route('/momentum')
 def strategies_page():
@@ -3432,9 +3480,9 @@ def strategies_page():
 
     if tab == 'screener':
         filters = {
-            "min_mom": float(request.args.get('min_mom', '0.0')),
-            "max_vol": float(request.args.get('max_vol', '60.0')),
-            "min_risk_adj": float(request.args.get('min_risk_adj', '0.5')),
+            "min_mom": _safe_float(request.args.get('min_mom'), 0.0),
+            "max_vol": _safe_float(request.args.get('max_vol'), 60.0),
+            "min_risk_adj": _safe_float(request.args.get('min_risk_adj'), 0.5),
             "trend_filter": request.args.get('trend', 'bullish'),
             "abs_only": request.args.get('abs_only', '') == '1',
         }
@@ -3742,7 +3790,9 @@ def api_options_terminal(ticker):
 
     current_price = get_current_price_yfinance(ticker)
     if not current_price:
-        current_price = _spot_price(ticker, _get_yf_ticker(ticker)) or 100.0
+        current_price = _spot_price(ticker, _get_yf_ticker(ticker))
+    if not current_price:
+        return jsonify({"error": f"No price data available for {ticker}; options terminal unavailable"}), 503
 
     stock = _get_yf_ticker(ticker)
     chains_df = get_full_option_chain_df(ticker, stock=stock, current_price=current_price)
@@ -3794,7 +3844,8 @@ def ai_summary_page():
                                error=f"Could not retrieve data for {ticker}")
 
     # Gather fundamentals & positioning
-    positioning_data = compute_positioning(ticker)
+    positioning_data = _guard_section(
+        "positioning", lambda: compute_positioning(ticker), default={})
     fundamentals = get_fundamentals(ticker) or {}
 
     # Merge finnhub metrics (list of dicts) and yfinance fundamentals into a single dict
@@ -3836,7 +3887,8 @@ def ai_summary_page():
         valuation_dict['Consensus Rating'] = str(rating).replace('_', ' ').title()
 
     # Gather momentum data
-    momentum_data = compute_momentum(ticker)
+    momentum_data = _guard_section(
+        "momentum", lambda: compute_momentum(ticker), default={})
 
     # Gather ML signal
     ml_signal = ml.predict(ticker)
@@ -3902,7 +3954,7 @@ def raw_sec_filings_api(ticker):
         return jsonify(filings or [])
     except Exception as e:
         print(f"Error fetching raw SEC filings: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "SEC filings temporarily unavailable"}), 502
 
 
 # --- Automatic EOD options chain cache warmer ---
@@ -3948,9 +4000,11 @@ def _warm_options_cache(force=False):
                     try:
                         chain_df = get_full_option_chain_df(sym, stock=stock)
                         daily_df = get_or_fetch_prices(sym)
-                        spot = _spot_price(sym, stock) or 100.0
-                        if not chain_df.empty:
+                        spot = _spot_price(sym, stock)
+                        if not chain_df.empty and spot:
                             compute_options_terminal(sym, spot, chain_df, daily_df, record_db=True)
+                        elif not spot:
+                            print(f"[options-cache] {sym}: no spot, skipping IV snapshot")
                     except Exception as snap_err:
                         print(f"[options-cache] snapshot error for {sym}: {snap_err}")
                 except Exception as e:
@@ -4037,7 +4091,7 @@ def api_corporate_actions(ticker):
 _INSTITUTIONAL_CACHE_PROVIDER = "institutional_backtest_v1"
 _INSTITUTIONAL_CACHE_KEYS = ("signals_backtest", "permutation_test")
 _INSTITUTIONAL_LOCK_TTL_HOURS = 0.02  # ~72s; longer than one cold computation
-_INSTITUTIONAL_LOCK_WAIT_S = 20.0
+_INSTITUTIONAL_LOCK_WAIT_S = 3.0
 
 
 def _institutional_backtest(ticker, stock_df):
@@ -4087,9 +4141,21 @@ def _institutional_backtest(ticker, stock_df):
     return payload
 
 
+def _institutional_authorized():
+    expected = os.environ.get("WARM_CACHE_TOKEN", "").strip()
+    if not expected:
+        return False
+    header = request.headers.get("Authorization", "")
+    return header.startswith("Bearer ") and hmac.compare_digest(header[len("Bearer "):], expected)
+
+
 @app.route('/api/institutional/<ticker>')
 def api_institutional(ticker):
     """Institutional quantitative analytics suite: Microstructure, Macro, CAR, and Greeks."""
+    if not _institutional_authorized():
+        if not os.environ.get("WARM_CACHE_TOKEN", "").strip():
+            return jsonify({"error": "institutional endpoint disabled: WARM_CACHE_TOKEN not configured"}), 503
+        return jsonify({"error": "unauthorized"}), 401
     ticker = ticker.upper()
     stock_df = get_or_fetch_prices(ticker, period="2y")
     spy_df = get_or_fetch_prices("SPY", period="2y")

@@ -462,8 +462,8 @@ def get_openapi_spec() -> Dict[str, Any]:
             "/api/config": {
                 "get": {
                     "tags": ["System & Cache Operations"],
-                    "summary": "System Provider Configuration Status",
-                    "description": "Returns status and public keys for enabled 3rd-party financial providers.",
+                    "summary": "Returns whether a Finnhub key is configured",
+                    "description": "Returns a boolean flag indicating whether a Finnhub API key is configured server-side. No key material is exposed.",
                     "responses": {
                         "200": {
                             "description": "Configuration object",
@@ -472,7 +472,6 @@ def get_openapi_spec() -> Dict[str, Any]:
                                     "schema": {
                                         "type": "object",
                                         "properties": {
-                                            "finnhub_key": {"type": "string"},
                                             "has_finnhub": {"type": "boolean"}
                                         }
                                     }

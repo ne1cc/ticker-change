@@ -14,8 +14,10 @@ services:
         sync: false
       - key: FMP_API_KEY
         sync: false
+      # Contact string per SEC EDGAR fair-access policy. Set the real value in
+      # the Render dashboard -- do NOT commit a personal email here.
       - key: SEC_USER_AGENT
-        value: ticker-change a.sun.079820@gmail.com
+        sync: false
 
       # --- AI analyst report providers (any one is enough; tried in order) ---
       - key: ANTHROPIC_API_KEY
