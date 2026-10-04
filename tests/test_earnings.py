@@ -194,14 +194,18 @@ class TestChecklistSurpriseContext(unittest.TestCase):
             {"date": "2025-01-30", "eps_estimate": 1.0, "eps_actual": 1.2,
              "surprise_pct": 20.0, "is_upcoming": False},
         ])
-        with patch.object(decide_module, "days_until_earnings", return_value=30):
+        with patch("app.get_fundamentals", return_value=None), \
+             patch("app.compute_options_analysis", return_value=None), \
+             patch.object(decide_module, "days_until_earnings", return_value=30):
             checks = decide_module.build_checklist("TICKR2", {}, "long_stock")
         row = next(c for c in checks["checks"] if c["key"] == "earnings")
         self.assertEqual(row["status"], "pass")
         self.assertIn("last print beat by 20.0%", row["reason"])
 
     def test_check_without_history_unchanged(self):
-        with patch.object(decide_module, "days_until_earnings", return_value=10):
+        with patch("app.get_fundamentals", return_value=None), \
+             patch("app.compute_options_analysis", return_value=None), \
+             patch.object(decide_module, "days_until_earnings", return_value=10):
             checks = decide_module.build_checklist("TICKR3", {}, "long_stock")
         row = next(c for c in checks["checks"] if c["key"] == "earnings")
         self.assertEqual(row["reason"], "Earnings in 10d")
