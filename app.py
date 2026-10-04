@@ -28,6 +28,7 @@ import corporate_actions
 import event_study
 import sec_8k
 import earnings
+import radar
 import peers
 import microstructure
 import macro_engine
@@ -4392,6 +4393,33 @@ def api_active_tickers():
     except Exception as e:
         print(f"Error serving active tickers: {e}")
         return jsonify([]), 500
+
+
+def _optional_token_authorized() -> bool:
+    """active-tickers posture: enforce only when WARM_CACHE_TOKEN is configured."""
+    expected = os.environ.get("WARM_CACHE_TOKEN", "").strip()
+    if not expected:
+        return True
+    header = request.headers.get("Authorization", "")
+    return header.startswith("Bearer ") and hmac.compare_digest(
+        header[len("Bearer "):], expected)
+
+
+@app.route('/api/radar/settings', methods=['POST'])
+def api_radar_settings():
+    """Persist /radar inline tunables (display thresholds, not secrets)."""
+    if not _optional_token_authorized():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not body:
+        return jsonify({"error": "expected a JSON object of tunables"}), 400
+    stored = {}
+    try:
+        for key, value in body.items():
+            stored[key] = radar.set_tunable(key, value)
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(stored), 200
 
 
 # Import-time start: gunicorn imports app:app and never runs __main__, so
