@@ -23,11 +23,15 @@ def universe_classifications() -> dict[str, dict]:
     payload, sector falling back to the cached constituents payload."""
     out: dict[str, dict] = {}
     for sym, payload in db.cache_scan("yfinance", "fundamentals:").items():
+        if not isinstance(payload, dict):
+            continue
         out[sym.upper()] = {
             "industry": payload.get("Industry"),
             "sector": payload.get("Sector"),
         }
     for row in db.cache_get("sp500", "constituents", CONSTITUENTS_TTL_HOURS) or []:
+        if not isinstance(row, dict):
+            continue
         sym = str(row.get("symbol", "")).upper()
         if sym and sym not in out:
             out[sym] = {"industry": None, "sector": row.get("sector")}

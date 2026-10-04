@@ -50,3 +50,17 @@ class TestResolvePeers(unittest.TestCase):
         with patch.object(providers, "finnhub_peer", return_value=None), \
              patch.object(peers, "universe_classifications", return_value={}):
             self.assertIsNone(peers.resolve_peers("ZZZZ", cap=8))
+
+
+class TestUniverseClassifications(unittest.TestCase):
+    def test_malformed_cache_payloads_are_skipped(self):
+        db.cache_set("yfinance", "fundamentals:GOOD",
+                     {"Industry": "Tech", "Sector": "Technology"})
+        db.cache_set("yfinance", "fundamentals:BAD", 42)
+        db.cache_set("sp500", "constituents",
+                     ["not-a-dict", 7,
+                      {"symbol": "FROMIDX", "name": "F", "sector": "Technology"}])
+        out = peers.universe_classifications()
+        self.assertEqual(out["GOOD"], {"industry": "Tech", "sector": "Technology"})
+        self.assertNotIn("BAD", out)
+        self.assertEqual(out["FROMIDX"], {"industry": None, "sector": "Technology"})
