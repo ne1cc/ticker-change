@@ -1431,11 +1431,49 @@ def _normalize_insider_df(raw):
     return idf, None
 
 
+def _insider_rows_cached(ticker: str) -> list[dict] | None:
+    """Normalized insider rows, 24h-cached (JSON-safe: dates as ISO strings).
+
+    The summary card and the monthly chart each used to hit yfinance on every
+    request; filings are slow-moving data, so one fetch per ticker per day is
+    plenty. None is never cached (a failed fetch retries next request).
+    """
+    cached = db.cache_get("yfinance", f"insider:{ticker.upper()}", 24)
+    if cached is not None:
+        return cached
+    try:
+        raw = _get_yf_ticker(ticker).insider_transactions
+        idf, _err = _normalize_insider_df(raw)
+    except Exception as e:
+        print(f"Insider fetch failed for {ticker}: {e}")
+        return None
+    if idf is None or idf.empty:
+        return None
+    rows = [{
+        'date':      idx.strftime('%Y-%m-%d'),
+        '_signed':   int(r['_signed']),
+        '_name':     str(r['_name']),
+        '_position': str(r['_position']),
+        '_value':    float(r['_value']),
+        '_text':     str(r['_text']),
+    } for idx, r in idf.iterrows()]
+    db.cache_set("yfinance", f"insider:{ticker.upper()}", rows)
+    return rows
+
+
+def _insider_df_from_rows(rows: list[dict]) -> pd.DataFrame | None:
+    """Rebuild the normalized insider DataFrame (date-indexed) from cached rows."""
+    if not rows:
+        return None
+    idf = pd.DataFrame(rows)
+    idf.index = pd.DatetimeIndex(pd.to_datetime(idf.pop('date')))
+    return idf
+
+
 def get_insider_summary(ticker: str) -> dict | None:
     """Recent insider transactions + aggregate stats for the analytics card."""
     try:
-        raw = _get_yf_ticker(ticker).insider_transactions
-        idf, err = _normalize_insider_df(raw)
+        idf = _insider_df_from_rows(_insider_rows_cached(ticker))
         if idf is None:
             return None
 
@@ -1475,8 +1513,7 @@ def get_insider_summary(ticker: str) -> dict | None:
 def get_insider_chart(ticker: str, price_df: pd.DataFrame) -> str | None:
     """Dual-axis chart: net monthly insider share activity vs. stock price."""
     try:
-        raw = _get_yf_ticker(ticker).insider_transactions
-        idf, err = _normalize_insider_df(raw)
+        idf = _insider_df_from_rows(_insider_rows_cached(ticker))
         if idf is None or idf.empty:
             return None
 
