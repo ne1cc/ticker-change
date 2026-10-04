@@ -730,7 +730,23 @@ def stock_page():
     return render_template('index.html')
 
 def get_fundamentals(ticker: str) -> dict | None:
-    """Fetch key valuation multiples, short interest, consensus forecasts, and upcoming events from yfinance."""
+    """Fetch key valuation multiples, short interest, consensus forecasts, and upcoming events from yfinance.
+
+    Cached 24h in api_cache (provider "yfinance") — the radar warmer and the
+    peers module read the same key, and /stock used to hit yfinance live on
+    every load.
+    """
+    cache_key = f"fundamentals:{ticker.upper()}"
+    cached = db.cache_get("yfinance", cache_key, 24)
+    if cached is not None:
+        return cached
+    result = _get_fundamentals_uncached(ticker)
+    if result is not None:
+        db.cache_set("yfinance", cache_key, result)
+    return result
+
+
+def _get_fundamentals_uncached(ticker: str) -> dict | None:
     try:
         t = _get_yf_ticker(ticker)
         info = t.info or {}
