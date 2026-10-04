@@ -5,6 +5,8 @@ module at load, so `app` itself is imported lazily inside functions only.
 """
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 import yfinance as yf
 
@@ -129,4 +131,94 @@ def summarize_earnings_drift(events: list[dict]) -> dict:
         "significance_rate": round(len(sig) / len(events), 3) if events else None,
         "avg_car_beat": _avg(cars, beat=True),
         "avg_car_miss": _avg(cars, beat=False),
+    }
+
+
+def realized_earnings_moves(stock_df: pd.DataFrame, events: list[dict],
+                            n: int = 8) -> float | None:
+    """Median absolute close-to-close return across the most recent n print
+    days (the print session vs the prior close). Baseline for the event-vol flag."""
+    try:
+        if stock_df is None or getattr(stock_df, "empty", True):
+            return None
+        close = stock_df["close"] if "close" in stock_df.columns else stock_df["Close"]
+        rets = close.pct_change()
+        moves = []
+        for ev in (events or [])[:n]:
+            if ev.get("is_upcoming"):
+                continue
+            idx = rets.index[rets.index > pd.to_datetime(ev["date"])]
+            if len(idx) == 0:
+                continue
+            r = rets.loc[idx[0]]
+            if r is not None and pd.notna(r):
+                moves.append(abs(float(r)))
+        return round(float(pd.Series(moves).median()), 4) if moves else None
+    except Exception:
+        return None
+
+
+def implied_event_move(options_analysis: dict | None, earnings_date: str) -> dict | None:
+    """Scale the front-expiration straddle expected move out to the earnings
+    date: EM_earnings ~= EM_straddle * sqrt(DTE_earnings / DTE_expiry)."""
+    try:
+        if not options_analysis:
+            return None
+        em = options_analysis.get("expected_move_straddle")
+        dte_exp = options_analysis.get("days_to_expiration")
+        dte_earn = (pd.to_datetime(earnings_date).date() - date.today()).days
+        if not em or not dte_exp or dte_exp <= 0 or dte_earn is None or dte_earn < 0:
+            return None
+        return {
+            "implied_move": round(float(em) * (dte_earn / dte_exp) ** 0.5, 2),
+            "days_to_earnings": dte_earn,
+            "basis_days_to_exp": dte_exp,
+        }
+    except Exception:
+        return None
+
+
+def event_vol_flag(implied_move: float | None, realized_move: float | None) -> str | None:
+    """Rich (>1.25x realized), cheap (<0.75x), fair — None without both sides."""
+    if not implied_move or not realized_move:
+        return None
+    ratio = implied_move / realized_move
+    if ratio > 1.25:
+        return "rich"
+    if ratio < 0.75:
+        return "cheap"
+    return "fair"
+
+
+def build_earnings_section(ticker: str) -> dict | None:
+    """Everything the /analytics embed renders. None when no earnings data."""
+    from app import compute_options_analysis, get_or_fetch_prices  # late import: app imports earnings at module load
+
+    ticker = ticker.upper()
+    events = get_earnings_history(ticker)
+    if not events:
+        return None
+    stock_df = get_or_fetch_prices(ticker, period="5y")
+    if stock_df is None or getattr(stock_df, "empty", True):
+        return None
+    benchmark_df = get_or_fetch_prices("SPY", period="5y")
+    if benchmark_df is None or getattr(benchmark_df, "empty", True):
+        benchmark_df = stock_df
+
+    past = compute_earnings_events(stock_df, benchmark_df, events, ticker=ticker)
+    upcoming = [e for e in events if e.get("is_upcoming")]
+    next_print = upcoming[0] if upcoming else None
+    implied = implied_event_move(
+        compute_options_analysis(ticker),
+        next_print["date"],
+    ) if next_print else None
+    realized = realized_earnings_moves(stock_df, events)
+    return {
+        "events": past,
+        "summary": summarize_earnings_drift(past),
+        "next_print": next_print,
+        "implied_move": implied,
+        "realized_move": realized,
+        "event_vol": event_vol_flag(
+            implied["implied_move"] if implied else None, realized),
     }

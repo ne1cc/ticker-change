@@ -116,3 +116,44 @@ class TestComputeEarningsEvents(unittest.TestCase):
         s = earnings.summarize_earnings_drift([])
         self.assertEqual(s["n_events"], 0)
         self.assertIsNone(s["avg_car_beat"])
+
+
+class TestImpliedMove(unittest.TestCase):
+    def test_scales_straddle_to_earnings_dte(self):
+        oa = {"expected_move_straddle": 10.0, "days_to_expiration": 40}
+        out = earnings.implied_event_move(
+            oa, (pd.Timestamp.today() + pd.Timedelta(days=10)).date().isoformat())
+        self.assertAlmostEqual(out["implied_move"], 5.0, places=6)
+        self.assertEqual(out["days_to_earnings"], 10)
+        self.assertEqual(out["basis_days_to_exp"], 40)
+
+    def test_none_when_missing_inputs(self):
+        self.assertIsNone(earnings.implied_event_move(None, "2026-10-15"))
+        self.assertIsNone(earnings.implied_event_move(
+            {"expected_move_straddle": None, "days_to_expiration": 30}, "2026-10-15"))
+        past = (pd.Timestamp.today() - pd.Timedelta(days=3)).date().isoformat()
+        self.assertIsNone(earnings.implied_event_move(
+            {"expected_move_straddle": 5, "days_to_expiration": 30}, past))
+
+
+class TestEventVolFlag(unittest.TestCase):
+    def test_rich_cheap_fair(self):
+        self.assertEqual(earnings.event_vol_flag(2.0, 1.0), "rich")
+        self.assertEqual(earnings.event_vol_flag(0.5, 1.0), "cheap")
+        self.assertEqual(earnings.event_vol_flag(1.0, 1.0), "fair")
+        self.assertIsNone(earnings.event_vol_flag(None, 1.0))
+        self.assertIsNone(earnings.event_vol_flag(1.0, None))
+
+
+class TestRealizedMoves(unittest.TestCase):
+    def test_median_absolute_print_day_move(self):
+        idx = pd.bdate_range("2024-01-01", periods=10)
+        close = pd.Series([100, 100, 104, 104, 104, 104, 99, 99, 99, 99],
+                          index=idx, name="close")
+        df = pd.DataFrame({"close": close})
+        events = [{"date": idx[1].date().isoformat()},   # +4.0%
+                  {"date": idx[5].date().isoformat()}]   # -4.8%
+        med = earnings.realized_earnings_moves(df, events)
+        self.assertIsNotNone(med)
+        self.assertGreater(med, 0.03)
+        self.assertLess(med, 0.05)
