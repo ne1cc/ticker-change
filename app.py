@@ -3034,6 +3034,62 @@ def _universe_rank_scores(price_batch, symbols, strategy_id) -> dict:
 # /strategies — universe tab
 # --------------------------------------------------------------------------
 
+def _deserialize_universe_scores(cached):
+    """Rebuild (scores, spreads) from an api_cache payload, or None if malformed."""
+    if not isinstance(cached, dict) or not isinstance(cached.get("scores"), dict):
+        return None
+    try:
+        scores = {sym: momentum_engine.MomentumScore(**row)
+                  for sym, row in cached["scores"].items()}
+    except (TypeError, ValueError):
+        return None
+    spreads = cached.get("spreads", {})
+    return scores, spreads if isinstance(spreads, dict) else {}
+
+
+def _cached_universe_scores(strategy_id, symbols, price_df):
+    """Universe momentum scores, 1h-cached (TTL = daily_prices freshness).
+
+    `score_universe` over ~500 symbols dominates /strategies load time on a
+    small shared CPU; scores only change when cached closes do. Returns
+    (scores, spreads) — scores as {sym: MomentumScore}, spreads as {sym: float}
+    (sma family only, else {}). Stampede-protected: lock losers wait briefly
+    for the winner's payload, then compute anyway (slow beats failing).
+    """
+    key = f"scores:{strategy_id}"
+
+    def _compute():
+        hurdle = momentum_engine.absolute_hurdle(strategy_id)
+        scores = momentum_engine.score_universe(price_df, symbols, hurdle=hurdle)
+        spreads = (momentum_engine.sma_score_universe(price_df, symbols)
+                   if _strategy_family(strategy_id) == "sma" else {})
+        payload = {
+            "scores": {sym: {"symbol": s.symbol, "mom_12_1": s.mom_12_1,
+                             "mom_6m": s.mom_6m, "mom_3m": s.mom_3m,
+                             "mom_1m": s.mom_1m, "ann_vol_1y": s.ann_vol_1y,
+                             "risk_adj": s.risk_adj,
+                             "passes_absolute": bool(s.passes_absolute)}
+                       for sym, s in scores.items()},
+            "spreads": spreads,
+        }
+        db.cache_set("strategies", key, payload)
+        return scores, spreads
+
+    hit = _deserialize_universe_scores(db.cache_get("strategies", key, 1))
+    if hit is not None:
+        return hit
+
+    if db.try_claim_lock(f"strategies_scores_lock:{strategy_id}", ttl_hours=1.0):
+        return _compute()
+
+    for _ in range(6):
+        time.sleep(0.5)
+        hit = _deserialize_universe_scores(db.cache_get("strategies", key, 1))
+        if hit is not None:
+            return hit
+    return _compute()
+
+
 def _strategies_universe_data(symbols, price_df, strategy_id, period):
     """Leaderboard + top-N rotation backtest against SPY/QQQ.
 
@@ -3045,8 +3101,7 @@ def _strategies_universe_data(symbols, price_df, strategy_id, period):
     if len(price_df) < momentum_engine.MOMENTUM_LOOKBACK + 2:
         return None
 
-    hurdle = momentum_engine.absolute_hurdle(strategy_id)
-    scores = momentum_engine.score_universe(price_df, symbols, hurdle=hurdle)
+    scores, spreads = _cached_universe_scores(strategy_id, symbols, price_df)
 
     if _strategy_family(strategy_id) == "sma":
         # SMA spread is the primary score and sort key; `score_universe` is
@@ -3443,9 +3498,7 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
         return None
 
     is_sma = _strategy_family(strategy_id) == "sma"
-    hurdle = momentum_engine.absolute_hurdle(strategy_id)
-    scores = momentum_engine.score_universe(price_df, symbols, hurdle=hurdle)
-    spreads = momentum_engine.sma_score_universe(price_df, symbols) if is_sma else {}
+    scores, spreads = _cached_universe_scores(strategy_id, symbols, price_df)
 
     results = []
     for sym in symbols:
