@@ -14,6 +14,7 @@ import os
 import re
 import requests
 import pandas as pd
+import yfinance as yf
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -508,6 +509,46 @@ def fmp_institutional_holders(symbol: str, limit: int = 10):
         })
     rows.sort(key=lambda x: x["shares"], reverse=True)
     return rows[:limit] or None
+
+
+def fetch_short_interest(symbol: str) -> dict | None:
+    """Short-interest snapshot from yfinance .info. Returns dict or None.
+
+    Keys: shares_short, short_pct_float, days_to_cover, shares_short_prior_month,
+    si_mom_change (fraction), as_of, source (always "reported" here — callers
+    flag "assumed" when they fall back to defaults).
+    """
+    try:
+        info = yf.Ticker(symbol.upper()).info or {}
+    except Exception as e:
+        print(f"[providers] short interest fetch failed for {symbol}: {e}")
+        return None
+    shares_short = info.get("sharesShort")
+    pct_float = info.get("shortPercentOfFloat")
+    dtc = info.get("shortRatio")
+    prior = info.get("sharesShortPriorMonth")
+    if shares_short is None and pct_float is None:
+        return None
+    mom = None
+    if shares_short and prior:
+        mom = round((shares_short - prior) / prior, 4)
+    return {
+        "shares_short": shares_short,
+        "short_pct_float": pct_float,
+        "days_to_cover": dtc,
+        "shares_short_prior_month": prior,
+        "si_mom_change": mom,
+        "as_of": info.get("dateShortInterest"),
+        "source": "reported",
+    }
+
+
+def get_short_interest(symbol: str) -> dict | None:
+    """Cached short-interest snapshot (24h TTL, provider "yfinance")."""
+    return _cached(
+        "yfinance", f"short:{symbol.upper()}",
+        lambda: fetch_short_interest(symbol),
+    )
 
 
 # --------------------------------------------------------------------------- #
