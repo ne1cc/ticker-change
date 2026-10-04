@@ -125,6 +125,29 @@ def cache_set(provider: str, key: str, payload):
         )
 
 
+def cache_scan(provider: str, key_prefix: str) -> dict:
+    """All cached payloads whose key starts with prefix, keyed by the key suffix.
+
+    Unlike cache_get, no TTL filter: scan consumers (universe screens) prefer
+    any cached payload over none; the warmer keeps payloads fresh.
+    """
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT key, payload FROM api_cache WHERE provider = ? AND key LIKE ?",
+                (provider, key_prefix + "%"),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    out = {}
+    for row in rows:
+        try:
+            out[row["key"][len(key_prefix):]] = json.loads(row["payload"])
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
 def try_claim_lock(name: str, ttl_hours: float) -> bool:
     """Atomically claim a cross-process lock row in api_cache.
 
