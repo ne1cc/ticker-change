@@ -213,6 +213,12 @@ GLOSSARY: dict[str, dict] = {
         "short": "Profit/loss of an option position at expiration across stock prices, plus the breakeven point.",
         "long": "Shows P&L at expiration as a function of the underlying price for the selected position. Breakeven for a long call is strike + premium; for a long put, strike − premium. Long options cap loss at the premium; short options cap gain at the premium but carry large or unlimited loss. This ignores early assignment and pre-expiry time value.",
     },
+    "event_vol_flag": {
+        "term": "Event Vol Flag",
+        "section": "Options & Volatility",
+        "short": "Whether option prices imply a bigger or smaller earnings move than the stock's recent prints delivered.",
+        "long": "Compares the straddle-implied move scaled to the earnings date against the median absolute move of the last prints. 'Rich' means the market is paying up for event protection; 'cheap' means implied calm vs history.",
+    },
 
     # ----------------------------------------------------------------- Market Microstructure
     "order_book": {
@@ -259,6 +265,30 @@ GLOSSARY: dict[str, dict] = {
         "section": "Market Microstructure",
         "short": "Cumulative resting size on each side as you walk away from the mid — how much price would move to fill a big order.",
         "long": "Plots cumulative bid and ask size against price. A steep wall near the mid means deep liquidity and low impact; a shallow, far-reaching curve means a large order would push price further. The two sides meeting at the mid frame the cost of size.",
+    },
+    "short_pct_float": {
+        "term": "Short Interest % Float",
+        "section": "Market Microstructure",
+        "short": "Percentage of tradable shares currently sold short.",
+        "long": "Reported from exchange/FINRA data via yfinance (bi-monthly snapshots, so it lags). Elevated short interest plus positive catalysts is the raw material of squeezes. When the badge says 'assumed', this value is a 3% default, not real data.",
+    },
+    "days_to_cover": {
+        "term": "Days to Cover",
+        "section": "Market Microstructure",
+        "short": "How many days of average volume short sellers would need to buy back their positions.",
+        "long": "Short interest divided by average daily volume. Higher values mean any squeeze has further to run because covering is slow. Assumed default is 2 days when the feed is unavailable.",
+    },
+    "si_mom_change": {
+        "term": "Short Interest MoM Δ",
+        "section": "Market Microstructure",
+        "short": "Month-over-month change in shares sold short.",
+        "long": "Rising short interest into strength can indicate conviction shorts (squeeze fuel); falling short interest can indicate covering. Two-point comparison — the free feed only exposes the latest snapshot and the prior month.",
+    },
+    "squeeze_composite": {
+        "term": "Squeeze Risk Composite",
+        "section": "Market Microstructure",
+        "short": "0-100 blend of short interest, days to cover, borrow cost, and dealer gamma exposure.",
+        "long": "Weights: 40 short % float, 30 days to cover, 15 cost-to-borrow, 15 negative dealer gamma (the accelerator). Levels: LOW < 35, ELEVATED < 55, HIGH < 75, EXTREME ≥ 75. Universe scans omit the gamma leg; per-ticker views include it.",
     },
 
     # ----------------------------------------------------------------- Fundamentals & Positioning
@@ -352,6 +382,25 @@ GLOSSARY: dict[str, dict] = {
         "short": "Year-over-year growth in profits and sales — the engine behind forward valuation multiples.",
         "long": "Trailing year-over-year change in earnings and revenue. Revenue growth shows top-line demand; earnings growth shows whether that translates to the bottom line. Earnings growing faster than revenue indicates margin expansion; the reverse, margin pressure.",
     },
+    "surprise_pct": {
+        "term": "EPS Surprise %",
+        "section": "Fundamentals & Positioning",
+        "short": "How far reported EPS landed from the consensus estimate, in percent.",
+        "long": "Positive means the company beat the street's EPS estimate; negative means a miss. Large surprises tend to start post-earnings drift as analysts slowly revise.",
+        "formula": "(actual − estimate) / |estimate| × 100",
+    },
+    "peer_percentile": {
+        "term": "Peer Percentile",
+        "section": "Fundamentals & Positioning",
+        "short": "Where a metric sits within the peer set, 0-100.",
+        "long": "For valuation multiples the percentile is inverted so 'cheaper vs peers' reads higher. With few peers the percentile is coarse — treat it as context, not a signal.",
+    },
+    "rv_quadrant": {
+        "term": "Relative-Value Quadrant & Score",
+        "section": "Fundamentals & Positioning",
+        "short": "Valuation (cheap vs rich) crossed with 12-1 momentum direction.",
+        "long": "Each name lands in one of four quadrants: cheap/rich × strengthening/weakening. The value score averages cheapness, growth, and momentum percentiles. Quadrants describe positioning, not predictions.",
+    },
 
     # ----------------------------------------------------------------- Institutional Analytics
     "vpin": {
@@ -432,6 +481,19 @@ GLOSSARY: dict[str, dict] = {
         "long": "Event-study methodology (Market Model / CAPM). A stock's 'normal' expected return is estimated from its alpha/beta to SPY over a pre-event estimation window (trading days -120 to -21 before the filing). CAR sums the daily gap between actual and expected return over the event window (-10 to +30 trading days around the filing date) — a large CAR with a t-stat outside roughly ±2 (p<0.05) suggests the market reacted to genuinely new information rather than noise. Needs about 140 trading days of price history before the event and 30 trading days after it to compute; filings newer than that show as pending until enough time has passed.",
         "formula": "CAR = Σ (R_it − (α + β·R_mt)) over the event window",
     },
+    "event_car": {
+        "term": "Event CAR (−10/+30)",
+        "section": "Institutional Analytics",
+        "short": "Cumulative abnormal return around an event vs what beta would predict.",
+        "long": "Market-model event study: abnormal return accumulated from 10 sessions before to 30 after the event, net of the stock's normal beta relationship with SPY. A t-stat with p < 0.05 means the move is unlikely to be noise.",
+    },
+    "pead_drift": {
+        "term": "Post-Earnings Drift",
+        "section": "Institutional Analytics",
+        "short": "Raw price drift in the sessions after an earnings print.",
+        "long": "The tendency for post-earnings announcement returns to continue in the direction of the surprise — one of the most persistent documented market anomalies. 'Drift left' on the radar counts how many days of the typical 30-session window remain.",
+    },
+
     # ----------------------------------------------------------------- Markets
     "heatmap_coverage": {
         "term": "Heatmap Coverage",
