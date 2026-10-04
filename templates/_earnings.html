@@ -26,7 +26,7 @@
   <div class="text-sm mb-4">
     Next print <span class="font-semibold">{{ ern.next_print.date }}</span>
     {% if ern.implied_move %}
-      · implied move ±{{ ern.implied_move.implied_move }} ({{ ern.implied_move.days_to_earnings }}d out)
+      · {{ metric('implied move', 'implied_earnings_move') }} ±{{ ern.implied_move.implied_move }} ({{ ern.implied_move.days_to_earnings }}d out)
       · realized median {{ '%.1f%%' | format(ern.realized_move * 100) if ern.realized_move else '—' }}
     {% endif %}
   </div>

@@ -65,6 +65,14 @@ class TestSettingsRoute(unittest.TestCase):
         self.assertEqual(
             radar.get_tunable("radar_liquidity_floor_usd"), 5_000_000.0)
 
+    def test_infinity_rejected(self):
+        client = app_module.app.test_client()
+        before = radar.get_tunable("radar_peer_cap")
+        resp = client.post(
+            "/api/radar/settings", json={"radar_peer_cap": float("inf")})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(radar.get_tunable("radar_peer_cap"), before)
+
     def test_post_persists_and_echoes(self):
         client = app_module.app.test_client()
         resp = client.post("/api/radar/settings", json={"radar_peer_cap": 12})

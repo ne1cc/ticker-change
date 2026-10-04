@@ -52,7 +52,7 @@ class TestShortInterestWiring(unittest.TestCase):
             app_module.microstructure.get_microstructure_analytics(
                 pd.DataFrame(), **dict(zip(["short_pct_float", "days_to_cover"],
                                            app_module._si_kwargs("AAPL"))))
-        self.assertEqual(captured["short_pct_float"], 0.18)
+        self.assertEqual(captured["short_pct_float"], 18.0)
         self.assertEqual(captured["days_to_cover"], 6.0)
 
     def test_zero_valued_payload_is_reported_and_preserved(self):

@@ -219,6 +219,12 @@ GLOSSARY: dict[str, dict] = {
         "short": "Whether option prices imply a bigger or smaller earnings move than the stock's recent prints delivered.",
         "long": "Compares the straddle-implied move scaled to the earnings date against the median absolute move of the last prints. 'Rich' means the market is paying up for event protection; 'cheap' means implied calm vs history.",
     },
+    "implied_earnings_move": {
+        "term": "Implied Earnings Move",
+        "section": "Options & Volatility",
+        "short": "The stock move options prices imply for the upcoming earnings print.",
+        "long": "Scaled from the nearest straddle to the earnings date. Compare against the median realized print-day move: implied well above realized means the market is paying up for event protection (rich); well below means implied calm (cheap).",
+    },
 
     # ----------------------------------------------------------------- Market Microstructure
     "order_book": {

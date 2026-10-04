@@ -207,7 +207,7 @@ def build_squeeze_scan() -> dict:
         if dollar_volume < floor:
             continue
         score, level = microstructure.compute_squeeze_risk_index(
-            si["short_pct_float"], si["days_to_cover"])
+            si["short_pct_float"] * 100.0, si["days_to_cover"])
         mom = None
         try:
             ms = momentum_engine.score_series(px["close"], symbol=symbol)

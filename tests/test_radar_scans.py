@@ -100,6 +100,18 @@ class TestSqueezeScan(_PinnedDB):
         self.assertIn("squeeze_score", row)
         self.assertIn("squeeze_level", row)
 
+    def test_squeeze_score_pinned_to_percent_scale(self):
+        _store("SQZC", drift=0.003, volume=5_000_000)
+        db.cache_set("yfinance", "short:SQZC", {
+            "short_pct_float": 0.22, "days_to_cover": 7.0, "si_mom_change": None,
+            "shares_short": 1, "shares_short_prior_month": 1, "as_of": 1,
+            "source": "reported"})
+        with patch.object(radar, "get_tunable", return_value=5_000_000.0):
+            out = radar.build_squeeze_scan()
+        row = next(r for r in out["rows"] if r["symbol"] == "SQZC")
+        expected = radar.microstructure.compute_squeeze_risk_index(22.0, 7.0)[0]
+        self.assertEqual(row["squeeze_score"], expected)
+
     def test_empty_cache_yields_empty_rows(self):
         out = radar.build_squeeze_scan()
         self.assertEqual(out["rows"], [])

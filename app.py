@@ -763,11 +763,12 @@ def _short_interest_for(ticker: str) -> tuple[dict | None, str]:
 
 def _si_kwargs(ticker: str) -> tuple[float, float]:
     """(short_pct_float, days_to_cover) kwargs for get_microstructure_analytics,
-    real values when reported, signature defaults otherwise."""
+    real values when reported (fraction x100 — the squeeze index is scaled in
+    percent), signature defaults otherwise."""
     si, _source = _short_interest_for(ticker)
     pct = (si or {}).get("short_pct_float")
     dtc = (si or {}).get("days_to_cover")
-    return (pct if pct is not None else 3.0,
+    return (pct * 100.0 if pct is not None else 3.0,
             dtc if dtc is not None else 2.0)
 
 
@@ -2441,7 +2442,8 @@ def compute_positioning(ticker: str) -> dict:
 
     # Peer Comparison — cache-only percentile table + quadrant scatter.
     try:
-        data['peers'] = peers.build_peer_comparison(ticker)
+        data['peers'] = peers.build_peer_comparison(
+            ticker, cap=radar.get_tunable("radar_peer_cap"))
         data['peers_chart'] = _peers_quadrant_chart(data['peers']) if data['peers'] else None
     except Exception as e:
         print(f"peers panel failed for {ticker}: {e}")
@@ -4486,7 +4488,7 @@ def api_radar_settings():
     try:
         stored = {key: radar.clamp_tunable(key, value)
                   for key, value in body.items()}
-    except (ValueError, TypeError) as e:
+    except (ValueError, TypeError, OverflowError) as e:
         return jsonify({"error": str(e)}), 400
     for key, val in stored.items():
         radar.set_tunable(key, val)

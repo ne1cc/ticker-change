@@ -4,8 +4,9 @@ import unittest
 from glossary import GLOSSARY
 
 REQUIRED = {"surprise_pct", "pead_drift", "event_car", "event_vol_flag",
-            "peer_percentile", "rv_quadrant", "short_pct_float", "days_to_cover",
-            "si_mom_change", "squeeze_composite"}
+            "implied_earnings_move", "peer_percentile", "rv_quadrant",
+            "short_pct_float", "days_to_cover", "si_mom_change",
+            "squeeze_composite"}
 
 
 class TestRadarGlossary(unittest.TestCase):

@@ -530,7 +530,7 @@ def fetch_short_interest(symbol: str) -> dict | None:
     if shares_short is None and pct_float is None:
         return None
     mom = None
-    if shares_short and prior:
+    if shares_short is not None and prior:
         mom = round((shares_short - prior) / prior, 4)
     return {
         "shares_short": shares_short,
