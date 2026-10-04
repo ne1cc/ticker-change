@@ -172,3 +172,36 @@ class TestRealizedMoves(unittest.TestCase):
         med = earnings.realized_earnings_moves(df, events)
         self.assertAlmostEqual(med, 0.01, places=4)
         self.assertLess(med, 0.05)
+
+
+import decide as decide_module
+
+
+class TestChecklistSurpriseContext(unittest.TestCase):
+    def test_last_surprise_read_from_cache(self):
+        db.cache_set("yfinance", "earnings:TICKR", [
+            {"date": "2025-01-30", "eps_estimate": 1.5, "eps_actual": 1.7,
+             "surprise_pct": 13.3, "is_upcoming": False},
+            {"date": "2025-04-24", "eps_estimate": 1.6, "eps_actual": 1.4,
+             "surprise_pct": -12.5, "is_upcoming": False},
+        ])
+        out = decide_module._last_surprise("TICKR")
+        self.assertEqual(out["surprise_pct"], -12.5)
+        self.assertEqual(out["date"], "2025-04-24")
+
+    def test_check_reason_carries_beat_context(self):
+        db.cache_set("yfinance", "earnings:TICKR2", [
+            {"date": "2025-01-30", "eps_estimate": 1.0, "eps_actual": 1.2,
+             "surprise_pct": 20.0, "is_upcoming": False},
+        ])
+        with patch.object(decide_module, "days_until_earnings", return_value=30):
+            checks = decide_module.build_checklist("TICKR2", {}, "long_stock")
+        row = next(c for c in checks["checks"] if c["key"] == "earnings")
+        self.assertEqual(row["status"], "pass")
+        self.assertIn("last print beat by 20.0%", row["reason"])
+
+    def test_check_without_history_unchanged(self):
+        with patch.object(decide_module, "days_until_earnings", return_value=10):
+            checks = decide_module.build_checklist("TICKR3", {}, "long_stock")
+        row = next(c for c in checks["checks"] if c["key"] == "earnings")
+        self.assertEqual(row["reason"], "Earnings in 10d")
