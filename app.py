@@ -748,6 +748,26 @@ def get_fundamentals(ticker: str) -> dict | None:
     return result
 
 
+def _short_interest_for(ticker: str) -> tuple[dict | None, str]:
+    """Real SI payload + honesty flag. "assumed" means the microstructure
+    squeeze index ran on its 3.0%/2.0d signature defaults, not reported data."""
+    try:
+        si = providers.get_short_interest(ticker)
+    except Exception:
+        si = None
+    if si and si.get("short_pct_float") is not None and si.get("days_to_cover") is not None:
+        return si, "reported"
+    return si, "assumed"
+
+
+def _si_kwargs(ticker: str) -> tuple[float, float]:
+    """(short_pct_float, days_to_cover) kwargs for get_microstructure_analytics,
+    real values when reported, signature defaults otherwise."""
+    si, _source = _short_interest_for(ticker)
+    return ((si or {}).get("short_pct_float") or 3.0,
+            (si or {}).get("days_to_cover") or 2.0)
+
+
 def _get_fundamentals_uncached(ticker: str) -> dict | None:
     try:
         t = _get_yf_ticker(ticker)
@@ -2177,7 +2197,10 @@ def analytics_page():
         stock_inst_df = price_df if price_df is not None else get_or_fetch_prices(ticker, period="2y")
         if stock_inst_df is not None and not stock_inst_df.empty:
             benchmark_df = spy_df if spy_df is not None else stock_inst_df
-            micro_res = microstructure.get_microstructure_analytics(stock_inst_df)
+            si_pct, si_dtc = _si_kwargs(ticker)
+            si_payload, si_source = _short_interest_for(ticker)
+            micro_res = microstructure.get_microstructure_analytics(
+                stock_inst_df, short_pct_float=si_pct, days_to_cover=si_dtc)
             macro_res = macro_engine.get_macro_financial_report(stock_inst_df, benchmark_df)
             events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
 
@@ -2214,6 +2237,7 @@ def analytics_page():
 
             data['institutional'] = {
                 'microstructure': micro_res.__dict__,
+                'short_interest': {**(si_payload or {}), 'si_source': si_source},
                 'macro_conditioning': {
                     'regime': macro_res.current_regime,
                     'fed_funds_rate': macro_res.fed_funds_rate,
@@ -4312,7 +4336,10 @@ def api_institutional(ticker):
         return jsonify({"error": f"No pricing data for {ticker}"}), 404
 
     # 1. Microstructure & Squeeze
-    micro_res = microstructure.get_microstructure_analytics(stock_df)
+    si_pct, si_dtc = _si_kwargs(ticker)
+    si_payload, si_source = _short_interest_for(ticker)
+    micro_res = microstructure.get_microstructure_analytics(
+        stock_df, short_pct_float=si_pct, days_to_cover=si_dtc)
 
     # 2. Macro Conditioning
     macro_res = macro_engine.get_macro_financial_report(stock_df, spy_df if spy_df is not None else stock_df)
@@ -4328,6 +4355,7 @@ def api_institutional(ticker):
     return jsonify({
         "ticker": ticker,
         "microstructure": micro_res.__dict__,
+        "short_interest": {**(si_payload or {}), "si_source": si_source},
         "macro_conditioning": {
             "regime": macro_res.current_regime,
             "fed_funds_rate": macro_res.fed_funds_rate,
