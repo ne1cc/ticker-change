@@ -54,3 +54,11 @@ class TestShortInterestWiring(unittest.TestCase):
                                            app_module._si_kwargs("AAPL"))))
         self.assertEqual(captured["short_pct_float"], 0.18)
         self.assertEqual(captured["days_to_cover"], 6.0)
+
+    def test_zero_valued_payload_is_reported_and_preserved(self):
+        zeros = {"short_pct_float": 0.0, "days_to_cover": 0.0}
+        with patch.object(app_module.providers, "get_short_interest", return_value=dict(zeros)):
+            payload, source = app_module._short_interest_for("AAPL")
+            kwargs = app_module._si_kwargs("AAPL")
+        self.assertEqual(source, "reported")
+        self.assertEqual(kwargs, (0.0, 0.0))

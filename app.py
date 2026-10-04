@@ -764,8 +764,10 @@ def _si_kwargs(ticker: str) -> tuple[float, float]:
     """(short_pct_float, days_to_cover) kwargs for get_microstructure_analytics,
     real values when reported, signature defaults otherwise."""
     si, _source = _short_interest_for(ticker)
-    return ((si or {}).get("short_pct_float") or 3.0,
-            (si or {}).get("days_to_cover") or 2.0)
+    pct = (si or {}).get("short_pct_float")
+    dtc = (si or {}).get("days_to_cover")
+    return (pct if pct is not None else 3.0,
+            dtc if dtc is not None else 2.0)
 
 
 def _get_fundamentals_uncached(ticker: str) -> dict | None:
