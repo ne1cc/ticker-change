@@ -34,6 +34,10 @@ class TestRadarPage(unittest.TestCase):
 
     def test_tunables_echoed(self):
         with patch.object(app_module.radar, "build_drift_scan",
-                          return_value={"rows": [{"symbol": "X"}], "coverage": 1}):
+                          return_value={"rows": [{"symbol": "X", "car": 0.01, "surprise_pct": 5.0,
+                                                  "days_since": 3, "remaining": 27}], "coverage": 1}):
             resp = self._get("drift")
-        self.assertIn("Radar", resp.get_data(as_text=True))
+        html = resp.get_data(as_text=True)
+        self.assertIn("Radar", html)
+        self.assertIn("+1.0%", html)
+        self.assertNotIn("%.1f", html)

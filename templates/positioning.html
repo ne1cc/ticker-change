@@ -208,7 +208,7 @@
               <td class="py-1.5 pr-4 text-right">{{ r.forward_pe_pct if r.forward_pe_pct is not none else '—' }}</td>
               <td class="py-1.5 pr-4 text-right">{{ r.value_score if r.value_score is not none else '—' }}</td>
               <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (r.mom_12_1 or 0) > 0 else 'text-red-500' }}">
-                {{ '%+.1f%%'.format(r.mom_12_1 * 100) if r.mom_12_1 is not none else '—' }}
+                {{ '%+.1f%%' | format(r.mom_12_1 * 100) if r.mom_12_1 is not none else '—' }}
               </td>
               <td class="py-1.5 pr-4 font-sans text-xs">{{ r.quadrant or '—' }}</td>
             </tr>

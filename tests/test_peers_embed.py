@@ -32,7 +32,10 @@ class TestPeersEmbed(unittest.TestCase):
              patch.object(app_module.providers, "sec_cik_for_ticker", return_value=None):
             resp = client.get("/positioning?ticker=FOCUS")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn("Peer Comparison", resp.get_data(as_text=True))
+        html = resp.get_data(as_text=True)
+        self.assertIn("Peer Comparison", html)
+        self.assertIn("+20.0%", html)
+        self.assertNotIn("%+.1f", html)
 
     def test_page_renders_without_peers(self):
         client = app_module.app.test_client()
