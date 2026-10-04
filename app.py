@@ -28,6 +28,7 @@ import corporate_actions
 import event_study
 import sec_8k
 import earnings
+import peers
 import microstructure
 import macro_engine
 import options
@@ -2316,6 +2317,41 @@ def _institutional_holders_chart(holders):
     return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
+def _peers_quadrant_chart(peers_data: dict) -> str | None:
+    """Valuation percentile (x) vs 12-1 momentum (y, %) scatter; focus highlighted."""
+    try:
+        import plotly.graph_objects as go
+        rows = [peers_data["focus"], *peers_data["peers"]]
+        pts = [r for r in rows
+               if r.get("valuation_pct") is not None and r.get("mom_12_1") is not None]
+        if len(pts) < 2:
+            return None
+        fig = go.Figure()
+        for r in pts:
+            is_focus = r["symbol"] == peers_data["focus"]["symbol"]
+            fig.add_trace(go.Scatter(
+                x=[r["valuation_pct"]], y=[r["mom_12_1"] * 100],
+                mode="markers+text", text=[r["symbol"]], textposition="top center",
+                textfont=dict(size=10),
+                marker=dict(size=14 if is_focus else 9,
+                            color="#f59e0b" if is_focus else "#71717a"),
+                name=r["symbol"], showlegend=False,
+            ))
+        fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#a1a1aa")
+        fig.add_vline(x=50, line_width=1, line_dash="dot", line_color="#a1a1aa")
+        fig.update_layout(
+            height=320, margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(size=10),
+            xaxis=dict(title="Valuation percentile (higher = cheaper vs peers)"),
+            yaxis=dict(title="12-1 momentum %"),
+        )
+        return fig.to_html(full_html=False, include_plotlyjs=False)
+    except Exception as e:
+        print(f"peers chart failed: {e}")
+        return None
+
+
 def compute_positioning(ticker: str) -> dict:
     """Assemble market-positioning data from all available free providers.
 
@@ -2367,7 +2403,7 @@ def compute_positioning(ticker: str) -> dict:
         'chart': _institutional_holders_chart(holders) if holders else None,
     }
 
-    return {
+    data = {
         'ticker': symbol,
         'configured': cfg,
         'valuation': valuation,
@@ -2375,6 +2411,17 @@ def compute_positioning(ticker: str) -> dict:
         'insider': insider,
         'institutional': institutional,
     }
+
+    # Peer Comparison — cache-only percentile table + quadrant scatter.
+    try:
+        data['peers'] = peers.build_peer_comparison(ticker)
+        data['peers_chart'] = _peers_quadrant_chart(data['peers']) if data['peers'] else None
+    except Exception as e:
+        print(f"peers panel failed for {ticker}: {e}")
+        data['peers'] = None
+        data['peers_chart'] = None
+
+    return data
 
 
 @app.route('/positioning')
@@ -2391,6 +2438,7 @@ def positioning_api(ticker):
     data = compute_positioning(ticker)
     data['insider'].pop('chart', None)
     data['institutional'].pop('chart', None)
+    data.pop('peers_chart', None)
     return jsonify(data)
 
 
