@@ -4205,6 +4205,58 @@ def _start_heatmap_warmer():
     threading.Thread(target=_recurring, daemon=True, name="heatmap-recurring").start()
 
 
+def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True):
+    """Refresh the per-ticker earnings/fundamentals/SI payloads the /radar
+    scans read. Mirrors _warm_heatmap: background thread, cross-worker lock,
+    never raises. Chunked with sleeps to stay polite on the free tiers.
+    `background=False` runs the worker synchronously (used by tests)."""
+    def _worker():
+        try:
+            if not db.try_claim_lock("radar_warmer_lock", ttl_hours=6.0):
+                return
+            syms = symbols or radar.universe_symbols(min_bars=200)
+            if not syms:
+                return
+            print(f"[radar] warming {len(syms)} tickers ...")
+            done = 0
+            for sym in syms:
+                for key, fn in (("earnings", earnings.get_earnings_history),
+                                ("fundamentals", get_fundamentals),
+                                ("short", providers.get_short_interest)):
+                    try:
+                        payload = fn(sym)
+                        if payload is not None:
+                            db.cache_set("yfinance", f"{key}:{sym}", payload)
+                    except Exception as e:
+                        print(f"[radar] {fn.__name__} failed for {sym}: {e}")
+                done += 1
+                if done % 25 == 0:
+                    time.sleep(2)  # chunk pause, mirrors heatmap politeness
+            print(f"[radar] done ({done} tickers)")
+        except Exception as e:
+            print(f"[radar] warmer error: {e}")
+
+    if background:
+        threading.Thread(target=_worker, daemon=True, name="radar-warmer").start()
+    else:
+        _worker()
+
+
+def _start_radar_warmer():
+    """Warm once shortly after boot, then every 12h (payload TTL is 24h)."""
+    if os.environ.get("RADAR_WARM_ON_BOOT", "1") != "1":
+        return
+
+    def _recurring():
+        time.sleep(120)  # let the app bind before competing for locks
+        _warm_radar_cache()
+        while True:
+            time.sleep(12 * 3600)
+            _warm_radar_cache()
+
+    threading.Thread(target=_recurring, daemon=True, name="radar-recurring").start()
+
+
 @app.route('/api/warm-cache', methods=['POST'])
 def api_warm_cache():
     """Trigger a forced EOD options-chain warm (see .github/workflows/warm-cache.yml).
@@ -4428,6 +4480,7 @@ def api_radar_settings():
 # threads; the api_cache lock makes only one actually fetch).
 _start_options_cache_warmer()
 _start_heatmap_warmer()
+_start_radar_warmer()
 
 
 if __name__ == '__main__':
