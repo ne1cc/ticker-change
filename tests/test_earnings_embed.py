@@ -64,6 +64,13 @@ class TestEarningsEmbed(unittest.TestCase):
         self.assertIn("Earnings Event Study", html)
         # Partial-body-only marker: not satisfiable by the Row 9 HTML comment.
         self.assertIn("prints studied", html)
+        # No printf specifiers may leak into rendered HTML (str.format would
+        # render the literal template text; the | format filter renders values).
+        self.assertNotIn("'%", html)
+        self.assertNotIn("%.1f", html)
+        self.assertNotIn("%.3f", html)
+        # FAKE_SECTION surprise -12.5 via '%+.1f%%' | format renders "-12.5%".
+        self.assertIn("-12.5%", html)
 
     def test_page_renders_nothing_when_no_earnings(self):
         idx = pd.bdate_range("2024-01-01", periods=300)
