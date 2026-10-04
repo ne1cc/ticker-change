@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% from "_macros.html" import metric %}
+{% block title %}Radar — ticker/change{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <h1 class="text-2xl font-semibold tracking-tight mb-1">Radar</h1>
+  <p class="text-xs text-zinc-400 mb-6">
+    Universe screens over warmed caches — never fetches on load.
+    Coverage: {{ payload.coverage }} tickers.
+  </p>
+
+  <!-- Tabs (URL-param pattern, matches /strategies) -->
+  <div class="responsive-tabs border-b border-zinc-200 dark:border-zinc-800 flex gap-4 mb-6">
+    {% for t, label in [('drift', 'Earnings Drift'), ('value', 'Relative Value'), ('squeeze', 'Squeeze')] %}
+    <a href="/radar?tab={{ t }}"
+       class="pb-3 text-sm font-semibold border-b-2 transition-colors duration-200 {% if tab == t %}border-amber-500 text-zinc-900 dark:text-zinc-100{% else %}border-transparent text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100{% endif %}">
+      {{ label }}
+    </a>
+    {% endfor %}
+  </div>
+
+  {% if tab == 'value' %}
+  <form class="flex items-center gap-2 mb-4 text-xs text-zinc-400 radar-tunables"
+        data-tunable="radar_peer_cap">
+    <label for="tunable-peer-cap">Peer cap</label>
+    <input id="tunable-peer-cap" type="number" min="3" max="20"
+           value="{{ tunables['radar_peer_cap'] }}"
+           class="w-16 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-900 dark:text-zinc-100">
+    <span class="hidden text-emerald-500 radar-saved">saved</span>
+  </form>
+  {% endif %}
+  {% if tab == 'squeeze' %}
+  <form class="flex items-center gap-2 mb-4 text-xs text-zinc-400 radar-tunables"
+        data-tunable="radar_liquidity_floor_usd">
+    <label for="tunable-floor">Liquidity floor ($/day)</label>
+    <input id="tunable-floor" type="number" min="100000" max="100000000" step="100000"
+           value="{{ tunables['radar_liquidity_floor_usd'] | int }}"
+           class="w-28 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-900 dark:text-zinc-100">
+    <span class="hidden text-emerald-500 radar-saved">saved</span>
+  </form>
+  {% endif %}
+
+  {% if warming %}
+  <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center text-sm text-zinc-400">
+    Warming — the background warmer fills these screens. Check back shortly.
+  </div>
+  {% else %}
+  <div class="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+    {% if tab == 'drift' %}
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+          <th class="py-1.5 pr-4">Ticker</th>
+          <th class="py-1.5 pr-4">Print date</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('Days since', 'pead_drift') }}</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('Drift left', 'pead_drift') }}</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('Surprise %', 'surprise_pct') }}</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('CAR', 'event_car') }}</th>
+        </tr>
+      </thead>
+      <tbody class="font-mono">
+        {% for r in payload.rows %}
+        <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
+          <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
+          <td class="py-1.5 pr-4">{{ r.date }}</td>
+          <td class="py-1.5 pr-4 text-right">{{ r.days_since }}</td>
+          <td class="py-1.5 pr-4 text-right {{ 'text-amber-500 font-semibold' if (r.remaining or 0) > 0 else 'text-zinc-400' }}">{{ r.remaining }}d</td>
+          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%'.format(r.surprise_pct) if r.surprise_pct is not none else '—' }}</td>
+          <td class="py-1.5 pr-4 text-right {{ 'text-amber-500 font-semibold' if r.is_significant_95 else '' }}">
+            {{ '%+.1f%%'.format((r.car or 0) * 100) if r.car is not none else '—' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% elif tab == 'value' %}
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+          <th class="py-1.5 pr-4">Ticker</th>
+          <th class="py-1.5 pr-4">Industry</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('Value score', 'rv_quadrant') }}</th>
+          <th class="py-1.5 pr-4 text-right">12-1 mom</th>
+          <th class="py-1.5 pr-4 text-right">Fwd P/E</th>
+        </tr>
+      </thead>
+      <tbody class="font-mono">
+        {% for r in payload.rows %}
+        <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
+          <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
+          <td class="py-1.5 pr-4 font-sans text-xs">{{ r.industry }}</td>
+          <td class="py-1.5 pr-4 text-right">{{ r.value_score }}</td>
+          <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (r.mom_12_1 or 0) > 0 else 'text-red-500' }}">{{ '%+.1f%%'.format(r.mom_12_1 * 100) if r.mom_12_1 is not none else '—' }}</td>
+          <td class="py-1.5 pr-4 text-right">{{ '%.1f'.format(r.forward_pe) if r.forward_pe is not none else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+          <th class="py-1.5 pr-4">Ticker</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('SI % float', 'short_pct_float') }}</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('DTC', 'days_to_cover') }}</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('MoM Δ', 'si_mom_change') }}</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('Squeeze score', 'squeeze_composite') }}</th>
+          <th class="py-1.5 pr-4 text-right">12-1 mom</th>
+        </tr>
+      </thead>
+      <tbody class="font-mono">
+        {% for r in payload.rows %}
+        <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
+          <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
+          <td class="py-1.5 pr-4 text-right">{{ '%.1f%%'.format(r.short_pct_float * 100) }}</td>
+          <td class="py-1.5 pr-4 text-right">{{ r.days_to_cover }}</td>
+          <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (r.si_mom_change or 0) > 0 else 'text-red-500' if (r.si_mom_change or 0) < 0 else 'text-zinc-400' }}">{{ '%+.1f%%'.format(r.si_mom_change * 100) if r.si_mom_change is not none else '—' }}</td>
+          <td class="py-1.5 pr-4 text-right">{{ r.squeeze_score }} <span class="text-[10px] text-zinc-400">{{ r.squeeze_level }}</span></td>
+          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%'.format(r.mom_12_1 * 100) if r.mom_12_1 is not none else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<script>
+  // Persist inline tunables to /api/radar/settings, then reload from cache.
+  document.querySelectorAll('.radar-tunables input').forEach(function (input) {
+    input.addEventListener('change', function () {
+      var form = input.closest('.radar-tunables');
+      var key = form.getAttribute('data-tunable');
+      fetch('/api/radar/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(Object.fromEntries([[key, Number(input.value)]]))
+      }).then(function (resp) {
+        if (resp.ok) {
+          var badge = form.querySelector('.radar-saved');
+          badge.classList.remove('hidden');
+          setTimeout(function () { window.location.reload(); }, 400);
+        }
+      }).catch(function () {});
+    });
+  });
+</script>
+{% endblock %}

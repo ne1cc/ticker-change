@@ -229,6 +229,7 @@
               <a id="nav-options" href="/options" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Options</a>
               <a id="nav-analytics" href="/analytics" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Analytics</a>
               <a id="nav-strategies" href="/strategies" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Strategies</a>
+              <a id="nav-radar" href="/radar" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Radar</a>
             </div>
           </div>
           <div class="flex items-center gap-2">
@@ -310,6 +311,7 @@
             <div class="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 px-2 mb-1">Strategies</div>
             <div class="grid grid-cols-2 gap-1.5">
               <a id="mobile-nav-strategies" href="/strategies" class="mobile-nav-link">Strategy Backtests</a>
+              <a id="mobile-nav-radar" href="/radar" class="mobile-nav-link">Radar</a>
               <a id="mobile-nav-ai-summary" href="/ai-summary" class="mobile-nav-link">AI Strategy Report</a>
             </div>
           </div>
@@ -453,7 +455,8 @@
           markets:    { id: 'nav-markets', defaultRoute: '/stock', children: ['stock', 'live', 'heatmap'] },
           options:    { id: 'nav-options', defaultRoute: '/options', children: [] },
           analytics:  { id: 'nav-analytics', defaultRoute: '/analytics', children: ['analytics', 'positioning'] },
-          strategies: { id: 'nav-strategies', defaultRoute: '/strategies', children: ['strategies', 'ai-summary'] }
+          strategies: { id: 'nav-strategies', defaultRoute: '/strategies', children: ['strategies', 'ai-summary'] },
+          radar:      { id: 'nav-radar', defaultRoute: '/radar', children: ['radar'] }
         };
 
         const ROUTE_MAP = {

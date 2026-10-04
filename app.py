@@ -3680,6 +3680,24 @@ def strategies_page():
     )
 
 
+@app.route('/radar')
+def radar_page():
+    """Universe scanners over warmed caches: drift / value / squeeze."""
+    tab = request.args.get('tab', 'drift')
+    if tab not in {'drift', 'value', 'squeeze'}:
+        tab = 'drift'
+    builders = {
+        'drift': radar.build_drift_scan,
+        'value': radar.build_value_scan,
+        'squeeze': radar.build_squeeze_scan,
+    }
+    payload = _guard_section(f"radar:{tab}", builders[tab], default={"rows": [], "coverage": 0})
+    warming = not payload["rows"]
+    tunables = {key: radar.get_tunable(key) for key in radar.TUNABLES}
+    return render_template('radar.html', tab=tab, payload=payload,
+                           warming=warming, tunables=tunables)
+
+
 # User-configurable provider keys. Saved server-side (SQLite) so they apply to the
 # backend Finnhub/FMP/LLM calls. Stored keys act as quota fallbacks behind the
 # built-in dev key — see providers._ordered_keys / _finnhub_get / _fmp_get and the
