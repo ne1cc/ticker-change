@@ -1,0 +1,68 @@
+{# Earnings Event Study partial: past-print CAR table, drift summary, upcoming print block. #}
+{% from "_macros.html" import metric %}
+{% if data and data.earnings %}
+{% set ern = data.earnings %}
+<section class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+  <div class="flex items-baseline justify-between mb-3">
+    <h2 class="text-xs font-semibold uppercase tracking-widest text-zinc-500 dark:text-zinc-400">
+      {{ metric('Earnings Event Study', 'event_car') }}
+    </h2>
+    {% if ern.event_vol %}
+    <span class="text-[11px] font-semibold uppercase tracking-wide {% if ern.event_vol == 'rich' %}text-rose-400{% elif ern.event_vol == 'cheap' %}text-emerald-400{% else %}text-zinc-400{% endif %}">
+      Event vol {{ ern.event_vol }}
+    </span>
+    {% endif %}
+  </div>
+
+  {% if ern.summary and ern.summary.n_events %}
+  <p class="text-[11px] text-zinc-400 mb-3">
+    {{ ern.summary.n_events }} prints studied · {{ ern.summary.n_significant }} significant at 95%
+    {% if ern.summary.avg_car_beat is not none %}· avg CAR after beats {{ '%+.1f%%' | format(ern.summary.avg_car_beat * 100) }}{% endif %}
+    {% if ern.summary.avg_car_miss is not none %}· after misses {{ '%+.1f%%' | format(ern.summary.avg_car_miss * 100) }}{% endif %}
+  </p>
+  {% endif %}
+
+  {% if ern.next_print %}
+  <div class="text-sm mb-4">
+    Next print <span class="font-semibold">{{ ern.next_print.date }}</span>
+    {% if ern.implied_move %}
+      · {{ metric('implied move', 'implied_earnings_move') }} ±{{ ern.implied_move.implied_move }} ({{ ern.implied_move.days_to_earnings }}d out)
+      · realized median {{ '%.1f%%' | format(ern.realized_move * 100) if ern.realized_move else '—' }}
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if ern.events %}
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+          <th class="py-1.5 pr-4">Date</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('Surprise %', 'surprise_pct') }}</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('CAR (−10/+30)', 'event_car') }}</th>
+          <th class="py-1.5 pr-4 text-right">p</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('Drift 10d', 'pead_drift') }}</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('Drift 20d', 'pead_drift') }}</th>
+        </tr>
+      </thead>
+      <tbody class="font-mono">
+        {% for e in ern.events %}
+        <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
+          <td class="py-1.5 pr-4">{{ e.date }}</td>
+          <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (e.surprise_pct or 0) > 0 else 'text-red-500' if (e.surprise_pct or 0) < 0 else 'text-zinc-400' }}">
+            {{ '%+.1f%%' | format(e.surprise_pct) if e.surprise_pct is not none else '—' }}
+          </td>
+          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format(e.car * 100) if e.car is not none else '—' }}</td>
+          <td class="py-1.5 pr-4 text-right {{ 'text-amber-500 font-semibold' if e.is_significant_95 else 'text-zinc-400' }}">
+            {{ '%.3f' | format(e.car_p_value) if e.car_p_value is not none else '—' }}
+          </td>
+          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format(e.drift_10d * 100) if e.drift_10d is not none else '—' }}</td>
+          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format(e.drift_20d * 100) if e.drift_20d is not none else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+{% endif %}

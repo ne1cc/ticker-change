@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import db
+import earnings
 import ml
 import pandas as pd
 
@@ -48,6 +49,19 @@ def days_until_earnings(fundamentals: dict | None) -> int | None:
     try:
         dt = pd.to_datetime(raw).date()
         return (dt - datetime.now().date()).days
+    except Exception:
+        return None
+
+
+def _last_surprise(ticker: str) -> dict | None:
+    """Most recent reported surprise from the warmed earnings cache (no fetch)."""
+    try:
+        rows = db.cache_get("yfinance", f"earnings:{ticker.upper()}",
+                            earnings.EARNINGS_TTL_HOURS) or []
+        past = [r for r in rows
+                if not r.get("is_upcoming") and r.get("surprise_pct") is not None]
+        return ({"surprise_pct": past[-1]["surprise_pct"], "date": past[-1]["date"]}
+                if past else None)
     except Exception:
         return None
 
@@ -131,12 +145,17 @@ def build_checklist(
     # Earnings
     earn_days = days_until_earnings(fundamentals)
     if earn_days is not None:
+        last = _last_surprise(ticker)
+        ctx = ""
+        if last:
+            direction = "beat" if last["surprise_pct"] > 0 else "missed"
+            ctx = f" — last print {direction} by {abs(last['surprise_pct']):.1f}%"
         if earn_days > 5:
-            st, reason = "pass", f"Earnings in {earn_days}d"
+            st, reason = "pass", f"Earnings in {earn_days}d{ctx}"
         elif earn_days >= 3:
-            st, reason = "warn", f"Earnings in {earn_days}d — event risk"
+            st, reason = "warn", f"Earnings in {earn_days}d — event risk{ctx}"
         else:
-            st, reason = "fail", f"Earnings in {earn_days}d — too close"
+            st, reason = "fail", f"Earnings in {earn_days}d — too close{ctx}"
         checks.append(_check_row("earnings", "Earnings", st, reason))
     else:
         checks.append(_check_row("earnings", "Earnings", "skip", "No earnings date on file"))

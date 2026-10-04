@@ -184,6 +184,48 @@
     {% endif %}
   </section>
 
+  <!-- Peer Comparison -->
+  <section class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+    {{ panel_header('Peer Comparison', 'Finnhub · yfinance · warmed cache', 'peer_percentile') }}
+    {% if data.peers %}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+              <th class="py-1.5 pr-4">Ticker</th>
+              <th class="py-1.5 pr-4 text-right">{{ metric('Fwd P/E pct', 'peer_percentile') }}</th>
+              <th class="py-1.5 pr-4 text-right">{{ metric('Value score', 'rv_quadrant') }}</th>
+              <th class="py-1.5 pr-4 text-right">12-1 mom</th>
+              <th class="py-1.5 pr-4">{{ metric('Quadrant', 'rv_quadrant') }}</th>
+            </tr>
+          </thead>
+          <tbody class="font-mono">
+            {% set all_rows = [data.peers.focus] + data.peers.peers %}
+            {% for r in all_rows %}
+            <tr class="border-b border-zinc-100 dark:border-zinc-800/50 {{ 'bg-amber-500/5 font-semibold' if r.symbol == data.peers.focus.symbol }}">
+              <td class="py-1.5 pr-4 font-sans">{{ r.symbol }}</td>
+              <td class="py-1.5 pr-4 text-right">{{ r.forward_pe_pct if r.forward_pe_pct is not none else '—' }}</td>
+              <td class="py-1.5 pr-4 text-right">{{ r.value_score if r.value_score is not none else '—' }}</td>
+              <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (r.mom_12_1 or 0) > 0 else 'text-red-500' }}">
+                {{ '%+.1f%%' | format(r.mom_12_1 * 100) if r.mom_12_1 is not none else '—' }}
+              </td>
+              <td class="py-1.5 pr-4 font-sans text-xs">{{ r.quadrant or '—' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if data.peers_chart %}<div>{{ data.peers_chart | safe }}</div>{% endif %}
+    </div>
+    {% else %}
+    <p class="text-xs text-zinc-400">
+      No peer set resolved — needs a Finnhub key, or warmed fundamentals for
+      same-industry names (let the radar warmer run).
+    </p>
+    {% endif %}
+  </section>
+
   <!-- Raw SEC Submissions Feed -->
   <section class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
     <div class="flex items-baseline justify-between mb-4">

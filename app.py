@@ -27,6 +27,9 @@ import ai
 import corporate_actions
 import event_study
 import sec_8k
+import earnings
+import radar
+import peers
 import microstructure
 import macro_engine
 import options
@@ -730,7 +733,46 @@ def stock_page():
     return render_template('index.html')
 
 def get_fundamentals(ticker: str) -> dict | None:
-    """Fetch key valuation multiples, short interest, consensus forecasts, and upcoming events from yfinance."""
+    """Fetch key valuation multiples, short interest, consensus forecasts, and upcoming events from yfinance.
+
+    Cached 24h in api_cache (provider "yfinance") — the radar warmer and the
+    peers module read the same key, and /stock used to hit yfinance live on
+    every load.
+    """
+    cache_key = f"fundamentals:{ticker.upper()}"
+    cached = db.cache_get("yfinance", cache_key, 24)
+    if cached is not None:
+        return cached
+    result = _get_fundamentals_uncached(ticker)
+    if result is not None:
+        db.cache_set("yfinance", cache_key, result)
+    return result
+
+
+def _short_interest_for(ticker: str) -> tuple[dict | None, str]:
+    """Real SI payload + honesty flag. "assumed" means the microstructure
+    squeeze index ran on its 3.0%/2.0d signature defaults, not reported data."""
+    try:
+        si = providers.get_short_interest(ticker)
+    except Exception:
+        si = None
+    if si and si.get("short_pct_float") is not None and si.get("days_to_cover") is not None:
+        return si, "reported"
+    return si, "assumed"
+
+
+def _si_kwargs(ticker: str) -> tuple[float, float]:
+    """(short_pct_float, days_to_cover) kwargs for get_microstructure_analytics,
+    real values when reported (fraction x100 — the squeeze index is scaled in
+    percent), signature defaults otherwise."""
+    si, _source = _short_interest_for(ticker)
+    pct = (si or {}).get("short_pct_float")
+    dtc = (si or {}).get("days_to_cover")
+    return (pct * 100.0 if pct is not None else 3.0,
+            dtc if dtc is not None else 2.0)
+
+
+def _get_fundamentals_uncached(ticker: str) -> dict | None:
     try:
         t = _get_yf_ticker(ticker)
         info = t.info or {}
@@ -2159,7 +2201,10 @@ def analytics_page():
         stock_inst_df = price_df if price_df is not None else get_or_fetch_prices(ticker, period="2y")
         if stock_inst_df is not None and not stock_inst_df.empty:
             benchmark_df = spy_df if spy_df is not None else stock_inst_df
-            micro_res = microstructure.get_microstructure_analytics(stock_inst_df)
+            si_pct, si_dtc = _si_kwargs(ticker)
+            si_payload, si_source = _short_interest_for(ticker)
+            micro_res = microstructure.get_microstructure_analytics(
+                stock_inst_df, short_pct_float=si_pct, days_to_cover=si_dtc)
             macro_res = macro_engine.get_macro_financial_report(stock_inst_df, benchmark_df)
             events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
 
@@ -2196,6 +2241,7 @@ def analytics_page():
 
             data['institutional'] = {
                 'microstructure': micro_res.__dict__,
+                'short_interest': {**(si_payload or {}), 'si_source': si_source},
                 'macro_conditioning': {
                     'regime': macro_res.current_regime,
                     'fed_funds_rate': macro_res.fed_funds_rate,
@@ -2213,6 +2259,10 @@ def analytics_page():
     except Exception as e:
         print(f"Error computing institutional analytics for {ticker}: {e}")
         data['institutional'] = None
+
+    # Earnings Event Study — CAR per past print + upcoming-print block.
+    data['earnings'] = _guard_section(
+        "earnings", lambda: earnings.build_earnings_section(ticker))
 
     # AI analyst report — reads everything above, including the ML signal
     ai_report_html = ai.generate_report(ticker, data)
@@ -2295,6 +2345,41 @@ def _institutional_holders_chart(holders):
     return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
+def _peers_quadrant_chart(peers_data: dict) -> str | None:
+    """Valuation percentile (x) vs 12-1 momentum (y, %) scatter; focus highlighted."""
+    try:
+        import plotly.graph_objects as go
+        rows = [peers_data["focus"], *peers_data["peers"]]
+        pts = [r for r in rows
+               if r.get("valuation_pct") is not None and r.get("mom_12_1") is not None]
+        if len(pts) < 2:
+            return None
+        fig = go.Figure()
+        for r in pts:
+            is_focus = r["symbol"] == peers_data["focus"]["symbol"]
+            fig.add_trace(go.Scatter(
+                x=[r["valuation_pct"]], y=[r["mom_12_1"] * 100],
+                mode="markers+text", text=[r["symbol"]], textposition="top center",
+                textfont=dict(size=10),
+                marker=dict(size=14 if is_focus else 9,
+                            color="#f59e0b" if is_focus else "#71717a"),
+                name=r["symbol"], showlegend=False,
+            ))
+        fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#a1a1aa")
+        fig.add_vline(x=50, line_width=1, line_dash="dot", line_color="#a1a1aa")
+        fig.update_layout(
+            height=320, margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(size=10),
+            xaxis=dict(title="Valuation percentile (higher = cheaper vs peers)"),
+            yaxis=dict(title="12-1 momentum %"),
+        )
+        return fig.to_html(full_html=False, include_plotlyjs=False)
+    except Exception as e:
+        print(f"peers chart failed: {e}")
+        return None
+
+
 def compute_positioning(ticker: str) -> dict:
     """Assemble market-positioning data from all available free providers.
 
@@ -2346,7 +2431,7 @@ def compute_positioning(ticker: str) -> dict:
         'chart': _institutional_holders_chart(holders) if holders else None,
     }
 
-    return {
+    data = {
         'ticker': symbol,
         'configured': cfg,
         'valuation': valuation,
@@ -2354,6 +2439,18 @@ def compute_positioning(ticker: str) -> dict:
         'insider': insider,
         'institutional': institutional,
     }
+
+    # Peer Comparison — cache-only percentile table + quadrant scatter.
+    try:
+        data['peers'] = peers.build_peer_comparison(
+            ticker, cap=radar.get_tunable("radar_peer_cap"))
+        data['peers_chart'] = _peers_quadrant_chart(data['peers']) if data['peers'] else None
+    except Exception as e:
+        print(f"peers panel failed for {ticker}: {e}")
+        data['peers'] = None
+        data['peers_chart'] = None
+
+    return data
 
 
 @app.route('/positioning')
@@ -2370,6 +2467,7 @@ def positioning_api(ticker):
     data = compute_positioning(ticker)
     data['insider'].pop('chart', None)
     data['institutional'].pop('chart', None)
+    data.pop('peers_chart', None)
     return jsonify(data)
 
 
@@ -3584,6 +3682,24 @@ def strategies_page():
     )
 
 
+@app.route('/radar')
+def radar_page():
+    """Universe scanners over warmed caches: drift / value / squeeze."""
+    tab = request.args.get('tab', 'drift')
+    if tab not in {'drift', 'value', 'squeeze'}:
+        tab = 'drift'
+    builders = {
+        'drift': radar.build_drift_scan,
+        'value': radar.build_value_scan,
+        'squeeze': radar.build_squeeze_scan,
+    }
+    payload = _guard_section(f"radar:{tab}", builders[tab], default={"rows": [], "coverage": 0})
+    warming = not payload["rows"]
+    tunables = {key: radar.get_tunable(key) for key in radar.TUNABLES}
+    return render_template('radar.html', tab=tab, payload=payload,
+                           warming=warming, tunables=tunables)
+
+
 # User-configurable provider keys. Saved server-side (SQLite) so they apply to the
 # backend Finnhub/FMP/LLM calls. Stored keys act as quota fallbacks behind the
 # built-in dev key — see providers._ordered_keys / _finnhub_get / _fmp_get and the
@@ -4109,6 +4225,58 @@ def _start_heatmap_warmer():
     threading.Thread(target=_recurring, daemon=True, name="heatmap-recurring").start()
 
 
+def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True):
+    """Refresh the per-ticker earnings/fundamentals/SI payloads the /radar
+    scans read. Mirrors _warm_heatmap: background thread, cross-worker lock,
+    never raises. Chunked with sleeps to stay polite on the free tiers.
+    `background=False` runs the worker synchronously (used by tests)."""
+    def _worker():
+        try:
+            if not db.try_claim_lock("radar_warmer_lock", ttl_hours=6.0):
+                return
+            syms = symbols or radar.universe_symbols(min_bars=200)
+            if not syms:
+                return
+            print(f"[radar] warming {len(syms)} tickers ...")
+            done = 0
+            for sym in syms:
+                for key, fn in (("earnings", earnings.get_earnings_history),
+                                ("fundamentals", get_fundamentals),
+                                ("short", providers.get_short_interest)):
+                    try:
+                        payload = fn(sym)
+                        if payload is not None:
+                            db.cache_set("yfinance", f"{key}:{sym}", payload)
+                    except Exception as e:
+                        print(f"[radar] {fn.__name__} failed for {sym}: {e}")
+                done += 1
+                if done % 25 == 0:
+                    time.sleep(2)  # chunk pause, mirrors heatmap politeness
+            print(f"[radar] done ({done} tickers)")
+        except Exception as e:
+            print(f"[radar] warmer error: {e}")
+
+    if background:
+        threading.Thread(target=_worker, daemon=True, name="radar-warmer").start()
+    else:
+        _worker()
+
+
+def _start_radar_warmer():
+    """Warm once shortly after boot, then every 12h (payload TTL is 24h)."""
+    if os.environ.get("RADAR_WARM_ON_BOOT", "1") != "1":
+        return
+
+    def _recurring():
+        time.sleep(120)  # let the app bind before competing for locks
+        _warm_radar_cache()
+        while True:
+            time.sleep(12 * 3600)
+            _warm_radar_cache()
+
+    threading.Thread(target=_recurring, daemon=True, name="radar-recurring").start()
+
+
 @app.route('/api/warm-cache', methods=['POST'])
 def api_warm_cache():
     """Trigger a forced EOD options-chain warm (see .github/workflows/warm-cache.yml).
@@ -4243,7 +4411,10 @@ def api_institutional(ticker):
         return jsonify({"error": f"No pricing data for {ticker}"}), 404
 
     # 1. Microstructure & Squeeze
-    micro_res = microstructure.get_microstructure_analytics(stock_df)
+    si_pct, si_dtc = _si_kwargs(ticker)
+    si_payload, si_source = _short_interest_for(ticker)
+    micro_res = microstructure.get_microstructure_analytics(
+        stock_df, short_pct_float=si_pct, days_to_cover=si_dtc)
 
     # 2. Macro Conditioning
     macro_res = macro_engine.get_macro_financial_report(stock_df, spy_df if spy_df is not None else stock_df)
@@ -4259,6 +4430,7 @@ def api_institutional(ticker):
     return jsonify({
         "ticker": ticker,
         "microstructure": micro_res.__dict__,
+        "short_interest": {**(si_payload or {}), "si_source": si_source},
         "macro_conditioning": {
             "regime": macro_res.current_regime,
             "fed_funds_rate": macro_res.fed_funds_rate,
@@ -4295,11 +4467,40 @@ def api_active_tickers():
         return jsonify([]), 500
 
 
+def _optional_token_authorized() -> bool:
+    """active-tickers posture: enforce only when WARM_CACHE_TOKEN is configured."""
+    expected = os.environ.get("WARM_CACHE_TOKEN", "").strip()
+    if not expected:
+        return True
+    header = request.headers.get("Authorization", "")
+    return header.startswith("Bearer ") and hmac.compare_digest(
+        header[len("Bearer "):], expected)
+
+
+@app.route('/api/radar/settings', methods=['POST'])
+def api_radar_settings():
+    """Persist /radar inline tunables (display thresholds, not secrets)."""
+    if not _optional_token_authorized():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not body:
+        return jsonify({"error": "expected a JSON object of tunables"}), 400
+    try:
+        stored = {key: radar.clamp_tunable(key, value)
+                  for key, value in body.items()}
+    except (ValueError, TypeError, OverflowError) as e:
+        return jsonify({"error": str(e)}), 400
+    for key, val in stored.items():
+        radar.set_tunable(key, val)
+    return jsonify(stored), 200
+
+
 # Import-time start: gunicorn imports app:app and never runs __main__, so
 # this is what activates the warmer in production (each worker starts the
 # threads; the api_cache lock makes only one actually fetch).
 _start_options_cache_warmer()
 _start_heatmap_warmer()
+_start_radar_warmer()
 
 
 if __name__ == '__main__':
