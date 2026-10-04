@@ -551,6 +551,22 @@ def get_short_interest(symbol: str) -> dict | None:
     )
 
 
+def finnhub_peer(symbol: str) -> list[str] | None:
+    """Peer ticker list from Finnhub /stock/peer. Returns uppercase symbols or None."""
+    if not finnhub_keys():
+        return None
+    raw = _cached(
+        "finnhub", f"peer:{symbol.upper()}",
+        lambda: _finnhub_get("/stock/peer", {"symbol": symbol.upper()}),
+    )
+    if not isinstance(raw, dict):
+        return None
+    peers = raw.get("peers")
+    if not isinstance(peers, list):
+        return None
+    return [str(p).upper() for p in peers if isinstance(p, str)] or None
+
+
 # --------------------------------------------------------------------------- #
 # SEC EDGAR (keyless)                                                          #
 # --------------------------------------------------------------------------- #

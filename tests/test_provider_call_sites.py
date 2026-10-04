@@ -227,5 +227,21 @@ class TestSec8kFetch(ProviderTestCase):
             self.assertEqual([], sec_8k.fetch_and_parse_8k_filings("NOPE"))
 
 
+class TestFinnhubPeer(ProviderTestCase):
+    def test_returns_uppercase_peer_list(self):
+        with mock.patch.object(providers, "finnhub_keys", return_value=["k"]), \
+             mock.patch.object(providers, "_finnhub_get",
+                               return_value={"peers": ["msft", "GOOG", 123]}):
+            self.assertEqual(providers.finnhub_peer("aapl"), ["MSFT", "GOOG"])
+
+    def test_none_when_unconfigured(self):
+        with mock.patch.object(providers, "finnhub_keys", return_value=[]):
+            self.assertIsNone(providers.finnhub_peer("AAPL"))
+
+    def test_none_on_bad_shape(self):
+        with mock.patch.object(providers, "_finnhub_get", return_value={"error": "x"}):
+            self.assertIsNone(providers.finnhub_peer("AAPL"))
+
+
 if __name__ == "__main__":
     unittest.main()
