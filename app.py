@@ -4413,12 +4413,13 @@ def api_radar_settings():
     body = request.get_json(silent=True)
     if not isinstance(body, dict) or not body:
         return jsonify({"error": "expected a JSON object of tunables"}), 400
-    stored = {}
     try:
-        for key, value in body.items():
-            stored[key] = radar.set_tunable(key, value)
+        stored = {key: radar.clamp_tunable(key, value)
+                  for key, value in body.items()}
     except (ValueError, TypeError) as e:
         return jsonify({"error": str(e)}), 400
+    for key, val in stored.items():
+        radar.set_tunable(key, val)
     return jsonify(stored), 200
 
 

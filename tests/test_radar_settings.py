@@ -40,6 +40,31 @@ class TestTunables(unittest.TestCase):
 
 
 class TestSettingsRoute(unittest.TestCase):
+    def test_multi_key_post_is_atomic(self):
+        client = app_module.app.test_client()
+        before = radar.get_tunable("radar_peer_cap")
+        resp = client.post(
+            "/api/radar/settings", json={"radar_peer_cap": 12, "nope": 1})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(radar.get_tunable("radar_peer_cap"), before)
+        resp = client.post(
+            "/api/radar/settings",
+            json={"radar_peer_cap": 12, "zzz_unknown": 1})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(radar.get_tunable("radar_peer_cap"), before)
+
+    def test_nan_rejected(self):
+        client = app_module.app.test_client()
+        before = radar.get_tunable("radar_liquidity_floor_usd")
+        resp = client.post(
+            "/api/radar/settings",
+            json={"radar_liquidity_floor_usd": float("nan")})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(radar.get_tunable("radar_liquidity_floor_usd"), before)
+        db.set_setting("radar_liquidity_floor_usd", "nan")
+        self.assertEqual(
+            radar.get_tunable("radar_liquidity_floor_usd"), 5_000_000.0)
+
     def test_post_persists_and_echoes(self):
         client = app_module.app.test_client()
         resp = client.post("/api/radar/settings", json={"radar_peer_cap": 12})

@@ -7,6 +7,8 @@ Bearer-checked only when WARM_CACHE_TOKEN is configured.
 """
 from __future__ import annotations
 
+import math
+
 import db
 
 TUNABLES: dict[str, dict] = {
@@ -26,14 +28,24 @@ def get_tunable(key: str):
         val = spec["type"](db.get_setting(key, ""))
     except (TypeError, ValueError):
         return spec["default"]
+    if isinstance(val, float) and not math.isfinite(val):
+        return spec["default"]
+    return spec["type"](min(max(val, spec["min"]), spec["max"]))
+
+
+def clamp_tunable(key: str, value):
+    """Coerce, reject non-finite, and clamp; no persistence."""
+    spec = TUNABLES.get(key)
+    if spec is None:
+        raise ValueError(f"unknown tunable: {key}")
+    val = spec["type"](value)
+    if isinstance(val, float) and not math.isfinite(val):
+        raise ValueError(f"non-finite value for {key}: {val}")
     return spec["type"](min(max(val, spec["min"]), spec["max"]))
 
 
 def set_tunable(key: str, value):
     """Clamp, persist, and return the stored value. ValueError on unknown key."""
-    spec = TUNABLES.get(key)
-    if spec is None:
-        raise ValueError(f"unknown tunable: {key}")
-    val = spec["type"](min(max(spec["type"](value), spec["min"]), spec["max"]))
+    val = clamp_tunable(key, value)
     db.set_setting(key, str(val))
     return val
