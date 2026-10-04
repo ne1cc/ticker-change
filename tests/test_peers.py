@@ -4,6 +4,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import numpy as np
+import pandas as pd
+
 import db
 
 _fd, _DB_PATH = tempfile.mkstemp(suffix=".db")
@@ -64,3 +67,55 @@ class TestUniverseClassifications(unittest.TestCase):
         self.assertEqual(out["GOOD"], {"industry": "Tech", "sector": "Technology"})
         self.assertNotIn("BAD", out)
         self.assertEqual(out["FROMIDX"], {"industry": None, "sector": "Technology"})
+
+
+class TestPercentileAndQuadrant(unittest.TestCase):
+    def test_percentile_rank_basic_and_invert(self):
+        vals = [10.0, 20.0, 30.0, 40.0]
+        self.assertEqual(peers.percentile_rank(vals, 30.0), 66.7)
+        self.assertEqual(peers.percentile_rank(vals, 30.0, invert=True), 33.3)
+
+    def test_percentile_edge_cases(self):
+        self.assertIsNone(peers.percentile_rank([5.0], 5.0))
+        self.assertIsNone(peers.percentile_rank([1.0, None, 2.0], None))
+
+    def test_quadrant_labels(self):
+        self.assertEqual(peers.quadrant(80.0, 0.25), "Cheap & Strengthening")
+        self.assertEqual(peers.quadrant(80.0, -0.25), "Cheap & Weakening")
+        self.assertEqual(peers.quadrant(10.0, 0.25), "Rich & Strengthening")
+        self.assertEqual(peers.quadrant(10.0, -0.25), "Rich & Weakening")
+
+    def test_value_score_ignores_none(self):
+        self.assertEqual(peers.value_score({"pe": 80.0, "ps": None}), 80.0)
+        self.assertIsNone(peers.value_score({"pe": None, "ps": None}))
+
+
+class TestBuildPeerComparison(unittest.TestCase):
+    def _seed(self):
+        db.cache_set("yfinance", "fundamentals:FOCUS", {
+            "Forward P/E": 10.0, "Price / Sales": 1.0, "Revenue Growth": 0.2})
+        db.cache_set("yfinance", "fundamentals:PEER1", {
+            "Forward P/E": 30.0, "Price / Sales": 5.0, "Revenue Growth": 0.1})
+        db.cache_set("yfinance", "fundamentals:PEER2", {
+            "Forward P/E": 20.0, "Price / Sales": 3.0, "Revenue Growth": 0.05})
+        idx = pd.bdate_range("2024-01-01", periods=300)
+        for sym, drift in [("FOCUS", 0.001), ("PEER1", -0.001), ("PEER2", 0.0)]:
+            close = 100 * np.exp(np.cumsum(np.full(300, drift)))
+            db.store_prices(sym, pd.DataFrame(
+                {"Open": close, "High": close, "Low": close,
+                 "Close": close, "Volume": np.full(300, 1_000_000)}, index=idx))
+
+    def test_build_comparison(self):
+        self._seed()
+        with patch.object(peers, "resolve_peers", return_value=["PEER1", "PEER2"]):
+            out = peers.build_peer_comparison("FOCUS")
+        self.assertIsNotNone(out)
+        self.assertEqual(len(out["peers"]), 2)
+        focus = out["focus"]
+        self.assertGreater(focus["valuation_pct"], 50.0)
+        self.assertEqual(focus["quadrant"], "Cheap & Strengthening")
+        self.assertIn("mom_12_1", focus)
+
+    def test_none_without_peers(self):
+        with patch.object(peers, "resolve_peers", return_value=None):
+            self.assertIsNone(peers.build_peer_comparison("NOPE"))
