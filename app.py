@@ -27,6 +27,7 @@ import ai
 import corporate_actions
 import event_study
 import sec_8k
+import earnings
 import microstructure
 import macro_engine
 import options
@@ -2229,6 +2230,10 @@ def analytics_page():
     except Exception as e:
         print(f"Error computing institutional analytics for {ticker}: {e}")
         data['institutional'] = None
+
+    # Earnings Event Study — CAR per past print + upcoming-print block.
+    data['earnings'] = _guard_section(
+        "earnings", lambda: earnings.build_earnings_section(ticker))
 
     # AI analyst report — reads everything above, including the ML signal
     ai_report_html = ai.generate_report(ticker, data)
