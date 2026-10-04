@@ -119,3 +119,16 @@ class TestBuildPeerComparison(unittest.TestCase):
     def test_none_without_peers(self):
         with patch.object(peers, "resolve_peers", return_value=None):
             self.assertIsNone(peers.build_peer_comparison("NOPE"))
+
+    def test_non_numeric_metric_values_are_skipped(self):
+        db.cache_set("yfinance", "fundamentals:BADMETRIC", {
+            "Forward P/E": "N/A", "Price / Sales": 4.0, "Revenue Growth": 0.07})
+        db.cache_set("yfinance", "fundamentals:OKMETRIC", {
+            "Forward P/E": 25.0, "Price / Sales": 6.0, "Revenue Growth": 0.08})
+        with patch.object(peers, "resolve_peers",
+                          return_value=["BADMETRIC", "OKMETRIC"]):
+            out = peers.build_peer_comparison("FOCUS")
+        self.assertIsNotNone(out)
+        by_sym = {r["symbol"]: r for r in out["peers"]}
+        self.assertIsNone(by_sym["BADMETRIC"]["forward_pe_pct"])
+        self.assertIsNotNone(by_sym["OKMETRIC"]["forward_pe_pct"])

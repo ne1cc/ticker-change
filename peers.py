@@ -80,13 +80,24 @@ def resolve_peers(ticker: str, cap: int = 8) -> list[str] | None:
     return candidates[:cap] or None
 
 
+def _as_float(v):
+    """Coerce to float, or None when the value isn't numeric (cached payloads
+    sometimes carry strings like "N/A")."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def percentile_rank(values: list, x, invert: bool = False) -> float | None:
     """Percentile of x within values (0-100). invert=True scores 'higher raw is
-    worse' (multiples) so cheaper names read higher. None with <2 comparable values."""
-    vals = [float(v) for v in values if v is not None]
-    if x is None or len(vals) < 2:
+    worse' (multiples) so cheaper names read higher. None with <2 comparable values
+    or when x isn't numeric; non-numeric pool entries are skipped."""
+    vals = [f for v in values if v is not None and (f := _as_float(v)) is not None]
+    xf = _as_float(x)
+    if xf is None or len(vals) < 2:
         return None
-    below = sum(1 for v in vals if v < float(x))
+    below = sum(1 for v in vals if v < xf)
     pct = 100.0 * below / (len(vals) - 1)
     return round(100.0 - pct, 1) if invert else round(pct, 1)
 
