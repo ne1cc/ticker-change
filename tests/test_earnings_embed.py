@@ -59,5 +59,25 @@ class TestEarningsEmbed(unittest.TestCase):
                           return_value=FAKE_SECTION), \
              patch.object(app_module, "get_fundamentals", return_value=None):
             resp = client.get("/analytics?ticker=AAPL")
+        html = resp.get_data(as_text=True)
         self.assertEqual(resp.status_code, 200)
-        self.assertIn("Earnings Event Study", resp.get_data(as_text=True))
+        self.assertIn("Earnings Event Study", html)
+        # Partial-body-only marker: not satisfiable by the Row 9 HTML comment.
+        self.assertIn("prints studied", html)
+
+    def test_page_renders_nothing_when_no_earnings(self):
+        idx = pd.bdate_range("2024-01-01", periods=300)
+        close = 100 + np.arange(300)
+        frame = pd.DataFrame({"Open": close, "High": close, "Low": close,
+                              "Close": close, "Volume": np.full(300, 1000)},
+                             index=idx)
+        db.store_prices("AAPL", frame)
+        db.store_prices("SPY", frame)
+        client = app_module.app.test_client()
+        with patch.object(app_module.earnings, "build_earnings_section",
+                          return_value=None), \
+             patch.object(app_module, "get_fundamentals", return_value=None):
+            resp = client.get("/analytics?ticker=AAPL")
+        html = resp.get_data(as_text=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("prints studied", html)
