@@ -143,10 +143,9 @@ def realized_earnings_moves(stock_df: pd.DataFrame, events: list[dict],
             return None
         close = stock_df["close"] if "close" in stock_df.columns else stock_df["Close"]
         rets = close.pct_change()
+        past = [e for e in (events or []) if not e.get("is_upcoming")]
         moves = []
-        for ev in (events or [])[:n]:
-            if ev.get("is_upcoming"):
-                continue
+        for ev in past[-n:]:
             idx = rets.index[rets.index > pd.to_datetime(ev["date"])]
             if len(idx) == 0:
                 continue

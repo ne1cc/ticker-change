@@ -157,3 +157,18 @@ class TestRealizedMoves(unittest.TestCase):
         self.assertIsNotNone(med)
         self.assertGreater(med, 0.03)
         self.assertLess(med, 0.05)
+
+    def test_median_uses_most_recent_prints(self):
+        idx = pd.bdate_range("2024-01-01", periods=32)
+        close = [100.0]
+        for i in range(1, 32):
+            if i % 2 == 1 and i < 17:  # reactions to the 8 oldest prints: huge
+                close.append(close[-1] * (1.4 if (i // 2) % 2 == 0 else 0.6))
+            else:                      # reactions to the 8 newest prints: +1%
+                close.append(close[-1] * 1.01)
+        df = pd.DataFrame({"close": close}, index=idx)
+        events = [{"date": idx[2 * j].date().isoformat()} for j in range(16)]
+        events.append({"date": idx[31].date().isoformat(), "is_upcoming": True})
+        med = earnings.realized_earnings_moves(df, events)
+        self.assertAlmostEqual(med, 0.01, places=4)
+        self.assertLess(med, 0.05)
