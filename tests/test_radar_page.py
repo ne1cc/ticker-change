@@ -15,6 +15,12 @@ import app as app_module  # noqa: E402
 
 
 class TestRadarPage(unittest.TestCase):
+    def setUp(self):
+        # The route serves scan payloads from api_cache (1h TTL); other test
+        # modules share this temp DB file, so start each test cache-cold.
+        with db.get_conn() as conn:
+            conn.execute("DELETE FROM api_cache WHERE provider = 'radar'")
+
     def _get(self, tab="drift"):
         return app_module.app.test_client().get(f"/radar?tab={tab}")
 

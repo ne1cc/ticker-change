@@ -3742,9 +3742,9 @@ def radar_page():
     if tab not in {'drift', 'value', 'squeeze'}:
         tab = 'drift'
     builders = {
-        'drift': radar.build_drift_scan,
-        'value': radar.build_value_scan,
-        'squeeze': radar.build_squeeze_scan,
+        'drift': lambda: radar.get_scan('drift', radar.build_drift_scan),
+        'value': lambda: radar.get_scan('value', radar.build_value_scan),
+        'squeeze': lambda: radar.get_scan('squeeze', radar.build_squeeze_scan),
     }
     payload = _guard_section(f"radar:{tab}", builders[tab], default={"rows": [], "coverage": 0})
     warming = not payload["rows"]
@@ -4306,6 +4306,7 @@ def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True)
                 if done % 25 == 0:
                     time.sleep(2)  # chunk pause, mirrors heatmap politeness
             print(f"[radar] done ({done} tickers)")
+            radar.refresh_scans()
         except Exception as e:
             print(f"[radar] warmer error: {e}")
 
