@@ -61,3 +61,58 @@ class TestEarningsHistory(unittest.TestCase):
             second = earnings.get_earnings_history("NVDA")
         self.assertEqual(first, second)
         self.assertEqual(mock.call_count, 1)
+
+
+import numpy as np
+
+
+def _price_frame(days=400, base=100.0, seed=7):
+    rng = np.random.default_rng(seed)
+    idx = pd.bdate_range("2024-01-01", periods=days)
+    close = base * np.exp(np.cumsum(rng.normal(0.0005, 0.012, days)))
+    return pd.DataFrame({"close": close}, index=idx)
+
+
+class TestPostDrift(unittest.TestCase):
+    def test_drift_over_known_window(self):
+        df = _price_frame()
+        start = df.index[100]
+        val = earnings.post_drift(df, start.date().isoformat(), 10)
+        self.assertIsNotNone(val)
+
+    def test_drift_none_beyond_history(self):
+        df = _price_frame(days=40)
+        self.assertIsNone(earnings.post_drift(df, "2030-01-01", 5))
+
+
+class TestComputeEarningsEvents(unittest.TestCase):
+    def test_car_attached_and_upcoming_skipped(self):
+        df = _price_frame()
+        bench = _price_frame(days=400, base=500.0, seed=3)
+        events = [
+            {"date": "2024-06-03", "surprise_pct": 5.0, "is_upcoming": False},
+            {"date": "2030-01-15", "surprise_pct": None, "is_upcoming": True},
+        ]
+        rows = earnings.compute_earnings_events(df, bench, events, ticker="TEST")
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertIn("car", row)
+        self.assertIn("car_p_value", row)
+        self.assertIn("drift_5d", row)
+        self.assertIn("drift_20d", row)
+
+    def test_summary_means(self):
+        events = [
+            {"surprise_pct": 5.0, "car": 0.10, "is_significant_95": True},
+            {"surprise_pct": -4.0, "car": -0.05, "is_significant_95": False},
+        ]
+        s = earnings.summarize_earnings_drift(events)
+        self.assertEqual(s["n_events"], 2)
+        self.assertEqual(s["n_significant"], 1)
+        self.assertAlmostEqual(s["avg_car_beat"], 0.10, places=6)
+        self.assertAlmostEqual(s["avg_car_miss"], -0.05, places=6)
+
+    def test_summary_empty_is_safe(self):
+        s = earnings.summarize_earnings_drift([])
+        self.assertEqual(s["n_events"], 0)
+        self.assertIsNone(s["avg_car_beat"])
