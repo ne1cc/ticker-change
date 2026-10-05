@@ -12,6 +12,32 @@
     {% endif %}
   </p>
 
+  {% if breadth %}
+  <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-5 py-3 mb-6 text-xs text-zinc-500 dark:text-zinc-400">
+    Advancers <span class="text-emerald-600 font-semibold">{{ breadth.advancers }}</span>
+    · Decliners <span class="text-red-500 font-semibold">{{ breadth.decliners }}</span>
+    · Unchanged {{ breadth.unchanged }}
+    — of {{ breadth.covered }} covered names
+    <span class="text-zinc-400">({{ breadth.as_of }} · last session)</span>
+    {% if breadth.movers_up or breadth.movers_down %}
+    <span class="ml-3 inline-flex flex-wrap gap-1.5 align-middle">
+      {% for m in breadth.movers_up %}
+      <a href="/analytics?ticker={{ m.symbol }}"
+         class="inline-block rounded-full bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 px-2 py-0.5 font-mono hover:text-amber-500">
+        {{ '%+.1f%%' | format(m.change_pct) }} {{ m.symbol }}
+      </a>
+      {% endfor %}
+      {% for m in breadth.movers_down %}
+      <a href="/analytics?ticker={{ m.symbol }}"
+         class="inline-block rounded-full bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 px-2 py-0.5 font-mono hover:text-amber-500">
+        {{ '%+.1f%%' | format(m.change_pct) }} {{ m.symbol }}
+      </a>
+      {% endfor %}
+    </span>
+    {% endif %}
+  </div>
+  {% endif %}
+
   <!-- Tabs (URL-param pattern, matches /strategies) -->
   <div class="responsive-tabs border-b border-zinc-200 dark:border-zinc-800 flex gap-4 mb-6">
     {% for t, label in [('drift', 'Earnings Drift'), ('value', 'Relative Value'), ('squeeze', 'Squeeze')] %}

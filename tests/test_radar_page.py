@@ -76,3 +76,24 @@ class TestRadarPage(unittest.TestCase):
         self.assertIn("Radar", html)
         self.assertIn("+1.0%", html)
         self.assertNotIn("%.1f", html)
+
+    def test_breadth_strip_renders_with_denominator(self):
+        breadth = {"advancers": 210, "decliners": 190, "unchanged": 14,
+                   "covered": 414, "as_of": "2026-10-04T15:00",
+                   "movers_up": [{"symbol": "AAA", "change_pct": 4.2}],
+                   "movers_down": [{"symbol": "BBB", "change_pct": -3.1}]}
+        with patch.object(app_module.heatmap, "get_heatmap_payload",
+                          return_value={"tiles": []}):
+            with patch.object(app_module, "_breadth_from_payload",
+                              return_value=breadth):
+                resp = self._get("drift")
+        html = resp.get_data(as_text=True)
+        self.assertIn("210", html)
+        self.assertIn("of 414 covered names", html)
+        self.assertIn("AAA", html)
+
+    def test_breadth_hidden_when_heatmap_warming(self):
+        with patch.object(app_module.heatmap, "get_heatmap_payload",
+                          return_value=None):
+            resp = self._get("drift")
+        self.assertNotIn("covered names", resp.get_data(as_text=True))

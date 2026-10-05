@@ -3774,6 +3774,23 @@ def strategies_page():
     )
 
 
+def _breadth_from_payload(payload: dict) -> dict:
+    """Breadth strip fields from the heatmap payload; denominator = covered names."""
+    tiles = [t for t in payload.get("tiles", []) if t.get("change_pct") is not None]
+    ranked = sorted(tiles, key=lambda t: t["change_pct"], reverse=True)
+    return {
+        "advancers": payload.get("advancers", 0),
+        "decliners": payload.get("decliners", 0),
+        "unchanged": payload.get("unchanged", 0),
+        "covered": payload.get("coverage", len(tiles)),
+        "as_of": payload.get("as_of"),
+        "movers_up": [{"symbol": t["symbol"], "change_pct": round(t["change_pct"], 2)}
+                      for t in ranked[:3] if t["change_pct"] > 0],
+        "movers_down": [{"symbol": t["symbol"], "change_pct": round(t["change_pct"], 2)}
+                        for t in reversed(ranked[-3:]) if t["change_pct"] < 0],
+    }
+
+
 @app.route('/radar')
 def radar_page():
     """Universe scanners over warmed caches: drift / value / squeeze."""
@@ -3786,8 +3803,14 @@ def radar_page():
     payload = snap if warmed_count else None
     warming = snap is None or warmed_count == 0
     tunables = {key: radar.get_tunable(key) for key in radar.TUNABLES}
+    breadth_payload = None
+    try:
+        breadth_payload = heatmap.get_heatmap_payload()
+    except Exception:
+        breadth_payload = None
+    breadth = _breadth_from_payload(breadth_payload) if breadth_payload else None
     return render_template('radar.html', tab=tab, payload=payload,
-                           warming=warming, tunables=tunables)
+                           warming=warming, tunables=tunables, breadth=breadth)
 
 
 # User-configurable provider keys. Saved server-side (SQLite) so they apply to the
