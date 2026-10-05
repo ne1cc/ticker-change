@@ -50,12 +50,28 @@ def nav_script() -> str:
 
 # A DOM thin enough to stay maintainable, real enough that the block runs its
 # whole ticker path rather than short-circuiting on null guards. `replace` is
-# recorded rather than followed, so the rebinding redirect is observable.
+# recorded rather than followed, so the rebinding redirect is observable, and
+# classList mutations are tracked so pillar highlight is observable too.
 DOM_STUB = """
-const makeEl = (id) => ({
-  id, href: '', className: '', innerText: '', value: '',
-  classList: { add(){}, remove(){}, toggle(){}, contains(){ return false; } },
-});
+const makeEl = (id) => {
+  const el = {
+    id, href: '', className: '', innerText: '', value: '', _classes: [],
+    classList: {
+      add(...cs) {
+        cs.forEach(c => { if (!el._classes.includes(c)) el._classes.push(c); });
+      },
+      remove(...cs) { el._classes = el._classes.filter(c => !cs.includes(c)); },
+      toggle(c, force) {
+        const has = el._classes.includes(c);
+        const want = force === undefined ? !has : !!force;
+        if (want && !has) el._classes.push(c);
+        if (!want && has) el._classes = el._classes.filter(x => x !== c);
+      },
+      contains(c) { return el._classes.includes(c); },
+    },
+  };
+  return el;
+};
 const els = {};
 globalThis.document = { getElementById: (id) => (els[id] ||= makeEl(id)) };
 const mkStore = (seed) => ({ store: {...seed},
@@ -75,6 +91,8 @@ const report = () => console.log(JSON.stringify({
   session: sessionStorage.store,
   brandHref: els['brand-link'] ? els['brand-link'].href : null,
   analyticsHref: els['nav-analytics'] ? els['nav-analytics'].href : null,
+  radarClass: els['nav-radar'] ? els['nav-radar']._classes.join(' ') : null,
+  subNavClasses: els['ticker-sub-nav'] ? els['ticker-sub-nav']._classes.join(' ') : null,
   subLinkChainClass: els['sub-link-chain'] ? els['sub-link-chain'].className : null,
   subLinkOptionsClass: els['sub-link-options'] ? els['sub-link-options'].className : null,
 }));
@@ -152,6 +170,23 @@ class TestBaseInlineScripts(unittest.TestCase):
         """The user-visible symptom: nav links losing ?ticker= when this breaks."""
         st = self._state("/analytics", "?ticker=MU")
         self.assertIn("ticker=MU", st["analyticsHref"])
+
+    def test_radar_route_map_entry_carries_no_ticker_flag(self):
+        """/radar must be mapped with noTicker so the redirect guard can skip it."""
+        script = nav_script()
+        self.assertIn("'/radar'", script)
+        self.assertIn("noTicker", script)
+
+    def test_bare_radar_gets_pillar_highlight_without_redirect(self):
+        """Radar is a no-ticker destination: highlight the pillar, never rebind."""
+        st = self._state("/radar", "", session={"active_ticker": "MU"})
+        self.assertEqual([], st["redirects"])
+        self.assertIn("border-amber-500", st["radarClass"] or "")
+
+    def test_bare_radar_never_touches_the_ticker_sub_nav(self):
+        """Sub-nav stays hidden on /radar; None means never looked up."""
+        st = self._state("/radar", "", session={"active_ticker": "MU"})
+        self.assertIsNone(st["subNavClasses"])
 
 
 class TestSessionScopedTickerBinding(unittest.TestCase):

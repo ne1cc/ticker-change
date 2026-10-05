@@ -3774,6 +3774,23 @@ def strategies_page():
     )
 
 
+def _breadth_from_payload(payload: dict) -> dict:
+    """Breadth strip fields from the heatmap payload; denominator = covered names."""
+    tiles = [t for t in payload.get("tiles", []) if t.get("change_pct") is not None]
+    ranked = sorted(tiles, key=lambda t: t["change_pct"], reverse=True)
+    return {
+        "advancers": payload.get("advancers", 0),
+        "decliners": payload.get("decliners", 0),
+        "unchanged": payload.get("unchanged", 0),
+        "covered": payload.get("coverage", len(tiles)),
+        "as_of": payload.get("as_of"),
+        "movers_up": [{"symbol": t["symbol"], "change_pct": round(t["change_pct"], 2)}
+                      for t in ranked[:3] if t["change_pct"] > 0],
+        "movers_down": [{"symbol": t["symbol"], "change_pct": round(t["change_pct"], 2)}
+                        for t in reversed(ranked[-3:]) if t["change_pct"] < 0],
+    }
+
+
 @app.route('/radar')
 def radar_page():
     """Universe scanners over warmed caches: drift / value / squeeze."""
@@ -3785,9 +3802,83 @@ def radar_page():
     warmed_count = int(meta.get("warmed_count") or 0)
     payload = snap if warmed_count else None
     warming = snap is None or warmed_count == 0
+    progress = db.cache_get("radar", "warm_progress", 24)
     tunables = {key: radar.get_tunable(key) for key in radar.TUNABLES}
+    breadth_payload = None
+    try:
+        breadth_payload = heatmap.get_heatmap_payload()
+    except Exception:
+        breadth_payload = None
+    breadth = _breadth_from_payload(breadth_payload) if breadth_payload else None
     return render_template('radar.html', tab=tab, payload=payload,
-                           warming=warming, tunables=tunables)
+                           warming=warming, tunables=tunables,
+                           breadth=breadth, progress=progress)
+
+
+@app.route('/api/radar/detail/<symbol>')
+def api_radar_detail(symbol):
+    """Security drawer payload. Cache/SQLite reads only — zero network."""
+    symbol = symbol.upper()
+    cached = db.cache_get("radar", f"detail:{symbol}", 0.5)
+    if cached is not None:
+        return jsonify(cached), 200
+
+    snap = radar.current_snapshot()
+    if not snap:
+        return jsonify({"error": "no snapshot published yet"}), 503
+    memberships, row = [], {}
+    for tab in ("drift", "value", "squeeze"):
+        for rank, r in enumerate(snap.get(tab, {}).get("rows", []), start=1):
+            if r.get("symbol") == symbol:
+                memberships.append({"tab": tab, "rank": rank})
+                row.setdefault("metrics", {})[tab] = r
+    if not memberships:
+        return jsonify({"error": f"{symbol} not in current snapshot"}), 404
+
+    price_df = db.get_prices(symbol)
+    price = {"dates": [], "closes": []}
+    if price_df is not None and not price_df.empty:
+        closes = price_df["close"].tail(252)
+        price = {"dates": [d.strftime('%Y-%m-%d') for d in closes.index],
+                 "closes": [round(float(c), 4) for c in closes.values]}
+
+    earnings_events = db.cache_get("yfinance", f"earnings:{symbol}", 24) or []
+    short_payload = db.cache_get("yfinance", f"short:{symbol}", 24)
+
+    # Peer comparison mini-table: cache-only peer resolution + their cached
+    # fundamentals values for the value metrics.
+    peer_rows = []
+    try:
+        peer_syms = peers.resolve_peers(symbol, cap=5, network=False) or []
+        payload_fp = (snap.get("value", {}).get("rows") or [])
+        by_sym = {r["symbol"]: r for r in payload_fp}
+        for psym in peer_syms[:5]:
+            if psym in by_sym:
+                peer_rows.append({"symbol": psym,
+                                  "fwd_pe": by_sym[psym].get("fwd_pe"),
+                                  "value_score": by_sym[psym].get("value_score")})
+    except Exception:
+        peer_rows = []
+
+    contracts = {key: radar_contracts.contract(key)
+                 for tab_keys in radar_contracts.METRIC_KEYS_BY_TAB.values()
+                 for key in tab_keys}
+
+    payload = {
+        "symbol": symbol,
+        "found": True,
+        "memberships": memberships,
+        "metrics": row.get("metrics", {}),
+        "price": price,
+        "earnings_events": earnings_events,
+        "short": short_payload,
+        "peer_comparison": peer_rows,
+        "contracts": contracts,
+        "source_as_of": snap.get("meta", {}).get("source_as_of", {}),
+        "snapshot_id": snap.get("meta", {}).get("snapshot_id"),
+    }
+    db.cache_set("radar", f"detail:{symbol}", payload)
+    return jsonify(payload), 200
 
 
 # User-configurable provider keys. Saved server-side (SQLite) so they apply to the
