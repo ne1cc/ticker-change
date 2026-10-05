@@ -8,7 +8,7 @@
 
 {% macro rcell(row, key, numeric, scale, scan, cls='', suffix='') -%}
 {% set v = row[key] if key in row else none %}{% set dv = (1 if v else 0) if scale in ('nm', 'flag') else v %}
-<td data-col="{{ key }}" data-v="{{ dv if dv is not none else '' }}"{% if scale in ('pct1', 'pct1s') %} data-scale="100"{% endif %}{% if v is none %} data-missing="1"{% endif %}{% if key not in scan %} hidden{% endif %} class="py-1.5 pr-4 whitespace-nowrap{% if numeric %} text-right{% endif %}{% if cls %} {{ cls }}{% endif %}">{% if v is none %}—{% elif scale == 'pct1' %}{{ '%+.1f%%' | format(v * 100) }}{% elif scale == 'pct1s' %}{{ '%.1f%%' | format(v * 100) }}{% elif scale == 'pctp' %}{{ '%+.1f%%' | format(v) }}{% elif scale == 'pctps' %}{{ '%.1f%%' | format(v) }}{% elif scale == 'x1' %}{{ '%.1f×' | format(v) }}{% elif scale == 'n2' %}{{ '%.2f' | format(v) }}{% elif scale == 'n1' %}{{ '%.1f' | format(v) }}{% elif scale == 'compact' %}{{ ('%.1fT' | format(v / 1e12)) if v >= 1e12 else ('%.1fB' | format(v / 1e9) if v >= 1e9 else '%.0fM' | format(v / 1e6)) }}{% elif scale == 'nm' %}{{ 'NM' if v else '·' }}{% elif scale == 'flag' %}{{ '✓' if v else '·' }}{% else %}{{ v }}{% endif %}{% if suffix and v is not none %} <span class="text-[10px] text-zinc-400">{{ suffix }}</span>{% endif %}</td>
+<td data-col="{{ key }}" data-v="{{ dv if dv is not none else '' }}"{% if scale in ('pct1', 'pct1s') %} data-scale="100"{% endif %}{% if v is none %} data-missing="1"{% endif %}{% if key not in scan %} hidden{% endif %} class="py-1.5 pr-4 whitespace-nowrap{% if numeric %} text-right{% endif %}{% if cls %} {{ cls }}{% endif %}">{% if v is none %}—{% elif scale == 'pct1' %}{{ '%+.1f%%' | format(v * 100) }}{% elif scale == 'pct1s' %}{{ '%.1f%%' | format(v * 100) }}{% elif scale == 'pctp' %}{{ '%+.1f%%' | format(v) }}{% elif scale == 'pctps' %}{{ '%.1f%%' | format(v) }}{% elif scale == 'x1' %}{{ '%.1f×' | format(v) }}{% elif scale == 'n2' %}{{ '%.2f' | format(v) }}{% elif scale == 'n1' %}{{ '%.1f' | format(v) }}{% elif scale == 'compact' %}{{ ('%.1fT' | format(v / 1e12)) if v >= 1e12 else ('%.1fB' | format(v / 1e9) if v >= 1e9 else '%.0fM' | format(v / 1e6)) }}{% elif scale == 'nm' %}{% if v %}<span data-badge="nm" class="inline-block rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-300 px-1.5 py-0.5 text-[10px] font-sans">NM</span>{% else %}·{% endif %}{% elif scale == 'state' %}{% if v %}<span data-badge="state" class="inline-block rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 text-[10px] font-sans">{{ v }}</span>{% else %}—{% endif %}{% elif scale == 'flag' %}{{ '✓' if v else '·' }}{% else %}{{ v }}{% endif %}{% if suffix and v is not none %} <span class="text-[10px] text-zinc-400">{{ suffix }}</span>{% endif %}</td>
 {%- endmacro %}
 
 {% block content %}
@@ -126,8 +126,26 @@
     <label class="flex items-center gap-1">
       <input id="radar-coverage-only" type="checkbox"> Coverage complete only
     </label>
+    <label class="flex items-center gap-1">
+      <input id="radar-star-only" type="checkbox"> ★ only
+    </label>
   </div>
-  <div class="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+  <div class="flex flex-wrap items-center gap-x-2 gap-y-2 mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+    <input id="radar-screen-name" type="text" placeholder="Screen name…"
+           class="w-32 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-900 dark:text-zinc-100">
+    <button id="radar-screen-save" type="button" class="rounded border border-zinc-200 dark:border-zinc-700 px-2 py-0.5">Save screen</button>
+    <select id="radar-screen-select"
+            class="max-w-40 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-900 dark:text-zinc-100">
+      <option value="">Saved screens…</option>
+    </select>
+    <button id="radar-screen-apply" type="button" class="rounded border border-zinc-200 dark:border-zinc-700 px-2 py-0.5">Apply</button>
+    <button id="radar-screen-delete" type="button" class="rounded border border-zinc-200 dark:border-zinc-700 px-2 py-0.5">Delete</button>
+    <button id="radar-export" type="button" class="rounded border border-zinc-200 dark:border-zinc-700 px-2 py-0.5">Export CSV</button>
+  </div>
+  <div class="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5"
+       data-snapshot-id="{{ payload.meta.snapshot_id or '' }}"
+       data-published="{{ payload.meta.published_at[:16].replace('T', ' ') if payload.meta and payload.meta.published_at else '' }}"
+       data-contract-version="{{ payload.meta.metric_contract_version or '' }}">
     {% if tab == 'drift' %}
     <table data-radar-tab="drift" class="w-full text-sm">
       <thead>
@@ -163,7 +181,7 @@
       <tbody class="font-mono">
         {% for r in payload[tab].rows %}
         <tr data-symbol="{{ r.symbol }}" data-sector="{{ r.sector or '' }}" class="border-b border-zinc-100 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-          <td data-col="symbol" data-v="{{ r.symbol }}" class="sticky left-0 bg-white dark:bg-zinc-900 py-1.5 pr-4 whitespace-nowrap"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
+          <td data-col="symbol" data-v="{{ r.symbol }}" class="sticky left-0 bg-white dark:bg-zinc-900 py-1.5 pr-4 whitespace-nowrap"><button type="button" data-star-toggle aria-label="Toggle watch" class="mr-1 text-zinc-300 hover:text-amber-500 align-middle">☆</button><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
           {{ rcell(r, 'print_date', false, 'text', scan) }}
           {{ rcell(r, 'sessions_since', true, 'int', scan) }}
           {{ rcell(r, 'sessions_to_20d', true, 'int', scan, 'text-amber-500 font-semibold' if (r.sessions_to_20d or 0) > 0 else 'text-zinc-400') }}
@@ -226,7 +244,7 @@
       <tbody class="font-mono">
         {% for r in payload[tab].rows %}
         <tr data-symbol="{{ r.symbol }}" data-sector="{{ r.sector or '' }}" data-industry="{{ r.industry or '' }}" data-coverage="{{ 'low' if r.low_coverage else 'ok' }}" class="border-b border-zinc-100 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-          <td data-col="symbol" data-v="{{ r.symbol }}" class="sticky left-0 bg-white dark:bg-zinc-900 py-1.5 pr-4 whitespace-nowrap"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
+          <td data-col="symbol" data-v="{{ r.symbol }}" class="sticky left-0 bg-white dark:bg-zinc-900 py-1.5 pr-4 whitespace-nowrap"><button type="button" data-star-toggle aria-label="Toggle watch" class="mr-1 text-zinc-300 hover:text-amber-500 align-middle">☆</button><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a>{% if r.low_coverage %} <span data-badge="coverage" class="inline-block rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-300 px-1.5 py-0.5 text-[10px] font-sans">low coverage</span>{% endif %}</td>
           {{ rcell(r, 'industry', false, 'text', scan, 'font-sans text-xs') }}
           {{ rcell(r, 'value_score', true, 'n1', scan) }}
           {{ rcell(r, 'mom_12_1', true, 'pct1', scan, 'text-emerald-600' if (r.mom_12_1 or 0) > 0 else 'text-red-500') }}
@@ -248,7 +266,7 @@
           {{ rcell(r, 'short_pct_float', true, 'pct1s', scan) }}
           {{ rcell(r, 'peer_percentile', true, 'n1', scan) }}
           {{ rcell(r, 'quadrant', false, 'text', scan, 'font-sans text-xs') }}
-          {{ rcell(r, '_state', false, 'text', scan, 'font-sans text-xs') }}
+          {{ rcell(r, '_state', false, 'state', scan, 'font-sans text-xs') }}
           {{ rcell(r, '_nm', false, 'nm', scan, 'font-sans text-xs') }}
         </tr>
         {% endfor %}
@@ -280,7 +298,7 @@
       <tbody class="font-mono">
         {% for r in payload[tab].rows %}
         <tr data-symbol="{{ r.symbol }}" data-sector="{{ r.sector or '' }}" class="border-b border-zinc-100 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-          <td data-col="symbol" data-v="{{ r.symbol }}" class="sticky left-0 bg-white dark:bg-zinc-900 py-1.5 pr-4 whitespace-nowrap"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
+          <td data-col="symbol" data-v="{{ r.symbol }}" class="sticky left-0 bg-white dark:bg-zinc-900 py-1.5 pr-4 whitespace-nowrap"><button type="button" data-star-toggle aria-label="Toggle watch" class="mr-1 text-zinc-300 hover:text-amber-500 align-middle">☆</button><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
           {{ rcell(r, 'short_pct_float', true, 'pct1s', scan) }}
           {{ rcell(r, 'dtc_vendor', true, 'n1', scan, suffix='calc ' ~ (r.dtc_calc if r.dtc_calc is not none else '—')) }}
           {{ rcell(r, 'si_change', true, 'pctp', scan, 'text-emerald-600' if (r.si_change or 0) > 0 else 'text-red-500' if (r.si_change or 0) < 0 else 'text-zinc-400') }}
@@ -568,6 +586,7 @@
 
     document.addEventListener('click', function (ev) {
       if (ev.target.closest('#radar-drawer-close')) { closeDrawer(); return; }
+      if (ev.target.closest('[data-star-toggle]')) return;
       var row = ev.target.closest('tr[data-symbol]');
       if (!row || ev.target.closest('a')) return;
       var sym = row.getAttribute('data-symbol');
@@ -609,6 +628,7 @@
     var sectorSel = document.getElementById('radar-sector-filter');
     var search = document.getElementById('radar-search');
     var covBox = document.getElementById('radar-coverage-only');
+    var starOnly = document.getElementById('radar-star-only');
     var storeKey = 'radar_preset_' + tab;
     var PRESET_CHAR = { scan: 's', research: 'r', audit: 'a' };
     var RADAR_COLS = {
@@ -652,6 +672,45 @@
       var saved = localStorage.getItem(storeKey);
       if (saved && PRESET_CHAR[saved]) currentPreset = saved;
     } catch (e) {}
+
+    var WATCH_KEY = 'radar_watchlist';
+    function readWatchlist() {
+      try {
+        var arr = JSON.parse(localStorage.getItem(WATCH_KEY) || '[]');
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) { return []; }
+    }
+    function writeWatchlist(arr) {
+      try { localStorage.setItem(WATCH_KEY, JSON.stringify(arr)); } catch (e) {}
+    }
+    var watchlist = readWatchlist();
+
+    function applyStars() {
+      var all = rowsAll();
+      for (var i = 0; i < all.length; i++) {
+        var btn = all[i].querySelector('[data-star-toggle]');
+        if (!btn) continue;
+        var on = watchlist.indexOf(all[i].getAttribute('data-symbol')) >= 0;
+        btn.textContent = on ? '★' : '☆';
+        btn.classList.toggle('text-amber-500', on);
+      }
+    }
+
+    function toggleStar(symbol) {
+      var at = watchlist.indexOf(symbol);
+      if (at >= 0) watchlist.splice(at, 1);
+      else watchlist.push(symbol);
+      writeWatchlist(watchlist);
+      applyStars();
+      if (starOnly && starOnly.checked) applyFilters();
+    }
+
+    document.addEventListener('click', function (ev) {
+      var btn = ev.target.closest ? ev.target.closest('[data-star-toggle]') : null;
+      if (!btn) return;
+      var tr = btn.closest('tr[data-symbol]');
+      if (tr) toggleStar(tr.getAttribute('data-symbol'));
+    });
 
     function rowsAll() {
       return Array.prototype.slice.call(
@@ -752,6 +811,10 @@
         if (show && covOnly && tr.getAttribute('data-coverage') === 'low') {
           show = false;
         }
+        if (show && starOnly && starOnly.checked &&
+            watchlist.indexOf(tr.getAttribute('data-symbol')) < 0) {
+          show = false;
+        }
         for (var b = 0; show && b < bounds.length; b++) {
           var td = cellFor(tr, bounds[b].col);
           var dv = td ? parseFloat(td.getAttribute('data-v')) : NaN;
@@ -789,6 +852,159 @@
       }
     }
 
+    // Saved screens: {tab, preset, filters, sort} snapshots keyed by name.
+    var SCREENS_KEY = 'radar_screens';
+    var nameInput = document.getElementById('radar-screen-name');
+    var saveBtn = document.getElementById('radar-screen-save');
+    var screenSel = document.getElementById('radar-screen-select');
+    var applyBtn = document.getElementById('radar-screen-apply');
+    var deleteBtn = document.getElementById('radar-screen-delete');
+
+    function readScreens() {
+      try {
+        var obj = JSON.parse(localStorage.getItem(SCREENS_KEY) || '{}');
+        return (obj && typeof obj === 'object' && !Array.isArray(obj))
+          ? obj : {};
+      } catch (e) { return {}; }
+    }
+    function writeScreens(obj) {
+      try { localStorage.setItem(SCREENS_KEY, JSON.stringify(obj)); } catch (e) {}
+    }
+
+    function captureState() {
+      var bounds = [];
+      var inputs = document.querySelectorAll('[data-filter-col]');
+      for (var i = 0; i < inputs.length; i++) {
+        bounds.push({ col: inputs[i].getAttribute('data-filter-col'),
+                      bound: inputs[i].getAttribute('data-filter-bound'),
+                      v: inputs[i].value });
+      }
+      return { tab: tab, preset: currentPreset,
+               filters: { search: search ? search.value : '',
+                          sector: sectorSel ? sectorSel.value : '',
+                          coverageOnly: !!(covBox && covBox.checked),
+                          starOnly: !!(starOnly && starOnly.checked),
+                          bounds: bounds },
+               sort: sortKeys };
+    }
+
+    function refreshScreenSelect(selected) {
+      if (!screenSel) return;
+      while (screenSel.options.length > 1) screenSel.remove(1);
+      var names = Object.keys(readScreens()).sort();
+      for (var i = 0; i < names.length; i++) {
+        var o = document.createElement('option');
+        o.value = names[i];
+        o.textContent = names[i];
+        screenSel.appendChild(o);
+      }
+      if (selected) screenSel.value = selected;
+    }
+
+    function applyScreen(snap) {
+      if (!snap || typeof snap !== 'object') return;
+      if (snap.tab && snap.tab !== tab) {
+        window.location.href = '/radar?tab=' + encodeURIComponent(snap.tab);
+        return;
+      }
+      if (snap.preset && PRESET_CHAR[snap.preset]) {
+        currentPreset = snap.preset;
+        applyPreset();
+      }
+      var f = snap.filters || {};
+      if (search) search.value = f.search || '';
+      if (sectorSel) sectorSel.value = f.sector || '';
+      if (covBox) covBox.checked = !!f.coverageOnly;
+      if (starOnly) starOnly.checked = !!f.starOnly;
+      var savedBounds = f.bounds || [];
+      var inputs = document.querySelectorAll('[data-filter-col]');
+      for (var i = 0; i < inputs.length; i++) {
+        var col = inputs[i].getAttribute('data-filter-col');
+        var bound = inputs[i].getAttribute('data-filter-bound');
+        inputs[i].value = '';
+        for (var b = 0; b < savedBounds.length; b++) {
+          if (savedBounds[b].col === col && savedBounds[b].bound === bound) {
+            inputs[i].value = savedBounds[b].v;
+          }
+        }
+      }
+      sortKeys = Array.isArray(snap.sort) ? snap.sort : [];
+      applySort();
+      applyFilters();
+    }
+
+    if (saveBtn) saveBtn.addEventListener('click', function () {
+      var name = nameInput && nameInput.value ? nameInput.value.trim() : '';
+      if (!name) return;
+      var screens = readScreens();
+      screens[name] = captureState();
+      writeScreens(screens);
+      refreshScreenSelect(name);
+    });
+    if (applyBtn) applyBtn.addEventListener('click', function () {
+      var name = screenSel && screenSel.value ? screenSel.value : '';
+      if (!name) return;
+      applyScreen(readScreens()[name]);
+    });
+    if (deleteBtn) deleteBtn.addEventListener('click', function () {
+      var name = screenSel && screenSel.value ? screenSel.value : '';
+      if (!name) return;
+      var screens = readScreens();
+      delete screens[name];
+      writeScreens(screens);
+      refreshScreenSelect('');
+    });
+
+    // Export: CSV of currently visible rows + metadata preamble comment lines.
+    var exportBtn = document.getElementById('radar-export');
+    function csvCell(v) {
+      var s = String(v === null || v === undefined ? '' : v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+    if (exportBtn) exportBtn.addEventListener('click', function () {
+      var container = table.parentElement;
+      var meta = function (attr) {
+        return (container && container.getAttribute(attr)) || '';
+      };
+      var head = [];
+      var ths = table.querySelectorAll('th[data-col]');
+      for (var h = 0; h < ths.length; h++) {
+        if (!ths[h].hasAttribute('hidden')) {
+          head.push(ths[h].getAttribute('data-col'));
+        }
+      }
+      var lines = [
+        '# snapshot_id=' + meta('data-snapshot-id'),
+        '# published=' + meta('data-published'),
+        '# contract_version=' + meta('data-contract-version'),
+        '# filters=' + JSON.stringify(captureState().filters)
+      ];
+      lines.push(head.map(csvCell).join(','));
+      rowsAll().forEach(function (tr) {
+        if (tr.style.display === 'none') return;
+        lines.push(head.map(function (k) {
+          var td = cellFor(tr, k);
+          if (!td) return '';
+          var dv = td.getAttribute('data-v');
+          return dv !== null && dv !== '' ? dv : (td.textContent || '').trim();
+        }).map(csvCell).join(','));
+      });
+      var blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'radar_' + tab + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+
+    refreshScreenSelect('');
+    populateSectors();
+    applyPreset();
+    applyStars();
+
     document.addEventListener('click', function (ev) {
       var btn = ev.target.closest ? ev.target.closest('[data-preset]') : null;
       if (btn) {
@@ -825,9 +1041,6 @@
     document.addEventListener('change', function (ev) {
       if (ev.target === sectorSel || ev.target === covBox) applyFilters();
     });
-
-    populateSectors();
-    applyPreset();
   })();
 </script>
 {% endblock %}

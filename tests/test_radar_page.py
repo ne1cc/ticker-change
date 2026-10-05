@@ -26,12 +26,14 @@ def _populated_snap():
             "drift": {"rows": [{"symbol": "AAA", "print_date": "2024-09-06",
                                 "sessions_since": 30, "sessions_to_20d": 0,
                                 "surprise_pct": 20.0, "car": 0.05,
-                                "car_significant": True,
+                                "car_significant": True, "surprise_nm": True,
                                 "drift_to_date": 0.03,
                                 "drift_to_date_sessions": 30}],
                       "upcoming": [], "excluded": []},
             "value": {"rows": [{"symbol": "AAA", "industry": "Software",
-                                "value_score": 81.0, "fwd_pe": 28.0}],
+                                "value_score": 81.0, "fwd_pe": 28.0,
+                                "_state": "insufficient-peers", "_nm": True,
+                                "low_coverage": True}],
                       "excluded": []},
             "squeeze": {"rows": [{"symbol": "AAA", "short_pct_float": 0.22}],
                         "excluded": []}}
@@ -96,6 +98,29 @@ class TestRadarPage(unittest.TestCase):
             html = self._get("squeeze").get_data(as_text=True)
         self.assertIn('data-col="short_pct_float" data-v="0.22" '
                       'data-scale="100"', html)
+
+    def test_watchlist_screens_export_and_snapshot_meta_hooks(self):
+        with patch.object(app_module.radar, "current_snapshot",
+                          return_value=_populated_snap()):
+            html = self._get("drift").get_data(as_text=True)
+        for marker in ('data-star-toggle', 'id="radar-star-only"',
+                       'id="radar-export"', 'id="radar-screen-name"',
+                       'id="radar-screen-save"', 'id="radar-screen-select"',
+                       'id="radar-screen-apply"', 'id="radar-screen-delete"',
+                       'data-snapshot-id="S1"', 'data-published=',
+                       'data-contract-version="2"'):
+            self.assertIn(marker, html)
+
+    def test_nm_state_and_coverage_badges_replace_bare_dashes(self):
+        with patch.object(app_module.radar, "current_snapshot",
+                          return_value=_populated_snap()):
+            drift = self._get("drift").get_data(as_text=True)
+            value = self._get("value").get_data(as_text=True)
+        self.assertIn('data-badge="nm"', drift)
+        self.assertIn('data-badge="state"', value)
+        self.assertIn("insufficient-peers", value)
+        self.assertIn('data-badge="coverage"', value)
+        self.assertIn("low coverage", value)
 
     def test_tunables_echoed(self):
         payload = {"meta": {"warmed_count": 2},
