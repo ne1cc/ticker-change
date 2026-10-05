@@ -3813,6 +3813,72 @@ def radar_page():
                            warming=warming, tunables=tunables, breadth=breadth)
 
 
+@app.route('/api/radar/detail/<symbol>')
+def api_radar_detail(symbol):
+    """Security drawer payload. Cache/SQLite reads only — zero network."""
+    symbol = symbol.upper()
+    cached = db.cache_get("radar", f"detail:{symbol}", 0.5)
+    if cached is not None:
+        return jsonify(cached), 200
+
+    snap = radar.current_snapshot()
+    if not snap:
+        return jsonify({"error": "no snapshot published yet"}), 503
+    memberships, row = [], {}
+    for tab in ("drift", "value", "squeeze"):
+        for rank, r in enumerate(snap.get(tab, {}).get("rows", []), start=1):
+            if r.get("symbol") == symbol:
+                memberships.append({"tab": tab, "rank": rank})
+                row.setdefault("metrics", {})[tab] = r
+    if not memberships:
+        return jsonify({"error": f"{symbol} not in current snapshot"}), 404
+
+    price_df = db.get_prices(symbol)
+    price = {"dates": [], "closes": []}
+    if price_df is not None and not price_df.empty:
+        closes = price_df["close"].tail(252)
+        price = {"dates": [d.strftime('%Y-%m-%d') for d in closes.index],
+                 "closes": [round(float(c), 4) for c in closes.values]}
+
+    earnings_events = db.cache_get("yfinance", f"earnings:{symbol}", 24) or []
+    short_payload = db.cache_get("yfinance", f"short:{symbol}", 24)
+
+    # Peer comparison mini-table: cache-only peer resolution + their cached
+    # fundamentals values for the value metrics.
+    peer_rows = []
+    try:
+        peer_syms = peers.resolve_peers(symbol, cap=5) or []
+        payload_fp = (snap.get("value", {}).get("rows") or [])
+        by_sym = {r["symbol"]: r for r in payload_fp}
+        for psym in peer_syms[:5]:
+            if psym in by_sym:
+                peer_rows.append({"symbol": psym,
+                                  "fwd_pe": by_sym[psym].get("fwd_pe"),
+                                  "value_score": by_sym[psym].get("value_score")})
+    except Exception:
+        peer_rows = []
+
+    contracts = {key: radar_contracts.contract(key)
+                 for tab_keys in radar_contracts.METRIC_KEYS_BY_TAB.values()
+                 for key in tab_keys}
+
+    payload = {
+        "symbol": symbol,
+        "found": True,
+        "memberships": memberships,
+        "metrics": row.get("metrics", {}),
+        "price": price,
+        "earnings_events": earnings_events,
+        "short": short_payload,
+        "peer_comparison": peer_rows,
+        "contracts": contracts,
+        "source_as_of": snap.get("meta", {}).get("source_as_of", {}),
+        "snapshot_id": snap.get("meta", {}).get("snapshot_id"),
+    }
+    db.cache_set("radar", f"detail:{symbol}", payload)
+    return jsonify(payload), 200
+
+
 # User-configurable provider keys. Saved server-side (SQLite) so they apply to the
 # backend Finnhub/FMP/LLM calls. Stored keys act as quota fallbacks behind the
 # built-in dev key — see providers._ordered_keys / _finnhub_get / _fmp_get and the
