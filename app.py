@@ -3849,7 +3849,7 @@ def api_radar_detail(symbol):
     # fundamentals values for the value metrics.
     peer_rows = []
     try:
-        peer_syms = peers.resolve_peers(symbol, cap=5) or []
+        peer_syms = peers.resolve_peers(symbol, cap=5, network=False) or []
         payload_fp = (snap.get("value", {}).get("rows") or [])
         by_sym = {r["symbol"]: r for r in payload_fp}
         for psym in peer_syms[:5]:

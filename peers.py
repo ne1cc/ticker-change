@@ -55,13 +55,19 @@ def universe_classifications() -> dict[str, dict]:
     return out
 
 
-def resolve_peers(ticker: str, cap: int = 8) -> list[str] | None:
-    """Peer symbols for ticker, focus excluded, capped. None when unresolvable."""
+def resolve_peers(ticker: str, cap: int = 8,
+                  network: bool = True) -> list[str] | None:
+    """Peer symbols for ticker, focus excluded, capped. None when unresolvable.
+
+    network=False skips the Finnhub lookup and resolves from cached
+    classifications only (cache-only callers, e.g. the zero-network drawer).
+    """
     ticker = ticker.upper()
-    finnhub_peers = providers.finnhub_peer(ticker)
-    if finnhub_peers:
-        peers = [p for p in finnhub_peers if p != ticker]
-        return peers[:cap] or None
+    if network:
+        finnhub_peers = providers.finnhub_peer(ticker)
+        if finnhub_peers:
+            peers_list = [p for p in finnhub_peers if p != ticker]
+            return peers_list[:cap] or None
 
     classifications = universe_classifications()
     focus = classifications.get(ticker) or {}

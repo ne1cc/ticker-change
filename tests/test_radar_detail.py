@@ -59,13 +59,42 @@ class TestRadarDetail(unittest.TestCase):
     def test_zero_network(self):
         db.store_prices("AAA", _mk_frame())
         with patch.object(radar, "current_snapshot", return_value=SNAP), \
-             patch("yfinance.Ticker", side_effect=AssertionError("network!")), \
-             patch.object(app_module.providers, "_finnhub_get",
-                          side_effect=AssertionError("network!")), \
-             patch.object(app_module.providers, "_fmp_get",
-                          side_effect=AssertionError("network!")):
+             patch("yfinance.Ticker") as yt, \
+             patch.object(app_module.providers, "_finnhub_get") as fh, \
+             patch.object(app_module.providers, "_fmp_get") as fmp:
             resp = app_module.app.test_client().get("/api/radar/detail/AAA")
         self.assertEqual(resp.status_code, 200)
+        yt.assert_not_called()
+        fh.assert_not_called()
+        fmp.assert_not_called()
+
+    def test_peer_rows_cache_only_classifications_fallback(self):
+        self.addCleanup(_wipe_yfinance_cache)
+        _wipe_yfinance_cache()
+        db.store_prices("AAA", _mk_frame())
+        db.cache_set("yfinance", "fundamentals:AAA",
+                     {"Industry": "Tech", "Sector": "Technology"})
+        for sym in ["PB1", "PB2"]:
+            db.cache_set("yfinance", f"fundamentals:{sym}",
+                         {"Industry": "Tech", "Sector": "Technology"})
+        snap = {
+            "meta": SNAP["meta"],
+            "drift": {"rows": [], "upcoming": [], "excluded": []},
+            "value": {"rows": [
+                {"symbol": "AAA", "fwd_pe": 10.0, "value_score": 88.0},
+                {"symbol": "PB1", "fwd_pe": 20.0, "value_score": 55.0},
+                {"symbol": "PB2", "fwd_pe": 30.0, "value_score": 40.0}],
+                "excluded": []},
+            "squeeze": {"rows": [], "excluded": []},
+        }
+        with patch.object(radar, "current_snapshot", return_value=snap), \
+             patch.object(app_module.providers, "finnhub_peer") as fp:
+            resp = app_module.app.test_client().get("/api/radar/detail/AAA")
+        body = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([p["symbol"] for p in body["peer_comparison"]],
+                         ["PB1", "PB2"])
+        fp.assert_not_called()
 
 
 def _mk_frame():
@@ -75,6 +104,11 @@ def _mk_frame():
                          "Close": close,
                          "Volume": pd.Series([1_000_000] * 60, index=idx)},
                         index=idx)
+
+
+def _wipe_yfinance_cache():
+    with db.get_conn() as conn:
+        conn.execute("DELETE FROM api_cache WHERE provider = 'yfinance'")
 
 
 class TestDetailCacheAnd404(unittest.TestCase):
