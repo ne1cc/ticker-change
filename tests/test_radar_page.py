@@ -1,5 +1,7 @@
 """/radar: three tabs render; cold cache renders warming skeleton; tunables echoed."""
 import os
+import pathlib
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -132,6 +134,20 @@ class TestRadarPage(unittest.TestCase):
         self.assertIn("insufficient-peers", value)
         self.assertIn('data-badge="coverage"', value)
         self.assertIn("low coverage", value)
+
+    def test_star_only_checkbox_wired_to_change_listener(self):
+        """Tripwire, textual only: this repo has no DOM-execution harness
+        (node --check + structure asserts), so listener wiring can't be
+        exercised behaviorally. Assert the toolkit change listener's
+        condition references the star-only checkbox so toggling it
+        re-runs applyFilters immediately."""
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "templates" / "radar.html").read_text()
+        m = re.search(
+            r"document\.addEventListener\('change', function \(ev\) \{"
+            r"\s*\n\s*if \(([^)]*)\) applyFilters\(\);", src)
+        self.assertIsNotNone(m, "toolkit change listener not found")
+        self.assertIn("starOnly", m.group(1))
 
     def test_tunables_echoed(self):
         payload = {"meta": {"warmed_count": 2},

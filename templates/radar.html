@@ -1042,7 +1042,8 @@
           ev.target.hasAttribute('data-filter-col'))) applyFilters();
     });
     document.addEventListener('change', function (ev) {
-      if (ev.target === sectorSel || ev.target === covBox) applyFilters();
+      if (ev.target === sectorSel || ev.target === covBox
+          || ev.target === starOnly) applyFilters();
     });
   })();
 </script>
