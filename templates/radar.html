@@ -7,7 +7,9 @@
   <h1 class="text-2xl font-semibold tracking-tight mb-1">Radar</h1>
   <p class="text-xs text-zinc-400 mb-6">
     Universe screens over warmed caches — never fetches on load.
-    Coverage: {{ payload.coverage }} tickers.
+    {% if payload and payload.meta and payload.meta.published_at %}
+    Published {{ payload.meta.published_at[:16].replace('T', ' ') }} · universe {{ payload.meta.warmed_count }}/{{ payload.meta.universe_count }}
+    {% endif %}
   </p>
 
   <!-- Tabs (URL-param pattern, matches /strategies) -->
@@ -45,6 +47,10 @@
   <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center text-sm text-zinc-400">
     Warming — the background warmer fills these screens. Check back shortly.
   </div>
+  {% elif not payload[tab].rows %}
+  <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center text-sm text-zinc-400">
+    Universe scanned — nothing qualifies right now.
+  </div>
   {% else %}
   <div class="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
     {% if tab == 'drift' %}
@@ -53,23 +59,25 @@
         <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
           <th class="py-1.5 pr-4">Ticker</th>
           <th class="py-1.5 pr-4">Print date</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('Days since', 'pead_drift') }}</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('Sessions since', 'pead_drift') }}</th>
           <th class="py-1.5 pr-4 text-right">{{ metric('Drift left', 'pead_drift') }}</th>
           <th class="py-1.5 pr-4 text-right">{{ metric('Surprise %', 'surprise_pct') }}</th>
           <th class="py-1.5 pr-4 text-right">{{ metric('CAR', 'event_car') }}</th>
+          <th class="py-1.5 pr-4 text-right">{{ metric('Drift to date', 'pead_drift') }}</th>
         </tr>
       </thead>
       <tbody class="font-mono">
-        {% for r in payload.rows %}
+        {% for r in payload[tab].rows %}
         <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
           <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
-          <td class="py-1.5 pr-4">{{ r.date }}</td>
-          <td class="py-1.5 pr-4 text-right">{{ r.days_since }}</td>
-          <td class="py-1.5 pr-4 text-right {{ 'text-amber-500 font-semibold' if (r.remaining or 0) > 0 else 'text-zinc-400' }}">{{ r.remaining }}d</td>
+          <td class="py-1.5 pr-4">{{ r.print_date }}</td>
+          <td class="py-1.5 pr-4 text-right">{{ r.sessions_since }}</td>
+          <td class="py-1.5 pr-4 text-right {{ 'text-amber-500 font-semibold' if (r.sessions_to_20d or 0) > 0 else 'text-zinc-400' }}">{{ r.sessions_to_20d }}d</td>
           <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format(r.surprise_pct) if r.surprise_pct is not none else '—' }}</td>
-          <td class="py-1.5 pr-4 text-right {{ 'text-amber-500 font-semibold' if r.is_significant_95 else '' }}">
-            {{ '%+.1f%%' | format((r.car or 0) * 100) if r.car is not none else '—' }}
+          <td class="py-1.5 pr-4 text-right {{ 'text-amber-500 font-semibold' if r.car_significant else '' }}">
+            {{ '%+.1f%%' | format((r.car_30 or 0) * 100) if r.car_30 is not none else '—' }}
           </td>
+          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format((r.drift_to_date or 0) * 100) if r.drift_to_date is not none else '—' }} <span class="text-[10px] text-zinc-400">{{ r.drift_to_date_sessions }}s</span></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -86,13 +94,13 @@
         </tr>
       </thead>
       <tbody class="font-mono">
-        {% for r in payload.rows %}
+        {% for r in payload[tab].rows %}
         <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
           <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
           <td class="py-1.5 pr-4 font-sans text-xs">{{ r.industry }}</td>
           <td class="py-1.5 pr-4 text-right">{{ r.value_score }}</td>
           <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (r.mom_12_1 or 0) > 0 else 'text-red-500' }}">{{ '%+.1f%%' | format((r.mom_12_1 or 0) * 100) if r.mom_12_1 is not none else '—' }}</td>
-          <td class="py-1.5 pr-4 text-right">{{ '%.1f' | format(r.forward_pe) if r.forward_pe is not none else '—' }}</td>
+          <td class="py-1.5 pr-4 text-right">{{ '%.1f' | format(r.fwd_pe) if r.fwd_pe is not none else '—' }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -106,18 +114,18 @@
           <th class="py-1.5 pr-4 text-right">{{ metric('DTC', 'days_to_cover') }}</th>
           <th class="py-1.5 pr-4 text-right">{{ metric('MoM Δ', 'si_mom_change') }}</th>
           <th class="py-1.5 pr-4 text-right">{{ metric('Squeeze score', 'squeeze_composite') }}</th>
-          <th class="py-1.5 pr-4 text-right">12-1 mom</th>
+          <th class="py-1.5 pr-4 text-right">20d chg</th>
         </tr>
       </thead>
       <tbody class="font-mono">
-        {% for r in payload.rows %}
+        {% for r in payload[tab].rows %}
         <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
           <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
           <td class="py-1.5 pr-4 text-right">{{ '%.1f%%' | format((r.short_pct_float or 0) * 100) }}</td>
-          <td class="py-1.5 pr-4 text-right">{{ r.days_to_cover }}</td>
-          <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (r.si_mom_change or 0) > 0 else 'text-red-500' if (r.si_mom_change or 0) < 0 else 'text-zinc-400' }}">{{ '%+.1f%%' | format((r.si_mom_change or 0) * 100) if r.si_mom_change is not none else '—' }}</td>
+          <td class="py-1.5 pr-4 text-right">{{ r.dtc_vendor }} <span class="text-[10px] text-zinc-400">calc {{ r.dtc_calc if r.dtc_calc is not none else '—' }}</span></td>
+          <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (r.si_change or 0) > 0 else 'text-red-500' if (r.si_change or 0) < 0 else 'text-zinc-400' }}">{{ '%+.1f%%' | format(r.si_change) if r.si_change is not none else '—' }}</td>
           <td class="py-1.5 pr-4 text-right">{{ r.squeeze_score }} <span class="text-[10px] text-zinc-400">{{ r.squeeze_level }}</span></td>
-          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format((r.mom_12_1 or 0) * 100) if r.mom_12_1 is not none else '—' }}</td>
+          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format((r.price_20d or 0) * 100) if r.price_20d is not none else '—' }}</td>
         </tr>
         {% endfor %}
       </tbody>
