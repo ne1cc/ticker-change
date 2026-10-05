@@ -30,8 +30,11 @@ def _populated_snap():
                                 "drift_to_date": 0.03,
                                 "drift_to_date_sessions": 30}],
                       "upcoming": [], "excluded": []},
-            "value": {"rows": [], "excluded": []},
-            "squeeze": {"rows": [], "excluded": []}}
+            "value": {"rows": [{"symbol": "AAA", "industry": "Software",
+                                "value_score": 81.0, "fwd_pe": 28.0}],
+                      "excluded": []},
+            "squeeze": {"rows": [{"symbol": "AAA", "short_pct_float": 0.22}],
+                        "excluded": []}}
 
 
 class TestRadarPage(unittest.TestCase):
@@ -84,6 +87,15 @@ class TestRadarPage(unittest.TestCase):
                        'id="radar-sector-filter"', 'id="radar-search"',
                        'data-col=', 'th data-col="symbol" class="sticky'):
             self.assertIn(marker, html)
+
+    def test_squeeze_si_cell_carries_percent_scale(self):
+        """SI % float is stored as a fraction but filtered in percent, so the
+        cell must declare data-scale="100" for the range filter to honor."""
+        with patch.object(app_module.radar, "current_snapshot",
+                          return_value=_populated_snap()):
+            html = self._get("squeeze").get_data(as_text=True)
+        self.assertIn('data-col="short_pct_float" data-v="0.22" '
+                      'data-scale="100"', html)
 
     def test_tunables_echoed(self):
         payload = {"meta": {"warmed_count": 2},

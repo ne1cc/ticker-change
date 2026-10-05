@@ -8,7 +8,7 @@
 
 {% macro rcell(row, key, numeric, scale, scan, cls='', suffix='') -%}
 {% set v = row[key] if key in row else none %}{% set dv = (1 if v else 0) if scale in ('nm', 'flag') else v %}
-<td data-col="{{ key }}" data-v="{{ dv if dv is not none else '' }}"{% if v is none %} data-missing="1"{% endif %}{% if key not in scan %} hidden{% endif %} class="py-1.5 pr-4 whitespace-nowrap{% if numeric %} text-right{% endif %}{% if cls %} {{ cls }}{% endif %}">{% if v is none %}—{% elif scale == 'pct1' %}{{ '%+.1f%%' | format(v * 100) }}{% elif scale == 'pct1s' %}{{ '%.1f%%' | format(v * 100) }}{% elif scale == 'pctp' %}{{ '%+.1f%%' | format(v) }}{% elif scale == 'pctps' %}{{ '%.1f%%' | format(v) }}{% elif scale == 'x1' %}{{ '%.1f×' | format(v) }}{% elif scale == 'n2' %}{{ '%.2f' | format(v) }}{% elif scale == 'n1' %}{{ '%.1f' | format(v) }}{% elif scale == 'compact' %}{{ ('%.1fT' | format(v / 1e12)) if v >= 1e12 else ('%.1fB' | format(v / 1e9) if v >= 1e9 else '%.0fM' | format(v / 1e6)) }}{% elif scale == 'nm' %}{{ 'NM' if v else '·' }}{% elif scale == 'flag' %}{{ '✓' if v else '·' }}{% else %}{{ v }}{% endif %}{% if suffix and v is not none %} <span class="text-[10px] text-zinc-400">{{ suffix }}</span>{% endif %}</td>
+<td data-col="{{ key }}" data-v="{{ dv if dv is not none else '' }}"{% if scale in ('pct1', 'pct1s') %} data-scale="100"{% endif %}{% if v is none %} data-missing="1"{% endif %}{% if key not in scan %} hidden{% endif %} class="py-1.5 pr-4 whitespace-nowrap{% if numeric %} text-right{% endif %}{% if cls %} {{ cls }}{% endif %}">{% if v is none %}—{% elif scale == 'pct1' %}{{ '%+.1f%%' | format(v * 100) }}{% elif scale == 'pct1s' %}{{ '%.1f%%' | format(v * 100) }}{% elif scale == 'pctp' %}{{ '%+.1f%%' | format(v) }}{% elif scale == 'pctps' %}{{ '%.1f%%' | format(v) }}{% elif scale == 'x1' %}{{ '%.1f×' | format(v) }}{% elif scale == 'n2' %}{{ '%.2f' | format(v) }}{% elif scale == 'n1' %}{{ '%.1f' | format(v) }}{% elif scale == 'compact' %}{{ ('%.1fT' | format(v / 1e12)) if v >= 1e12 else ('%.1fB' | format(v / 1e9) if v >= 1e9 else '%.0fM' | format(v / 1e6)) }}{% elif scale == 'nm' %}{{ 'NM' if v else '·' }}{% elif scale == 'flag' %}{{ '✓' if v else '·' }}{% else %}{{ v }}{% endif %}{% if suffix and v is not none %} <span class="text-[10px] text-zinc-400">{{ suffix }}</span>{% endif %}</td>
 {%- endmacro %}
 
 {% block content %}
@@ -755,9 +755,15 @@
         for (var b = 0; show && b < bounds.length; b++) {
           var td = cellFor(tr, bounds[b].col);
           var dv = td ? parseFloat(td.getAttribute('data-v')) : NaN;
-          if (!td || td.hasAttribute('data-missing') || isNaN(dv)) show = false;
-          else if (bounds[b].bound === 'min' && dv < bounds[b].v) show = false;
-          else if (bounds[b].bound === 'max' && dv > bounds[b].v) show = false;
+          if (!td || td.hasAttribute('data-missing') || isNaN(dv)) {
+            show = false;
+            continue;
+          }
+          var scale = parseFloat(td.getAttribute('data-scale') || '1');
+          if (isNaN(scale)) scale = 1;
+          var scaled = dv * scale;
+          if (bounds[b].bound === 'min' && scaled < bounds[b].v) show = false;
+          else if (bounds[b].bound === 'max' && scaled > bounds[b].v) show = false;
         }
         tr.style.display = show ? '' : 'none';
       }
