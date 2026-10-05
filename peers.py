@@ -108,6 +108,16 @@ def value_score(percs: dict) -> float | None:
     return round(sum(vals) / len(vals), 1) if vals else None
 
 
+def nm_state(metric_key: str, value) -> bool:
+    """True when a ratio metric's value is non-positive (not meaningful)."""
+    if value is None:
+        return False
+    try:
+        return float(value) <= 0
+    except (TypeError, ValueError):
+        return False
+
+
 def quadrant(valuation_pct: float | None, mom_12_1: float | None) -> str | None:
     """Valuation (cheap vs rich at the 50th pct) x momentum (positive vs not)."""
     if valuation_pct is None or mom_12_1 is None:
@@ -142,11 +152,16 @@ def _row_for(sym: str) -> dict | None:
     return row
 
 
-def build_peer_comparison(ticker: str, cap: int | None = None) -> dict | None:
+def build_peer_comparison(
+        ticker: str, cap: int | None = None, min_peers: int = 2) -> dict | None:
     """Cross-sectional peer table with percentile ranks + quadrants.
 
     Reads only api_cache/SQLite — never fetches. None without a peer set or
-    focus fundamentals.
+    focus fundamentals. Multiple metrics (the inverted cheapness set) treat
+    non-positive values as not-meaningful: flagged via ``{key}_nm`` and
+    excluded from percentile pools; rows carry ``{key}_peer_n`` (valid pool
+    size) and a ``{key}_state`` of "insufficient-peers" (percentile None)
+    when fewer than ``min_peers`` valid values exist.
     """
     ticker = ticker.upper()
     peers_syms = resolve_peers(ticker, cap=cap if cap is not None else 8)
@@ -159,7 +174,21 @@ def build_peer_comparison(ticker: str, cap: int | None = None) -> dict | None:
     if len(rows) < 2:
         return None
 
-    for key, (_src, invert) in {**_VALUE_METRICS, **_GROWTH_METRICS}.items():
+    for key, (_src, invert) in _VALUE_METRICS.items():
+        for r in rows:
+            if nm_state(key, r.get(key)):
+                r[key] = None
+                r[f"{key}_nm"] = True
+        col = [r.get(key) for r in rows]
+        peer_n = len([v for v in col if (f := _as_float(v)) is not None and f > 0])
+        for r in rows:
+            r[f"{key}_peer_n"] = peer_n
+            if peer_n < min_peers:
+                r[f"{key}_pct"] = None
+                r[f"{key}_state"] = "insufficient-peers"
+            else:
+                r[f"{key}_pct"] = percentile_rank(col, r.get(key), invert=invert)
+    for key, (_src, invert) in _GROWTH_METRICS.items():
         col = [r.get(key) for r in rows]
         for r in rows:
             r[f"{key}_pct"] = percentile_rank(col, r.get(key), invert=invert)
