@@ -2,6 +2,15 @@
 {% from "_macros.html" import metric %}
 {% block title %}Radar — ticker/change{% endblock %}
 
+{% macro sth(key, numeric, label, scan) -%}
+<th data-col="{{ key }}" data-sort-key="{{ key }}"{% if key not in scan %} hidden{% endif %} class="py-1.5 pr-4 cursor-pointer select-none hover:text-zinc-900 dark:hover:text-zinc-100{% if numeric %} text-right{% endif %}">{{ label }}<span data-glyph="{{ key }}" class="inline-block w-4 text-amber-500"></span></th>
+{%- endmacro %}
+
+{% macro rcell(row, key, numeric, scale, scan, cls='', suffix='') -%}
+{% set v = row[key] if key in row else none %}{% set dv = (1 if v else 0) if scale in ('nm', 'flag') else v %}
+<td data-col="{{ key }}" data-v="{{ dv if dv is not none else '' }}"{% if v is none %} data-missing="1"{% endif %}{% if key not in scan %} hidden{% endif %} class="py-1.5 pr-4 whitespace-nowrap{% if numeric %} text-right{% endif %}{% if cls %} {{ cls }}{% endif %}">{% if v is none %}—{% elif scale == 'pct1' %}{{ '%+.1f%%' | format(v * 100) }}{% elif scale == 'pct1s' %}{{ '%.1f%%' | format(v * 100) }}{% elif scale == 'pctp' %}{{ '%+.1f%%' | format(v) }}{% elif scale == 'pctps' %}{{ '%.1f%%' | format(v) }}{% elif scale == 'x1' %}{{ '%.1f×' | format(v) }}{% elif scale == 'n2' %}{{ '%.2f' | format(v) }}{% elif scale == 'n1' %}{{ '%.1f' | format(v) }}{% elif scale == 'compact' %}{{ ('%.1fT' | format(v / 1e12)) if v >= 1e12 else ('%.1fB' | format(v / 1e9) if v >= 1e9 else '%.0fM' | format(v / 1e6)) }}{% elif scale == 'nm' %}{{ 'NM' if v else '·' }}{% elif scale == 'flag' %}{{ '✓' if v else '·' }}{% else %}{{ v }}{% endif %}{% if suffix and v is not none %} <span class="text-[10px] text-zinc-400">{{ suffix }}</span>{% endif %}</td>
+{%- endmacro %}
+
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
   <h1 class="text-2xl font-semibold tracking-tight mb-1">Radar</h1>
@@ -78,85 +87,224 @@
     Universe scanned — nothing qualifies right now.
   </div>
   {% else %}
+  {% set scan_cols = {'drift': ['symbol', 'print_date', 'sessions_since',
+                                'sessions_to_20d', 'surprise_pct', 'car_30',
+                                'drift_to_date'],
+                      'value': ['symbol', 'industry', 'value_score', 'mom_12_1',
+                                'fwd_pe'],
+                      'squeeze': ['symbol', 'short_pct_float', 'dtc_vendor',
+                                  'si_change', 'squeeze_score', 'price_20d']} %}
+  {% set scan = scan_cols[tab] %}
+  {% set filter_cols = {'drift': [('surprise_pct', 'Surprise %'),
+                                  ('sessions_to_20d', 'Drift left')],
+                        'value': [('value_score', 'Value score'),
+                                  ('fwd_pe', 'Fwd P/E')],
+                        'squeeze': [('squeeze_score', 'Squeeze score'),
+                                    ('short_pct_float', 'SI % float')]} %}
+  {% set asof = payload.meta.source_as_of or {} %}
+  <div class="flex flex-wrap items-center gap-x-4 gap-y-2 mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+    <div class="flex items-center gap-1" role="group" aria-label="Column presets">
+      <button type="button" data-preset="scan" class="rounded border border-zinc-200 dark:border-zinc-700 px-2 py-0.5">Scan</button>
+      <button type="button" data-preset="research" class="rounded border border-zinc-200 dark:border-zinc-700 px-2 py-0.5">Research</button>
+      <button type="button" data-preset="audit" class="rounded border border-zinc-200 dark:border-zinc-700 px-2 py-0.5">Audit</button>
+    </div>
+    <select id="radar-sector-filter"
+            class="max-w-40 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-900 dark:text-zinc-100">
+      <option value="">All sectors</option>
+    </select>
+    <input id="radar-search" type="search" placeholder="Symbol…"
+           class="w-28 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-900 dark:text-zinc-100">
+    {% for key, label in filter_cols[tab] %}
+    <label class="flex items-center gap-1">{{ label }}
+      <input type="number" data-filter-col="{{ key }}" data-filter-bound="min" placeholder="min"
+             class="w-14 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-1 py-0.5 text-zinc-900 dark:text-zinc-100">
+      –
+      <input type="number" data-filter-col="{{ key }}" data-filter-bound="max" placeholder="max"
+             class="w-14 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-1 py-0.5 text-zinc-900 dark:text-zinc-100">
+    </label>
+    {% endfor %}
+    <label class="flex items-center gap-1">
+      <input id="radar-coverage-only" type="checkbox"> Coverage complete only
+    </label>
+  </div>
   <div class="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
     {% if tab == 'drift' %}
-    <table class="w-full text-sm">
+    <table data-radar-tab="drift" class="w-full text-sm">
       <thead>
         <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
-          <th class="py-1.5 pr-4">Ticker</th>
-          <th class="py-1.5 pr-4">Print date</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('Sessions since', 'pead_drift') }}</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('Drift left', 'pead_drift') }}</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('Surprise %', 'surprise_pct') }}</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('CAR', 'event_car') }}</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('Drift to date', 'pead_drift') }}</th>
+          <th data-col="symbol" class="sticky left-0 bg-white dark:bg-zinc-900 py-1.5 pr-4 cursor-pointer select-none" data-sort-key="symbol">Ticker<span data-glyph="symbol" class="inline-block w-4 text-amber-500"></span></th>
+          {{ sth('print_date', false, 'Print date', scan) }}
+          {{ sth('sessions_since', true, metric('Sessions since', 'pead_drift'), scan) }}
+          {{ sth('sessions_to_20d', true, metric('Drift left', 'pead_drift'), scan) }}
+          {{ sth('surprise_pct', true, metric('Surprise %', 'surprise_pct'), scan) }}
+          {{ sth('car_30', true, metric('CAR', 'event_car'), scan) }}
+          {{ sth('drift_to_date', true, metric('Drift to date', 'pead_drift'), scan) }}
+          {{ sth('mkt_cap', true, 'Mkt cap', scan) }}
+          {{ sth('sector', false, 'Sector', scan) }}
+          {{ sth('eps_estimate', true, 'EPS est', scan) }}
+          {{ sth('eps_actual', true, 'EPS act', scan) }}
+          {{ sth('gap_pct', true, 'Gap %', scan) }}
+          {{ sth('reaction_ret', true, 'Reaction day', scan) }}
+          {{ sth('runup_5d', true, 'Run-up 5d', scan) }}
+          {{ sth('rel_volume', true, 'Rel volume', scan) }}
+          {{ sth('drift_5d', true, 'Drift 5d', scan) }}
+          {{ sth('drift_10d', true, 'Drift 10d', scan) }}
+          {{ sth('drift_20d', true, 'Drift 20d', scan) }}
+          {{ sth('drift_to_date_sessions', true, 'Drift sessions', scan) }}
+          {{ sth('excess_10d_sector', true, 'Excess 10d vs sector', scan) }}
+          {{ sth('hist_beat_median', true, 'Beat history', scan) }}
+          {{ sth('hist_miss_median', true, 'Miss history', scan) }}
+          {{ sth('next_print', false, 'Next print', scan) }}
+          {{ sth('alignment', false, 'Alignment', scan) }}
+          {{ sth('surprise_nm', false, 'Surprise NM', scan) }}
+          {{ sth('car_significant', false, 'CAR sig 95%', scan) }}
         </tr>
       </thead>
       <tbody class="font-mono">
         {% for r in payload[tab].rows %}
-        <tr data-symbol="{{ r.symbol }}" class="border-b border-zinc-100 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-          <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
-          <td class="py-1.5 pr-4">{{ r.print_date }}</td>
-          <td class="py-1.5 pr-4 text-right">{{ r.sessions_since }}</td>
-          <td class="py-1.5 pr-4 text-right {{ 'text-amber-500 font-semibold' if (r.sessions_to_20d or 0) > 0 else 'text-zinc-400' }}">{{ r.sessions_to_20d }}d</td>
-          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format(r.surprise_pct) if r.surprise_pct is not none else '—' }}</td>
-          <td class="py-1.5 pr-4 text-right {{ 'text-amber-500 font-semibold' if r.car_significant else '' }}">
-            {{ '%+.1f%%' | format((r.car_30 or 0) * 100) if r.car_30 is not none else '—' }}
-          </td>
-          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format((r.drift_to_date or 0) * 100) if r.drift_to_date is not none else '—' }} <span class="text-[10px] text-zinc-400">{{ r.drift_to_date_sessions }}s</span></td>
+        <tr data-symbol="{{ r.symbol }}" data-sector="{{ r.sector or '' }}" class="border-b border-zinc-100 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+          <td data-col="symbol" data-v="{{ r.symbol }}" class="sticky left-0 bg-white dark:bg-zinc-900 py-1.5 pr-4 whitespace-nowrap"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
+          {{ rcell(r, 'print_date', false, 'text', scan) }}
+          {{ rcell(r, 'sessions_since', true, 'int', scan) }}
+          {{ rcell(r, 'sessions_to_20d', true, 'int', scan, 'text-amber-500 font-semibold' if (r.sessions_to_20d or 0) > 0 else 'text-zinc-400') }}
+          {{ rcell(r, 'surprise_pct', true, 'pctp', scan) }}
+          {{ rcell(r, 'car_30', true, 'pct1', scan, 'text-amber-500 font-semibold' if r.car_significant else '') }}
+          {{ rcell(r, 'drift_to_date', true, 'pct1', scan, suffix=r.drift_to_date_sessions ~ 's') }}
+          {{ rcell(r, 'mkt_cap', true, 'compact', scan) }}
+          {{ rcell(r, 'sector', false, 'text', scan, 'font-sans text-xs') }}
+          {{ rcell(r, 'eps_estimate', true, 'n2', scan) }}
+          {{ rcell(r, 'eps_actual', true, 'n2', scan) }}
+          {{ rcell(r, 'gap_pct', true, 'pct1', scan) }}
+          {{ rcell(r, 'reaction_ret', true, 'pct1', scan) }}
+          {{ rcell(r, 'runup_5d', true, 'pct1', scan) }}
+          {{ rcell(r, 'rel_volume', true, 'x1', scan) }}
+          {{ rcell(r, 'drift_5d', true, 'pct1', scan) }}
+          {{ rcell(r, 'drift_10d', true, 'pct1', scan) }}
+          {{ rcell(r, 'drift_20d', true, 'pct1', scan) }}
+          {{ rcell(r, 'drift_to_date_sessions', true, 'int', scan) }}
+          {{ rcell(r, 'excess_10d_sector', true, 'pct1', scan) }}
+          {{ rcell(r, 'hist_beat_median', true, 'pct1', scan) }}
+          {{ rcell(r, 'hist_miss_median', true, 'pct1', scan) }}
+          {{ rcell(r, 'next_print', false, 'text', scan) }}
+          {{ rcell(r, 'alignment', false, 'text', scan, 'font-sans text-xs') }}
+          {{ rcell(r, 'surprise_nm', false, 'nm', scan, 'font-sans text-xs') }}
+          {{ rcell(r, 'car_significant', false, 'flag', scan, 'font-sans text-xs') }}
         </tr>
         {% endfor %}
       </tbody>
     </table>
     {% elif tab == 'value' %}
-    <table class="w-full text-sm">
+    <table data-radar-tab="value" class="w-full text-sm">
       <thead>
         <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
-          <th class="py-1.5 pr-4">Ticker</th>
-          <th class="py-1.5 pr-4">Industry</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('Value score', 'rv_quadrant') }}</th>
-          <th class="py-1.5 pr-4 text-right">12-1 mom</th>
-          <th class="py-1.5 pr-4 text-right">Fwd P/E</th>
+          <th data-col="symbol" class="sticky left-0 bg-white dark:bg-zinc-900 py-1.5 pr-4 cursor-pointer select-none" data-sort-key="symbol">Ticker<span data-glyph="symbol" class="inline-block w-4 text-amber-500"></span></th>
+          {{ sth('industry', false, 'Industry', scan) }}
+          {{ sth('value_score', true, metric('Value score', 'rv_quadrant'), scan) }}
+          {{ sth('mom_12_1', true, '12-1 mom', scan) }}
+          {{ sth('fwd_pe', true, 'Fwd P/E', scan) }}
+          {{ sth('sector', false, 'Sector', scan) }}
+          {{ sth('mkt_cap', true, 'Mkt cap', scan) }}
+          {{ sth('trail_pe', true, 'Trail P/E', scan) }}
+          {{ sth('ps', true, 'P/S', scan) }}
+          {{ sth('peg', true, 'PEG', scan) }}
+          {{ sth('ev_ebitda', true, 'EV/EBITDA', scan) }}
+          {{ sth('div_yield', true, 'Div yield', scan) }}
+          {{ sth('fcf_yield', true, 'FCF yield', scan) }}
+          {{ sth('rev_growth', true, 'Rev growth', scan) }}
+          {{ sth('eps_growth', true, 'EPS growth', scan) }}
+          {{ sth('mom_6m', true, '6m mom', scan) }}
+          {{ sth('mom_3m', true, '3m mom', scan) }}
+          {{ sth('mom_1m', true, '1m mom', scan) }}
+          {{ sth('ann_vol', true, 'Ann vol', scan) }}
+          {{ sth('short_pct_float', true, 'SI % float', scan) }}
+          {{ sth('peer_percentile', true, 'Peer pctile', scan) }}
+          {{ sth('quadrant', false, 'Quadrant', scan) }}
+          {{ sth('_state', false, 'Peer state', scan) }}
+          {{ sth('_nm', false, 'NM flag', scan) }}
         </tr>
       </thead>
       <tbody class="font-mono">
         {% for r in payload[tab].rows %}
-        <tr data-symbol="{{ r.symbol }}" class="border-b border-zinc-100 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-          <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
-          <td class="py-1.5 pr-4 font-sans text-xs">{{ r.industry }}</td>
-          <td class="py-1.5 pr-4 text-right">{{ r.value_score }}</td>
-          <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (r.mom_12_1 or 0) > 0 else 'text-red-500' }}">{{ '%+.1f%%' | format((r.mom_12_1 or 0) * 100) if r.mom_12_1 is not none else '—' }}</td>
-          <td class="py-1.5 pr-4 text-right">{{ '%.1f' | format(r.fwd_pe) if r.fwd_pe is not none else '—' }}</td>
+        <tr data-symbol="{{ r.symbol }}" data-sector="{{ r.sector or '' }}" data-industry="{{ r.industry or '' }}" data-coverage="{{ 'low' if r.low_coverage else 'ok' }}" class="border-b border-zinc-100 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+          <td data-col="symbol" data-v="{{ r.symbol }}" class="sticky left-0 bg-white dark:bg-zinc-900 py-1.5 pr-4 whitespace-nowrap"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
+          {{ rcell(r, 'industry', false, 'text', scan, 'font-sans text-xs') }}
+          {{ rcell(r, 'value_score', true, 'n1', scan) }}
+          {{ rcell(r, 'mom_12_1', true, 'pct1', scan, 'text-emerald-600' if (r.mom_12_1 or 0) > 0 else 'text-red-500') }}
+          {{ rcell(r, 'fwd_pe', true, 'n1', scan) }}
+          {{ rcell(r, 'sector', false, 'text', scan, 'font-sans text-xs') }}
+          {{ rcell(r, 'mkt_cap', true, 'compact', scan) }}
+          {{ rcell(r, 'trail_pe', true, 'n1', scan) }}
+          {{ rcell(r, 'ps', true, 'n1', scan) }}
+          {{ rcell(r, 'peg', true, 'n1', scan) }}
+          {{ rcell(r, 'ev_ebitda', true, 'n1', scan) }}
+          {{ rcell(r, 'div_yield', true, 'pct1s', scan) }}
+          {{ rcell(r, 'fcf_yield', true, 'pctps', scan) }}
+          {{ rcell(r, 'rev_growth', true, 'pct1', scan) }}
+          {{ rcell(r, 'eps_growth', true, 'pct1', scan) }}
+          {{ rcell(r, 'mom_6m', true, 'pct1', scan) }}
+          {{ rcell(r, 'mom_3m', true, 'pct1', scan) }}
+          {{ rcell(r, 'mom_1m', true, 'pct1', scan) }}
+          {{ rcell(r, 'ann_vol', true, 'pct1s', scan) }}
+          {{ rcell(r, 'short_pct_float', true, 'pct1s', scan) }}
+          {{ rcell(r, 'peer_percentile', true, 'n1', scan) }}
+          {{ rcell(r, 'quadrant', false, 'text', scan, 'font-sans text-xs') }}
+          {{ rcell(r, '_state', false, 'text', scan, 'font-sans text-xs') }}
+          {{ rcell(r, '_nm', false, 'nm', scan, 'font-sans text-xs') }}
         </tr>
         {% endfor %}
       </tbody>
     </table>
     {% else %}
-    <table class="w-full text-sm">
+    <table data-radar-tab="squeeze" class="w-full text-sm">
       <thead>
         <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
-          <th class="py-1.5 pr-4">Ticker</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('SI % float', 'short_pct_float') }}</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('DTC', 'days_to_cover') }}</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('MoM Δ', 'si_mom_change') }}</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('Squeeze score', 'squeeze_composite') }}</th>
-          <th class="py-1.5 pr-4 text-right">20d chg</th>
+          <th data-col="symbol" class="sticky left-0 bg-white dark:bg-zinc-900 py-1.5 pr-4 cursor-pointer select-none" data-sort-key="symbol">Ticker<span data-glyph="symbol" class="inline-block w-4 text-amber-500"></span></th>
+          {{ sth('short_pct_float', true, metric('SI % float', 'short_pct_float'), scan) }}
+          {{ sth('dtc_vendor', true, metric('DTC', 'days_to_cover'), scan) }}
+          {{ sth('si_change', true, metric('MoM Δ', 'si_mom_change'), scan) }}
+          {{ sth('squeeze_score', true, metric('Squeeze score', 'squeeze_composite'), scan) }}
+          {{ sth('price_20d', true, '20d chg', scan) }}
+          {{ sth('sector', false, 'Sector', scan) }}
+          {{ sth('mkt_cap', true, 'Mkt cap', scan) }}
+          {{ sth('si_settlement', false, 'SI settlement', scan) }}
+          {{ sth('shares_short', true, 'Shares short', scan) }}
+          {{ sth('prior_shares_short', true, 'Prior shares', scan) }}
+          {{ sth('dtc_calc', true, 'DTC calc', scan) }}
+          {{ sth('dist_52w_high', true, 'Dist 52w high', scan) }}
+          {{ sth('price_5d', true, '5d chg', scan) }}
+          {{ sth('dollar_volume', true, '$ volume 20d', scan) }}
+          {{ sth('si_age_days', true, 'SI age (days)', scan) }}
+          {{ sth('squeeze_level', false, 'Score level', scan) }}
         </tr>
       </thead>
       <tbody class="font-mono">
         {% for r in payload[tab].rows %}
-        <tr data-symbol="{{ r.symbol }}" class="border-b border-zinc-100 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-          <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
-          <td class="py-1.5 pr-4 text-right">{{ '%.1f%%' | format((r.short_pct_float or 0) * 100) }}</td>
-          <td class="py-1.5 pr-4 text-right">{{ r.dtc_vendor }} <span class="text-[10px] text-zinc-400">calc {{ r.dtc_calc if r.dtc_calc is not none else '—' }}</span></td>
-          <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (r.si_change or 0) > 0 else 'text-red-500' if (r.si_change or 0) < 0 else 'text-zinc-400' }}">{{ '%+.1f%%' | format(r.si_change) if r.si_change is not none else '—' }}</td>
-          <td class="py-1.5 pr-4 text-right">{{ r.squeeze_score }} <span class="text-[10px] text-zinc-400">{{ r.squeeze_level }}</span></td>
-          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format((r.price_20d or 0) * 100) if r.price_20d is not none else '—' }}</td>
+        <tr data-symbol="{{ r.symbol }}" data-sector="{{ r.sector or '' }}" class="border-b border-zinc-100 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+          <td data-col="symbol" data-v="{{ r.symbol }}" class="sticky left-0 bg-white dark:bg-zinc-900 py-1.5 pr-4 whitespace-nowrap"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
+          {{ rcell(r, 'short_pct_float', true, 'pct1s', scan) }}
+          {{ rcell(r, 'dtc_vendor', true, 'n1', scan, suffix='calc ' ~ (r.dtc_calc if r.dtc_calc is not none else '—')) }}
+          {{ rcell(r, 'si_change', true, 'pctp', scan, 'text-emerald-600' if (r.si_change or 0) > 0 else 'text-red-500' if (r.si_change or 0) < 0 else 'text-zinc-400') }}
+          {{ rcell(r, 'squeeze_score', true, 'int', scan, suffix=r.squeeze_level) }}
+          {{ rcell(r, 'price_20d', true, 'pct1', scan) }}
+          {{ rcell(r, 'sector', false, 'text', scan, 'font-sans text-xs') }}
+          {{ rcell(r, 'mkt_cap', true, 'compact', scan) }}
+          {{ rcell(r, 'si_settlement', false, 'text', scan) }}
+          {{ rcell(r, 'shares_short', true, 'compact', scan) }}
+          {{ rcell(r, 'prior_shares_short', true, 'compact', scan) }}
+          {{ rcell(r, 'dtc_calc', true, 'n1', scan) }}
+          {{ rcell(r, 'dist_52w_high', true, 'pct1s', scan) }}
+          {{ rcell(r, 'price_5d', true, 'pct1', scan) }}
+          {{ rcell(r, 'dollar_volume', true, 'compact', scan) }}
+          {{ rcell(r, 'si_age_days', true, 'int', scan) }}
+          {{ rcell(r, 'squeeze_level', false, 'text', scan, 'font-sans text-xs') }}
         </tr>
         {% endfor %}
       </tbody>
     </table>
     {% endif %}
+  </div>
+  <div id="radar-asof-footer" class="hidden mt-2 text-[10px] text-zinc-400">
+    Source as-of: prices {{ asof.prices or '—' }} · earnings {{ asof.earnings or '—' }} · fundamentals {{ asof.fundamentals or '—' }} · short {{ asof.short or '—' }}
   </div>
   {% endif %}
 </div>
@@ -450,5 +598,230 @@
       }).catch(function () {});
     });
   });
+</script>
+
+<script>
+  (function () {
+    var table = document.querySelector('table[data-radar-tab]');
+    if (!table) return;
+    var tab = table.getAttribute('data-radar-tab');
+    var tbody = table.querySelector('tbody');
+    var sectorSel = document.getElementById('radar-sector-filter');
+    var search = document.getElementById('radar-search');
+    var covBox = document.getElementById('radar-coverage-only');
+    var storeKey = 'radar_preset_' + tab;
+    var PRESET_CHAR = { scan: 's', research: 'r', audit: 'a' };
+    var RADAR_COLS = {
+      drift: {
+        symbol: ['sra', 0], print_date: ['sra', 0], sessions_since: ['sra', 1],
+        sessions_to_20d: ['sra', 1], surprise_pct: ['sra', 1],
+        car_30: ['sra', 1], drift_to_date: ['sra', 1], mkt_cap: ['ra', 1],
+        sector: ['ra', 0], eps_estimate: ['ra', 1], eps_actual: ['ra', 1],
+        gap_pct: ['ra', 1], reaction_ret: ['ra', 1], runup_5d: ['ra', 1],
+        rel_volume: ['ra', 1], drift_5d: ['ra', 1], drift_10d: ['ra', 1],
+        drift_20d: ['ra', 1], drift_to_date_sessions: ['ra', 1],
+        excess_10d_sector: ['ra', 1], hist_beat_median: ['ra', 1],
+        hist_miss_median: ['ra', 1], next_print: ['ra', 0],
+        alignment: ['a', 0], surprise_nm: ['a', 0], car_significant: ['a', 0]
+      },
+      value: {
+        symbol: ['sra', 0], industry: ['sra', 0], value_score: ['sra', 1],
+        mom_12_1: ['sra', 1], fwd_pe: ['sra', 1], sector: ['ra', 0],
+        mkt_cap: ['ra', 1], trail_pe: ['ra', 1], ps: ['ra', 1],
+        peg: ['ra', 1], ev_ebitda: ['ra', 1], div_yield: ['ra', 1],
+        fcf_yield: ['ra', 1], rev_growth: ['ra', 1], eps_growth: ['ra', 1],
+        mom_6m: ['ra', 1], mom_3m: ['ra', 1], mom_1m: ['ra', 1],
+        ann_vol: ['ra', 1], short_pct_float: ['ra', 1],
+        peer_percentile: ['ra', 1], quadrant: ['ra', 0],
+        _state: ['a', 0], _nm: ['a', 0]
+      },
+      squeeze: {
+        symbol: ['sra', 0], short_pct_float: ['sra', 1],
+        dtc_vendor: ['sra', 1], si_change: ['sra', 1],
+        squeeze_score: ['sra', 1], price_20d: ['sra', 1], sector: ['ra', 0],
+        mkt_cap: ['ra', 1], si_settlement: ['ra', 0], shares_short: ['ra', 1],
+        prior_shares_short: ['ra', 1], dtc_calc: ['ra', 1],
+        dist_52w_high: ['ra', 1], price_5d: ['ra', 1],
+        dollar_volume: ['ra', 1], si_age_days: ['a', 1],
+        squeeze_level: ['a', 0]
+      }
+    };
+    var sortKeys = [];
+    var currentPreset = 'scan';
+    try {
+      var saved = localStorage.getItem(storeKey);
+      if (saved && PRESET_CHAR[saved]) currentPreset = saved;
+    } catch (e) {}
+
+    function rowsAll() {
+      return Array.prototype.slice.call(
+        tbody.querySelectorAll('tr[data-symbol]'));
+    }
+    function cellFor(tr, key) {
+      return tr.querySelector('td[data-col="' + key + '"]');
+    }
+    function colNumeric(key) {
+      var spec = (RADAR_COLS[tab] || {})[key];
+      return spec ? spec[1] : 0;
+    }
+
+    function applyPreset() {
+      var cols = RADAR_COLS[tab] || {};
+      var ch = PRESET_CHAR[currentPreset];
+      var cells = table.querySelectorAll('[data-col]');
+      for (var i = 0; i < cells.length; i++) {
+        var spec = cols[cells[i].getAttribute('data-col')];
+        if (!spec) continue;
+        if (spec[0].indexOf(ch) >= 0) cells[i].removeAttribute('hidden');
+        else cells[i].setAttribute('hidden', '');
+      }
+      var btns = document.querySelectorAll('[data-preset]');
+      for (var b = 0; b < btns.length; b++) {
+        var on = btns[b].getAttribute('data-preset') === currentPreset;
+        btns[b].classList.toggle('bg-amber-500', on);
+        btns[b].classList.toggle('text-white', on);
+        btns[b].classList.toggle('dark:text-zinc-900', on);
+      }
+      var footer = document.getElementById('radar-asof-footer');
+      if (footer) footer.classList.toggle('hidden', currentPreset !== 'audit');
+      try { localStorage.setItem(storeKey, currentPreset); } catch (e) {}
+    }
+
+    function compareRows(a, b) {
+      for (var i = 0; i < sortKeys.length; i++) {
+        var k = sortKeys[i].key;
+        var ca = cellFor(a, k), cb = cellFor(b, k);
+        var va = ca ? ca.getAttribute('data-v') : '';
+        var vb = cb ? cb.getAttribute('data-v') : '';
+        var ma = !ca || ca.hasAttribute('data-missing') || va === '';
+        var mb = !cb || cb.hasAttribute('data-missing') || vb === '';
+        if (ma && mb) continue;
+        if (ma) return 1;
+        if (mb) return -1;
+        var cmp = 0;
+        if (colNumeric(k)) {
+          cmp = parseFloat(va) - parseFloat(vb);
+          if (isNaN(cmp)) cmp = 0;
+        } else {
+          cmp = va < vb ? -1 : va > vb ? 1 : 0;
+        }
+        if (cmp) return cmp * sortKeys[i].dir;
+      }
+      var sa = a.getAttribute('data-symbol') || '';
+      var sb = b.getAttribute('data-symbol') || '';
+      return sa < sb ? -1 : sa > sb ? 1 : 0;
+    }
+
+    function applySort() {
+      var arr = rowsAll();
+      arr.sort(compareRows);
+      for (var i = 0; i < arr.length; i++) tbody.appendChild(arr[i]);
+      var glyphs = table.querySelectorAll('[data-glyph]');
+      for (var g = 0; g < glyphs.length; g++) glyphs[g].textContent = '';
+      for (var k = 0; k < sortKeys.length; k++) {
+        var gl = table.querySelector('[data-glyph="' + sortKeys[k].key + '"]');
+        if (gl) gl.textContent = (k + 1) + (sortKeys[k].dir === 1 ? '▲' : '▼');
+      }
+    }
+
+    function applyFilters() {
+      var q = (search && search.value ? search.value : '').trim().toUpperCase();
+      var sector = sectorSel && sectorSel.value ? sectorSel.value : '';
+      var covOnly = !!(covBox && covBox.checked);
+      var bounds = [];
+      var inputs = document.querySelectorAll('[data-filter-col]');
+      for (var i = 0; i < inputs.length; i++) {
+        var v = inputs[i].value;
+        if (v !== '' && !isNaN(parseFloat(v))) {
+          bounds.push({ col: inputs[i].getAttribute('data-filter-col'),
+                        bound: inputs[i].getAttribute('data-filter-bound'),
+                        v: parseFloat(v) });
+        }
+      }
+      var all = rowsAll();
+      for (var r = 0; r < all.length; r++) {
+        var tr = all[r];
+        var show = true;
+        if (q && (tr.getAttribute('data-symbol') || '').toUpperCase()
+              .indexOf(q) < 0) show = false;
+        if (show && sector) {
+          var sec = tr.getAttribute('data-sector') || '';
+          var ind = tr.getAttribute('data-industry') || '';
+          if (sec !== sector && ind !== sector) show = false;
+        }
+        if (show && covOnly && tr.getAttribute('data-coverage') === 'low') {
+          show = false;
+        }
+        for (var b = 0; show && b < bounds.length; b++) {
+          var td = cellFor(tr, bounds[b].col);
+          var dv = td ? parseFloat(td.getAttribute('data-v')) : NaN;
+          if (!td || td.hasAttribute('data-missing') || isNaN(dv)) show = false;
+          else if (bounds[b].bound === 'min' && dv < bounds[b].v) show = false;
+          else if (bounds[b].bound === 'max' && dv > bounds[b].v) show = false;
+        }
+        tr.style.display = show ? '' : 'none';
+      }
+    }
+
+    function populateSectors() {
+      if (!sectorSel) return;
+      var vals = {};
+      var all = rowsAll();
+      for (var i = 0; i < all.length; i++) {
+        var attrs = ['data-sector', 'data-industry'];
+        for (var a = 0; a < attrs.length; a++) {
+          var v = all[i].getAttribute(attrs[a]);
+          if (v) vals[v] = 1;
+        }
+      }
+      var names = Object.keys(vals).sort();
+      for (var n = 0; n < names.length; n++) {
+        var o = document.createElement('option');
+        o.value = names[n];
+        o.textContent = names[n];
+        sectorSel.appendChild(o);
+      }
+    }
+
+    document.addEventListener('click', function (ev) {
+      var btn = ev.target.closest ? ev.target.closest('[data-preset]') : null;
+      if (btn) {
+        currentPreset = btn.getAttribute('data-preset');
+        applyPreset();
+        return;
+      }
+      var th = ev.target.closest ? ev.target.closest('th[data-sort-key]') : null;
+      if (!th || !table.contains(th)) return;
+      if (ev.target.closest('a')) return;
+      var key = th.getAttribute('data-sort-key');
+      var at = -1;
+      for (var i = 0; i < sortKeys.length; i++) {
+        if (sortKeys[i].key === key) at = i;
+      }
+      if (ev.shiftKey) {
+        if (at >= 0) sortKeys[at].dir *= -1;
+        else {
+          if (sortKeys.length >= 2) sortKeys.shift();
+          sortKeys.push({ key: key, dir: 1 });
+        }
+      } else if (at >= 0) {
+        if (sortKeys.length > 1 || at > 0) sortKeys = [{ key: key, dir: sortKeys[at].dir }];
+        else sortKeys[0].dir *= -1;
+      } else {
+        sortKeys = [{ key: key, dir: 1 }];
+      }
+      applySort();
+    });
+    document.addEventListener('input', function (ev) {
+      if (ev.target === search || (ev.target.getAttribute &&
+          ev.target.hasAttribute('data-filter-col'))) applyFilters();
+    });
+    document.addEventListener('change', function (ev) {
+      if (ev.target === sectorSel || ev.target === covBox) applyFilters();
+    });
+
+    populateSectors();
+    applyPreset();
+  })();
 </script>
 {% endblock %}

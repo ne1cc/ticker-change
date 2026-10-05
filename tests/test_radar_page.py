@@ -75,6 +75,16 @@ class TestRadarPage(unittest.TestCase):
         self.assertIn('data-symbol="AAA"', html)
         self.assertIn("/api/radar/detail/", html)
 
+    def test_column_presets_and_filters_present(self):
+        with patch.object(app_module.radar, "current_snapshot",
+                          return_value=_populated_snap()):
+            html = self._get("drift").get_data(as_text=True)
+        for marker in ('data-preset="scan"', 'data-preset="research"',
+                       'data-preset="audit"', 'data-sort-key',
+                       'id="radar-sector-filter"', 'id="radar-search"',
+                       'data-col=', 'th data-col="symbol" class="sticky'):
+            self.assertIn(marker, html)
+
     def test_tunables_echoed(self):
         payload = {"meta": {"warmed_count": 2},
                    "drift": {"rows": [{"symbol": "X", "car_30": 0.01,
