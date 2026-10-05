@@ -61,7 +61,11 @@ import event_study  # noqa: E402
 
 
 def post_drift(stock_df: pd.DataFrame, date_str: str, n_days: int) -> float | None:
-    """Raw close-to-close return from the first session on/after date_str to
+    """Deprecated: calendar-day drift, superseded by event_metrics (sessions,
+    completed-window states). Kept for the touch-and-reversal engine's
+    compatibility; removed in P2 if nothing calls it.
+
+    Raw close-to-close return from the first session on/after date_str to
     the first session on/after date_str + n calendar days. None when either
     endpoint is missing (recent print, thin history)."""
     try:
@@ -85,10 +89,126 @@ def post_drift(stock_df: pd.DataFrame, date_str: str, n_days: int) -> float | No
         return None
 
 
+def reaction_session(stock_df: pd.DataFrame, date_str: str):
+    """(t0, alignment): first trading session on/after the announcement date.
+
+    yfinance publishes no before-open/after-close flag, so alignment is
+    'unverified' in v1. (None, 'no-data') when the date precedes all history.
+    """
+    try:
+        if stock_df is None or getattr(stock_df, "empty", True):
+            return None, "no-data"
+        idx = stock_df.index
+        if len(idx) == 0:
+            return None, "no-data"
+        ts = pd.to_datetime(date_str)
+        if ts < idx[0]:
+            return None, "no-data"
+        at_or_after = idx[idx >= ts]
+        if len(at_or_after) == 0:
+            return None, "no-data"
+        return at_or_after[0], "unverified"
+    except Exception:
+        return None, "no-data"
+
+
+def _close_at(stock_df, pos: int) -> float | None:
+    close = stock_df["close"] if "close" in stock_df.columns else stock_df["Close"]
+    if pos < 0 or pos >= len(close):
+        return None
+    return float(close.iloc[pos])
+
+
+def event_metrics(stock_df: pd.DataFrame, date_str: str) -> dict:
+    """Reaction-session metrics per the drift contract (sessions, not calendar
+    days; drift excludes the reaction day; incomplete windows are None)."""
+    out = {"t0": None, "alignment": "no-data", "sessions_since": None,
+           "gap_pct": None, "reaction_ret": None, "runup_5d": None,
+           "rel_volume": None, "drift_5d": None, "drift_10d": None,
+           "drift_20d": None, "drift_to_date": None, "drift_to_date_sessions": None}
+    try:
+        t0, alignment = reaction_session(stock_df, date_str)
+        if t0 is None:
+            return out
+        out["t0"], out["alignment"] = t0, alignment
+        pos = stock_df.index.get_loc(t0)
+        if isinstance(pos, slice):
+            return out
+        out["sessions_since"] = len(stock_df.index) - 1 - pos
+        last = len(stock_df.index) - 1
+
+        c = lambda p: _close_at(stock_df, p)
+        if pos >= 1 and c(pos - 1):
+            prev = c(pos - 1)
+            out["reaction_ret"] = round(c(pos) / prev - 1, 6) if prev else None
+            if "open" in stock_df.columns:
+                op = float(stock_df["open"].iloc[pos])
+                out["gap_pct"] = round(op / prev - 1, 6) if prev else None
+        if pos >= 6 and c(pos - 1) and c(pos - 6):
+            out["runup_5d"] = round(c(pos - 1) / c(pos - 6) - 1, 6)
+
+        if "volume" in stock_df.columns and pos >= 1:
+            vol = stock_df["volume"].iloc[max(0, pos - 20): pos]  # 20 sessions ending t0-1
+            base = float(vol.mean())
+            out["rel_volume"] = round(float(stock_df["volume"].iloc[pos]) / base, 2) if base else None
+
+        for h in (5, 10, 20):
+            if pos + h <= last:
+                cc = c(pos + h)
+                out[f"drift_{h}d"] = round(cc / c(pos) - 1, 6) if (cc and c(pos)) else None
+        if out["sessions_since"] and out["sessions_since"] > 0 and c(last) and c(pos):
+            out["drift_to_date"] = round(c(last) / c(pos) - 1, 6)
+            out["drift_to_date_sessions"] = out["sessions_since"]
+        return out
+    except Exception as e:
+        print(f"[earnings] event_metrics failed for {date_str}: {e}")
+        return out
+
+
+def own_event_history(stock_df: pd.DataFrame, events: list[dict],
+                      horizon: int = 10) -> dict:
+    """Beat/miss 10-session drift summaries from completed windows only.
+
+    Future events and unfinished horizons are excluded. n < 3 per side sets
+    the top-level state to 'limited history'.
+    """
+    import numpy as np
+    out = {"beat": {"median": None, "mean": None, "positive": 0, "n": 0},
+           "miss": {"median": None, "mean": None, "positive": 0, "n": 0},
+           "state": "limited history", "horizon_sessions": horizon}
+    try:
+        beats, misses = [], []
+        for ev in events or []:
+            if ev.get("is_upcoming") or ev.get("surprise_pct") is None:
+                continue
+            m = event_metrics(stock_df, ev["date"])
+            val = m.get(f"drift_{horizon}d")
+            if val is None:
+                continue  # unfinished window
+            (beats if ev["surprise_pct"] > 0 else misses).append(val)
+
+        def _fill(bucket, vals):
+            bucket["n"] = len(vals)
+            if vals:
+                bucket["median"] = round(float(np.median(vals)), 4)
+                bucket["mean"] = round(float(np.mean(vals)), 4)
+                bucket["positive"] = sum(1 for v in vals if v > 0)
+
+        _fill(out["beat"], beats)
+        _fill(out["miss"], misses)
+        if out["beat"]["n"] >= 3 and out["miss"]["n"] >= 3:
+            out["state"] = "ok"
+        return out
+    except Exception as e:
+        print(f"[earnings] own_event_history failed: {e}")
+        return out
+
+
 def compute_earnings_events(stock_df, benchmark_df, events, ticker="UNKNOWN",
                             max_events=8) -> list[dict]:
     """Market-model CAR (existing event_study engine) for past earnings prints,
-    plus raw 5/10/20-calendar-day post-drift. Upcoming prints are skipped."""
+    plus session-based reaction/drift metrics (event_metrics; completed windows
+    only). Upcoming prints are skipped."""
     out: list[dict] = []
     for ev in events or []:
         if ev.get("is_upcoming"):
@@ -97,15 +217,22 @@ def compute_earnings_events(stock_df, benchmark_df, events, ticker="UNKNOWN",
             stock_df, benchmark_df, ev["date"],
             event_type="EARNINGS", ticker=ticker,
         )
+        metrics = event_metrics(stock_df, ev["date"])
         row = dict(ev)
         row.update({
+            "sessions_since": metrics["sessions_since"],
+            "alignment": metrics["alignment"],
+            "gap_pct": metrics["gap_pct"],
+            "reaction_ret": metrics["reaction_ret"],
+            "runup_5d": metrics["runup_5d"],
+            "rel_volume": metrics["rel_volume"],
+            "drift_5d": metrics["drift_5d"],
+            "drift_10d": metrics["drift_10d"],
+            "drift_20d": metrics["drift_20d"],
             "car": res.car if res else None,
             "car_t_stat": res.car_t_stat if res else None,
             "car_p_value": res.car_p_value if res else None,
             "is_significant_95": bool(res.is_significant_95) if res else False,
-            "drift_5d": post_drift(stock_df, ev["date"], 5),
-            "drift_10d": post_drift(stock_df, ev["date"], 10),
-            "drift_20d": post_drift(stock_df, ev["date"], 20),
         })
         out.append(row)
         if len(out) >= max_events:

@@ -73,16 +73,94 @@ def _price_frame(days=400, base=100.0, seed=7):
     return pd.DataFrame({"close": close}, index=idx)
 
 
-class TestPostDrift(unittest.TestCase):
-    def test_drift_over_known_window(self):
-        df = _price_frame()
-        start = df.index[100]
-        val = earnings.post_drift(df, start.date().isoformat(), 10)
-        self.assertIsNotNone(val)
+def _session_frame():
+    # 40 business days; no holidays — sessions == rows
+    idx = pd.bdate_range("2025-01-01", periods=40)
+    close = pd.Series(100.0 + np.arange(40), index=idx, name="close")
+    df = pd.DataFrame({"close": close,
+                       "open": close - 1.0,
+                       "volume": pd.Series([1_000_000] * 40, index=idx)})
+    return df
 
-    def test_drift_none_beyond_history(self):
-        df = _price_frame(days=40)
-        self.assertIsNone(earnings.post_drift(df, "2030-01-01", 5))
+
+class TestReactionSession(unittest.TestCase):
+    def test_maps_weekend_announcement_to_next_session(self):
+        df = _session_frame()
+        # 2025-01-04 is a Saturday → reaction is Monday 2025-01-06
+        t0, alignment = earnings.reaction_session(df, "2025-01-04")
+        self.assertEqual(t0, df.index[3])
+        self.assertEqual(alignment, "unverified")
+
+    def test_on_session_date_maps_to_same_session(self):
+        df = _session_frame()
+        t0, _ = earnings.reaction_session(df, df.index[10].date().isoformat())
+        self.assertEqual(t0, df.index[10])
+
+    def test_no_data_when_date_precedes_history(self):
+        df = _session_frame()
+        t0, alignment = earnings.reaction_session(df, "2020-01-01")
+        self.assertIsNone(t0)
+        self.assertEqual(alignment, "no-data")
+
+
+class TestEventMetrics(unittest.TestCase):
+    def test_sessions_not_calendar_days(self):
+        df = _session_frame()
+        t0 = df.index[10].date().isoformat()
+        m = earnings.event_metrics(df, t0)
+        # bdate range: 10 sessions ahead exist, ~14 calendar days
+        self.assertEqual(m["sessions_since"], 29)
+        self.assertIsNotNone(m["drift_5d"])      # 5 sessions after t0 exist
+        self.assertIsNotNone(m["drift_10d"])      # 10 sessions after t0 exist
+        self.assertIsNotNone(m["drift_20d"])      # 29 sessions after t0: 20 exist
+
+    def test_incomplete_window_stays_none(self):
+        df = _session_frame().iloc[:15]  # t0 at 10 → only 4 sessions after
+        m = earnings.event_metrics(df, df.index[10].date().isoformat())
+        self.assertIsNone(m["drift_5d"])
+        self.assertIsNone(m["drift_20d"])
+        self.assertIsNotNone(m["drift_to_date"])
+        self.assertEqual(m["drift_to_date_sessions"], 4)
+
+    def test_reaction_and_gap_exclude_prior_day_from_drift(self):
+        df = _session_frame()
+        t0_iso = df.index[10].date().isoformat()
+        m = earnings.event_metrics(df, t0_iso)
+        # closes: 100+i; reaction day close=110, prior 109
+        self.assertAlmostEqual(m["reaction_ret"], 110.0 / 109.0 - 1, places=6)
+        self.assertAlmostEqual(m["gap_pct"], 109.0 / 109.0 - 1, places=6)  # open = close-1
+        self.assertAlmostEqual(m["drift_5d"], 115.0 / 110.0 - 1, places=6)
+
+    def test_rel_volume_excludes_reaction_day(self):
+        df = _session_frame()
+        t0_iso = df.index[10].date().isoformat()
+        m = earnings.event_metrics(df, t0_iso)
+        self.assertAlmostEqual(m["rel_volume"], 1.0, places=6)
+
+
+class TestOwnEventHistory(unittest.TestCase):
+    def test_completed_windows_only_and_separate_beats_misses(self):
+        df = _session_frame()
+        # events at session 5 (beat) and 15 (miss); both have 10 completed
+        # sessions after within the 40-row frame? 15+10=25 <= 39 yes; 5+10=15 yes
+        events = [
+            {"date": df.index[5].date().isoformat(), "surprise_pct": 4.0, "is_upcoming": False},
+            {"date": df.index[15].date().isoformat(), "surprise_pct": -3.0, "is_upcoming": False},
+            {"date": df.index[35].date().isoformat(), "surprise_pct": 9.0, "is_upcoming": False},  # unfinished
+            {"date": "2026-01-01", "surprise_pct": 1.0, "is_upcoming": True},                       # future
+        ]
+        hist = earnings.own_event_history(df, events, horizon=10)
+        self.assertEqual(hist["beat"]["n"], 1)
+        self.assertEqual(hist["miss"]["n"], 1)
+        self.assertNotIn("2026", str(hist))
+
+    def test_limited_history_state(self):
+        df = _session_frame()
+        events = [{"date": df.index[5].date().isoformat(),
+                   "surprise_pct": 4.0, "is_upcoming": False}]
+        hist = earnings.own_event_history(df, events, horizon=10)
+        self.assertEqual(hist["beat"]["n"], 1)
+        self.assertEqual(hist["state"], "limited history")
 
 
 class TestComputeEarningsEvents(unittest.TestCase):
