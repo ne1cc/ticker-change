@@ -94,7 +94,7 @@
       </thead>
       <tbody class="font-mono">
         {% for r in payload[tab].rows %}
-        <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
+        <tr data-symbol="{{ r.symbol }}" class="border-b border-zinc-100 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
           <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
           <td class="py-1.5 pr-4">{{ r.print_date }}</td>
           <td class="py-1.5 pr-4 text-right">{{ r.sessions_since }}</td>
@@ -121,7 +121,7 @@
       </thead>
       <tbody class="font-mono">
         {% for r in payload[tab].rows %}
-        <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
+        <tr data-symbol="{{ r.symbol }}" class="border-b border-zinc-100 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
           <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
           <td class="py-1.5 pr-4 font-sans text-xs">{{ r.industry }}</td>
           <td class="py-1.5 pr-4 text-right">{{ r.value_score }}</td>
@@ -145,7 +145,7 @@
       </thead>
       <tbody class="font-mono">
         {% for r in payload[tab].rows %}
-        <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
+        <tr data-symbol="{{ r.symbol }}" class="border-b border-zinc-100 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
           <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
           <td class="py-1.5 pr-4 text-right">{{ '%.1f%%' | format((r.short_pct_float or 0) * 100) }}</td>
           <td class="py-1.5 pr-4 text-right">{{ r.dtc_vendor }} <span class="text-[10px] text-zinc-400">calc {{ r.dtc_calc if r.dtc_calc is not none else '—' }}</span></td>
@@ -160,6 +160,276 @@
   </div>
   {% endif %}
 </div>
+
+<div id="radar-drawer"
+     class="hidden fixed inset-y-0 right-0 w-full max-w-xl overflow-y-auto bg-white dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-800 shadow-2xl z-50 p-6"
+     data-published="{{ payload.meta.published_at[:16].replace('T', ' ') if payload and payload.meta and payload.meta.published_at else '' }}">
+  <div class="flex items-center justify-between mb-4">
+    <h2 id="radar-drawer-title" class="text-lg font-semibold font-mono"></h2>
+    <button id="radar-drawer-close" type="button"
+            class="text-xs text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1">Close</button>
+  </div>
+  <div id="radar-drawer-body" class="text-sm space-y-4"></div>
+</div>
+
+<script>
+  (function () {
+    var drawer = document.getElementById('radar-drawer');
+    var body = document.getElementById('radar-drawer-body');
+    if (!drawer || !body) return;
+    var chart = null;
+    var FRAC_PCT = { car_30: 1, gap_pct: 1, reaction_ret: 1, runup_5d: 1,
+      drift_5d: 1, drift_10d: 1, drift_20d: 1, drift_to_date: 1,
+      excess_10d_sector: 1, hist_beat_median: 1, hist_miss_median: 1,
+      mom_12_1: 1, mom_6m: 1, mom_3m: 1, mom_1m: 1, ann_vol: 1,
+      short_pct_float: 1, dist_52w_high: 1 };
+    var TAB_TITLES = { drift: 'Earnings Drift', value: 'Relative Value',
+      squeeze: 'Squeeze Watch' };
+
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text !== undefined && text !== null) n.textContent = text;
+      return n;
+    }
+    function num(v, d) {
+      return typeof v === 'number' && isFinite(v)
+        ? v.toFixed(d === undefined ? 2 : d) : '—';
+    }
+    function pct(v, d) {
+      return typeof v === 'number' && isFinite(v)
+        ? (v * 100).toFixed(d === undefined ? 1 : d) + '%' : '—';
+    }
+    function isoDay(v) {
+      if (v === null || v === undefined || v === '') return null;
+      if (typeof v === 'number') {
+        var d = new Date(v * 1000);
+        return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+      }
+      return String(v).slice(0, 10);
+    }
+
+    function renderHeader(data) {
+      var head = el('div', 'flex flex-wrap items-center gap-2 text-xs');
+      (data.memberships || []).forEach(function (m) {
+        head.appendChild(el('span',
+          'rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-300 px-2 py-0.5',
+          (TAB_TITLES[m.tab] || m.tab) + ' #' + m.rank));
+      });
+      if (drawer.getAttribute('data-published')) {
+        head.appendChild(el('span', 'text-zinc-400',
+          'Published ' + drawer.getAttribute('data-published')));
+      }
+      return head;
+    }
+
+    function renderChart(data) {
+      var holder = el('div',
+        'h-48 rounded-lg border border-zinc-100 dark:border-zinc-800');
+      if (!window.LightweightCharts || !data.price ||
+          !data.price.closes || data.price.closes.length < 2) return holder;
+      var points = [];
+      for (var i = 0; i < data.price.dates.length; i++) {
+        points.push({ time: data.price.dates[i], value: data.price.closes[i] });
+      }
+      chart = LightweightCharts.createChart(holder, {
+        width: 480, height: 192, autoSize: true,
+        layout: { background: { type: 'solid', color: 'transparent' },
+                  textColor: '#a1a1aa' },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
+      });
+      var series = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1 });
+      series.setData(points);
+      var markers = [];
+      (data.earnings_events || []).forEach(function (e) {
+        if (!e.date) return;
+        markers.push({ time: e.date, position: 'inBar', shape: 'circle',
+                       color: e.is_upcoming ? '#a1a1aa' : '#10b981', text: 'E' });
+      });
+      var siDay = isoDay((data.short || {}).as_of);
+      if (siDay) {
+        markers.push({ time: siDay, position: 'inBar', shape: 'square',
+                       color: '#f59e0b', text: 'SI' });
+      }
+      markers.sort(function (a, b) {
+        return a.time < b.time ? -1 : a.time > b.time ? 1 : 0;
+      });
+      if (markers.length) series.setMarkers(markers);
+      chart.timeScale().fitContent();
+      return holder;
+    }
+
+    function metricGroups(data) {
+      var wrap = el('div', 'space-y-4');
+      var metrics = data.metrics || {};
+      Object.keys(metrics).forEach(function (tab) {
+        var group = el('div');
+        group.appendChild(el('div',
+          'text-[11px] uppercase tracking-wider text-zinc-400 font-semibold mb-1',
+          TAB_TITLES[tab] || tab));
+        var list = el('dl', 'grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-xs');
+        var row = metrics[tab] || {};
+        Object.keys(row).forEach(function (k) {
+          var c = (data.contracts || {})[k];
+          if (!c) return;
+          var dt = el('dt', 'text-zinc-400 font-sans truncate');
+          dt.title = c.definition || '';
+          if (c.window) dt.title += ' · window: ' + c.window;
+          if (c.missing_state) dt.title += ' · missing: ' + c.missing_state;
+          dt.textContent = c.term || k;
+          var dd = el('dd', 'text-right');
+          var v = row[k];
+          if (v === null || v === undefined) {
+            dd.textContent = '—';
+            dd.title = c.missing_state || '';
+          } else if (typeof v === 'number') {
+            dd.textContent = FRAC_PCT[k] ? pct(v) : num(v);
+            if (c.unit && c.unit !== '%' && c.unit !== '0-100') {
+              dd.textContent += ' ' + c.unit;
+            }
+          } else {
+            dd.textContent = String(v);
+          }
+          list.appendChild(dt);
+          list.appendChild(dd);
+        });
+        group.appendChild(list);
+        wrap.appendChild(group);
+      });
+      return wrap;
+    }
+
+    function miniTable(caption, headers, rows) {
+      var group = el('div');
+      group.appendChild(el('div',
+        'text-[11px] uppercase tracking-wider text-zinc-400 font-semibold mb-1',
+        caption));
+      var t = el('table', 'w-full font-mono text-xs');
+      var thead = el('thead');
+      var hr = el('tr', 'text-left text-[10px] uppercase tracking-wider text-zinc-400');
+      headers.forEach(function (h) { hr.appendChild(el('th', 'py-1 pr-3 font-medium', h)); });
+      thead.appendChild(hr);
+      var tbody = el('tbody');
+      rows.forEach(function (cells, i) {
+        var tr = el('tr', 'border-t border-zinc-100 dark:border-zinc-800');
+        cells.forEach(function (c) { tr.appendChild(el('td', 'py-1 pr-3', c)); });
+        tbody.appendChild(tr);
+      });
+      t.appendChild(thead);
+      t.appendChild(tbody);
+      group.appendChild(t);
+      return group;
+    }
+
+    function earningsTable(data) {
+      var evs = data.earnings_events || [];
+      if (!evs.length) return null;
+      return miniTable('Earnings events', ['Date', 'EPS est', 'EPS act', 'Surprise'],
+        evs.map(function (e) {
+          return [e.date || '—', num(e.eps_estimate), num(e.eps_actual),
+                  typeof e.surprise_pct === 'number' ? num(e.surprise_pct, 1) + '%' : 'NM'];
+        }));
+    }
+
+    function peerTable(data) {
+      var peers = data.peer_comparison || [];
+      if (!peers.length) return null;
+      return miniTable('Relative value peers', ['Symbol', 'Value score', 'Fwd P/E'],
+        peers.map(function (p) {
+          return [p.symbol, num(p.value_score, 1), num(p.fwd_pe, 1)];
+        }));
+    }
+
+    function siBlock(data) {
+      var si = data.short;
+      if (!si) return null;
+      var group = el('div');
+      group.appendChild(el('div',
+        'text-[11px] uppercase tracking-wider text-zinc-400 font-semibold mb-1',
+        'Short interest'));
+      var dl = el('dl', 'grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-xs');
+      [['SI % float', pct(si.short_pct_float)],
+       ['Days to cover', num(si.days_to_cover, 1)],
+       ['Shares short', typeof si.shares_short === 'number' ? si.shares_short.toLocaleString() : '—'],
+       ['Prior shares short', typeof si.shares_short_prior_month === 'number' ? si.shares_short_prior_month.toLocaleString() : '—'],
+       ['Settlement', isoDay(si.as_of) || '—']
+      ].forEach(function (pair) {
+        dl.appendChild(el('dt', 'text-zinc-400 font-sans', pair[0]));
+        dl.appendChild(el('dd', 'text-right', pair[1]));
+      });
+      group.appendChild(dl);
+      return group;
+    }
+
+    function asOfLine(data) {
+      var bits = [];
+      var src = data.source_as_of || {};
+      Object.keys(src).forEach(function (k) {
+        if (src[k]) bits.push(k + ' ' + String(src[k]).slice(0, 16).replace('T', ' '));
+      });
+      if (!bits.length) return null;
+      return el('p', 'text-[11px] text-zinc-400', 'Sources as-of: ' + bits.join(' · '));
+    }
+
+    function render(data) {
+      if (chart) { chart.remove(); chart = null; }
+      body.textContent = '';
+      document.getElementById('radar-drawer-title').textContent = data.symbol || '';
+      body.appendChild(renderHeader(data));
+      body.appendChild(renderChart(data));
+      var groups = metricGroups(data);
+      if (groups.childNodes.length) body.appendChild(groups);
+      var ev = earningsTable(data);
+      if (ev) body.appendChild(ev);
+      var pe = peerTable(data);
+      if (pe) body.appendChild(pe);
+      var si = siBlock(data);
+      if (si) body.appendChild(si);
+      var asof = asOfLine(data);
+      if (asof) body.appendChild(asof);
+      var sec = el('a', 'text-xs text-amber-500 hover:underline',
+                   'SEC filings for ' + (data.symbol || '') + ' ↗');
+      sec.href = '/api/raw-sec-filings/' + encodeURIComponent(data.symbol || '');
+      sec.target = '_blank';
+      sec.rel = 'noopener';
+      body.appendChild(sec);
+    }
+
+    function closeDrawer() {
+      drawer.classList.add('hidden');
+      if (chart) { chart.remove(); chart = null; }
+      body.textContent = '';
+    }
+
+    function openDrawer(symbol) {
+      drawer.classList.remove('hidden');
+      if (chart) { chart.remove(); chart = null; }
+      body.textContent = 'Loading…';
+      fetch('/api/radar/detail/' + encodeURIComponent(symbol))
+        .then(function (r) {
+          return r.json().then(function (data) {
+            if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+            return data;
+          });
+        })
+        .then(render)
+        .catch(function (err) {
+          body.textContent = 'Detail unavailable — ' + err.message;
+        });
+    }
+
+    document.addEventListener('click', function (ev) {
+      if (ev.target.closest('#radar-drawer-close')) { closeDrawer(); return; }
+      var row = ev.target.closest('tr[data-symbol]');
+      if (!row || ev.target.closest('a')) return;
+      var sym = row.getAttribute('data-symbol');
+      if (sym) openDrawer(sym);
+    });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && !drawer.classList.contains('hidden')) closeDrawer();
+    });
+  })();
+</script>
 
 <script>
   // Persist inline tunables to /api/radar/settings, then reload from cache.

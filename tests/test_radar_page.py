@@ -14,6 +14,26 @@ db.init_db()
 import app as app_module  # noqa: E402
 
 
+def _populated_snap():
+    """Snapshot fixture with one drift row; shared by structure tests."""
+    return {"meta": {"snapshot_id": "S1", "published_at": "2026-10-04T10:00",
+                     "source_as_of": {}, "universe_count": 2,
+                     "warmed_count": 2, "scored_count": 2,
+                     "excluded_count_by_reason": {},
+                     "validation_status": "ok",
+                     "metric_contract_version": 2,
+                     "value_score_version": 1},
+            "drift": {"rows": [{"symbol": "AAA", "print_date": "2024-09-06",
+                                "sessions_since": 30, "sessions_to_20d": 0,
+                                "surprise_pct": 20.0, "car": 0.05,
+                                "car_significant": True,
+                                "drift_to_date": 0.03,
+                                "drift_to_date_sessions": 30}],
+                      "upcoming": [], "excluded": []},
+            "value": {"rows": [], "excluded": []},
+            "squeeze": {"rows": [], "excluded": []}}
+
+
 class TestRadarPage(unittest.TestCase):
     def setUp(self):
         # The route serves scan payloads from api_cache (1h TTL); other test
@@ -39,26 +59,21 @@ class TestRadarPage(unittest.TestCase):
         self.assertEqual(self._get("nope").status_code, 200)
 
     def test_renders_populated_snapshot(self):
-        snap = {"meta": {"snapshot_id": "S1", "published_at": "2026-10-04T10:00",
-                         "source_as_of": {}, "universe_count": 2,
-                         "warmed_count": 2, "scored_count": 2,
-                         "excluded_count_by_reason": {},
-                         "validation_status": "ok",
-                         "metric_contract_version": 2,
-                         "value_score_version": 1},
-                "drift": {"rows": [{"symbol": "AAA", "print_date": "2024-09-06",
-                                    "sessions_since": 30, "sessions_to_20d": 0,
-                                    "surprise_pct": 20.0, "car": 0.05,
-                                    "drift_to_date": 0.03,
-                                    "drift_to_date_sessions": 30}],
-                          "upcoming": [], "excluded": []},
-                "value": {"rows": [], "excluded": []},
-                "squeeze": {"rows": [], "excluded": []}}
-        with patch.object(app_module.radar, "current_snapshot", return_value=snap):
+        with patch.object(app_module.radar, "current_snapshot",
+                          return_value=_populated_snap()):
             resp = self._get("drift")
         html = resp.get_data(as_text=True)
         self.assertIn("AAA", html)
         self.assertIn("Published", html)
+
+    def test_drawer_shell_and_row_hooks(self):
+        with patch.object(app_module.radar, "current_snapshot",
+                          return_value=_populated_snap()):
+            resp = self._get("drift")
+        html = resp.get_data(as_text=True)
+        self.assertIn('id="radar-drawer"', html)
+        self.assertIn('data-symbol="AAA"', html)
+        self.assertIn("/api/radar/detail/", html)
 
     def test_tunables_echoed(self):
         payload = {"meta": {"warmed_count": 2},
