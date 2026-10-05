@@ -4329,9 +4329,11 @@ def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True)
                 return
             print(f"[radar] warming {len(syms)} tickers ...")
             # Sector ETF closes feed the snapshot's excess-vs-sector math; the
-            # heatmap batch path stores their daily bars without per-ticker calls.
+            # heatmap batch path stores their daily bars without per-ticker
+            # calls. 1y so t0+10-bar windows resolve for months, not days.
             try:
-                heatmap.refresh_universe(radar_contracts.SECTOR_ETFS)
+                heatmap.refresh_universe(radar_contracts.SECTOR_ETFS,
+                                         period="1y")
             except Exception as e:
                 print(f"[radar] sector ETF price refresh failed: {e}")
             done = 0

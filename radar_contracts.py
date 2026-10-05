@@ -6,7 +6,7 @@ change, never silently.
 """
 from __future__ import annotations
 
-METRIC_CONTRACT_VERSION = 2
+METRIC_CONTRACT_VERSION = 3
 VALUE_SCORE_VERSION = 1
 
 SECTOR_ETF_MAP = {
@@ -162,10 +162,12 @@ _CONTRACTS = {
                       "stronger. Weights and states per VALUE_SCORE_VERSION.",
                       "0-100", "snapshot", "derived",
                       "low-coverage flag under 50% inputs"),
-    "peer_percentile": _c("Peer percentile", "Percentile within the peer group "
-                          "(industry, min 3 valid peers; sector fallback). Higher = "
-                          "cheaper for multiples (inverted).", "0-100", "snapshot",
-                          "derived", "insufficient-peers below the minimum"),
+    "peer_percentile": _c("Peer percentile", "Percentile of the value score within "
+                          "the peer cohort: valid value scores from the larger of "
+                          "the industry or sector group, minimum radar_min_peers. "
+                          "Higher = cheaper (follows the value score).", "0-100",
+                          "snapshot", "derived",
+                          "insufficient-peers below the minimum"),
     "quadrant": _c("Quadrant", "Valuation cheap/expensive (vs peer median) x "
                    "improving/deteriorating (12-1 momentum sign in v1).", "state",
                    "snapshot", "derived", "needs valuation and momentum"),
@@ -199,11 +201,13 @@ _CONTRACTS = {
     "dollar_volume": _c("Dollar volume", "Median close x volume over the trailing 20 "
                         "sessions.", "USD", "20 sessions", "daily_prices",
                         "absent under history"),
-    "squeeze_score": _c("Crowding score", "Heuristic 0-100 composite of crowding, "
-                        "activation, and tradability sub-scores (components "
-                        "inspectable in the drawer). Descriptive level label, not a "
-                        "probability.", "0-100", "snapshot", "derived",
-                        "defaults flagged 'assumed' without real SI"),
+    "squeeze_score": _c("Squeeze score", "Vendor-style heuristic composite over "
+                        "short-interest, days-to-cover, cost-to-borrow, and "
+                        "dealer-gamma legs (microstructure engine). The row's "
+                        "crowding/activation/tradability sub-scores are related "
+                        "context, not this score's decomposition. Descriptive "
+                        "level label, not a probability.", "0-100", "snapshot",
+                        "derived", "defaults flagged 'assumed' without real SI"),
 }
 
 METRIC_KEYS_BY_TAB = {

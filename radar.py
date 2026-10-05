@@ -243,6 +243,13 @@ def _drift_rows(ctx: dict) -> tuple[list[dict], list[dict]]:
             except Exception:
                 res = None
         sessions_since = int(m["sessions_since"])
+        drift_10d = m.get("drift_10d")
+        sector_ret = (_sector_return(ctx, payload.get("Sector"),
+                                     m.get("t0"), 10)
+                      if drift_10d is not None else None)
+        excess_10d = (round(drift_10d - sector_ret, 6)
+                      if drift_10d is not None and sector_ret is not None
+                      else None)
         rows.append({
             "symbol": symbol,
             "sector": payload.get("Sector"),
@@ -264,9 +271,7 @@ def _drift_rows(ctx: dict) -> tuple[list[dict], list[dict]]:
             "drift_20d": _f(m.get("drift_20d")),
             "drift_to_date": _f(m.get("drift_to_date")),
             "drift_to_date_sessions": m.get("drift_to_date_sessions"),
-            "excess_10d_sector": (_sector_return(ctx, payload.get("Sector"),
-                                                 m.get("t0"), 10)
-                                  if m.get("drift_10d") is not None else None),
+            "excess_10d_sector": excess_10d,
             "car_30": round(float(res.car), 4) if res else None,
             "car_significant": bool(res.is_significant_95) if res else False,
             "hist_beat_median": _f(hist.get("beat", {}).get("median")),
@@ -315,10 +320,19 @@ def _value_rows(ctx: dict) -> tuple[list[dict], list[dict]]:
     """Contract-driven value screen over warmed fundamentals payloads.
 
     Percentile pools hold valid values only (NM multiples excluded via
-    peers.nm_state); peer pools need radar_min_peers valid scores, else rows
-    carry the insufficient-peers state instead of a percentile.
+    peers.nm_state); per-metric and peer pools need radar_min_peers valid
+    values, else the percentile is suppressed with the insufficient-peers
+    state instead of a number.
     """
     min_peers = int(get_tunable("radar_min_peers"))
+
+    def _gated_pct(pool: list, x, invert: bool):
+        """Percentile only when the pool meets radar_min_peers; else None
+        (same insufficient-peers pattern as the value-score percentile)."""
+        if len(pool) < min_peers:
+            return None
+        return _pool_pct(pool, x, invert=invert)
+
     prices = ctx.get("prices") or {}
     shorts = ctx.get("short") or {}
     rows: list[dict] = []
@@ -381,19 +395,17 @@ def _value_rows(ctx: dict) -> tuple[list[dict], list[dict]]:
         sector_groups.setdefault(row["sector"] or "Unknown", []).append(row)
 
     for row in rows:
+        sector_rows = sector_groups.get(row["sector"] or "Unknown", [])
         for k in _VALUE_MULTIPLES:
-            pool = _valid_pool(sector_groups.get(row["sector"] or "Unknown", []),
-                               k, inverted=True)
-            row[f"{k}_pct"] = None if row[f"{k}_nm"] else _pool_pct(
+            pool = _valid_pool(sector_rows, k, inverted=True)
+            row[f"{k}_pct"] = None if row[f"{k}_nm"] else _gated_pct(
                 pool, row[k], invert=True)
         for k, out in (("rev_growth", "rev_growth_pct"),
                        ("eps_growth", "eps_growth_pct")):
-            pool = _valid_pool(sector_groups.get(row["sector"] or "Unknown", []),
-                               k, inverted=False)
-            row[out] = _pool_pct(pool, row[k], invert=False)
-        mom_pool = _valid_pool(sector_groups.get(row["sector"] or "Unknown", []),
-                               "mom_12_1", inverted=False)
-        row["mom_pct"] = _pool_pct(mom_pool, row["mom_12_1"], invert=False)
+            pool = _valid_pool(sector_rows, k, inverted=False)
+            row[out] = _gated_pct(pool, row[k], invert=False)
+        mom_pool = _valid_pool(sector_rows, "mom_12_1", inverted=False)
+        row["mom_pct"] = _gated_pct(mom_pool, row["mom_12_1"], invert=False)
 
         cheapness = [row[f"{k}_pct"] for k in ("fwd_pe", "ps")]
         growth = [row["rev_growth_pct"], row["eps_growth_pct"]]
@@ -431,6 +443,8 @@ def _value_rows(ctx: dict) -> tuple[list[dict], list[dict]]:
 
     rows.sort(key=lambda r: ((-r["value_score"]) if r["value_score"] is not None
                              else float("inf"), r["symbol"]))
+    for row in rows[VALUE_ROW_CAP:]:
+        excluded.append({"symbol": row["symbol"], "reason": "below-value-cap"})
     return rows[:VALUE_ROW_CAP], excluded
 
 
@@ -447,7 +461,9 @@ def _squeeze_rows(ctx: dict) -> tuple[list[dict], list[dict]]:
 
     Rows carry vendor + calculated days to cover, report/report SI change,
     52w distance, 5d/20d session moves, median dollar volume, and the
-    crowding/activation/tradability components behind the composite score.
+    crowding/activation/tradability sub-scores as related context — not the
+    squeeze score's decomposition (that composite comes from the
+    microstructure engine over SI/DTC/cost-to-borrow/gamma legs).
     """
     floor = float(get_tunable("radar_liquidity_floor_usd"))
     fundamentals = ctx.get("fundamentals") or {}

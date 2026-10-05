@@ -497,7 +497,7 @@ GLOSSARY: dict[str, dict] = {
         "term": "Post-Earnings Drift",
         "section": "Institutional Analytics",
         "short": "Raw price drift in the sessions after an earnings print.",
-        "long": "The tendency for post-earnings announcement returns to continue in the direction of the surprise — one of the most persistent documented market anomalies. 'Drift left' on the radar counts how many days of the typical 30-session window remain.",
+        "long": "The tendency for post-earnings announcement returns to continue in the direction of the surprise — one of the most persistent documented market anomalies. 'Drift left' on the radar counts how many sessions of the 20-session drift window remain; 5-, 10-, and 20-session drift figures appear only once their window has completed.",
     },
 
     # ----------------------------------------------------------------- Markets

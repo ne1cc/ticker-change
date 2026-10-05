@@ -6,7 +6,7 @@ import radar_contracts as rc
 
 class TestContracts(unittest.TestCase):
     def test_versions(self):
-        self.assertEqual(rc.METRIC_CONTRACT_VERSION, 2)
+        self.assertEqual(rc.METRIC_CONTRACT_VERSION, 3)
         self.assertEqual(rc.VALUE_SCORE_VERSION, 1)
 
     def test_sector_map_has_eleven_gics_sectors(self):

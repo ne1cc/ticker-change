@@ -44,6 +44,14 @@ def _store(sym, days=320, drift=0.001, volume=1_000_000):
          "Volume": np.full(days, volume)}, index=idx))
 
 
+def _frame(days=320, drift=0.001):
+    idx = pd.bdate_range("2024-06-03", periods=days)
+    close = 100 * np.exp(np.cumsum(np.full(days, drift)))
+    return pd.DataFrame(
+        {"open": close, "high": close, "low": close, "close": close,
+         "volume": np.full(days, 1_000_000)}, index=idx)
+
+
 def _build():
     return radar.build_snapshot(radar.load_context())
 
@@ -83,6 +91,42 @@ class TestDriftRows(_PinnedDB):
             for key in radar_contracts.METRIC_KEYS_BY_TAB["drift"]:
                 self.assertIn(key, r)
 
+    def test_excess_10d_is_drift_minus_sector_etf_return(self):
+        stock, etf = _frame(drift=0.002), _frame(drift=-0.001)
+        ctx = {"symbols": ["DRFTX"],
+               "prices": {"DRFTX": stock, "XLK": etf},
+               "fundamentals": {"DRFTX": {"Sector": "Technology",
+                                          "Market Cap": 1e9}},
+               "earnings": {"DRFTX": [{"date": "2024-09-06",
+                                       "eps_estimate": 1.0,
+                                       "eps_actual": 1.2,
+                                       "surprise_pct": 20.0,
+                                       "is_upcoming": False}]},
+               "short": {}, "source_as_of": {}, "built_at": radar.now_iso()}
+        rows, excluded = radar._drift_rows(ctx)
+        self.assertEqual(excluded, [])
+        row = rows[0]
+        self.assertIsNotNone(row["drift_10d"])
+        start = stock.index.get_loc(pd.Timestamp("2024-09-06"))
+        etf_ret = (float(etf["close"].iloc[start + 10])
+                   / float(etf["close"].iloc[start]) - 1)
+        self.assertNotAlmostEqual(row["drift_10d"], etf_ret, places=3)
+        self.assertEqual(row["excess_10d_sector"],
+                         round(row["drift_10d"] - etf_ret, 6))
+
+    def test_excess_10d_none_without_sector_etf_history(self):
+        ctx = {"symbols": ["DRFTX"], "prices": {"DRFTX": _frame()},
+               "fundamentals": {"DRFTX": {"Sector": "Technology",
+                                          "Market Cap": 1e9}},
+               "earnings": {"DRFTX": [{"date": "2024-09-06",
+                                       "eps_estimate": 1.0,
+                                       "eps_actual": 1.2,
+                                       "surprise_pct": 20.0,
+                                       "is_upcoming": False}]},
+               "short": {}, "source_as_of": {}, "built_at": radar.now_iso()}
+        rows, _ = radar._drift_rows(ctx)
+        self.assertIsNone(rows[0]["excess_10d_sector"])
+
 
 class TestValueRows(_PinnedDB):
     def test_empty_cache_yields_empty_rows(self):
@@ -94,14 +138,19 @@ class TestValueRows(_PinnedDB):
     def test_cheapest_names_rank_first_with_full_contract(self):
         _store("VALA", drift=0.002)
         _store("VALB", drift=-0.001)
+        _store("VALC", drift=-0.001)
         db.cache_set("yfinance", "fundamentals:VALA", {
             "Sector": "Technology", "Industry": "Tech", "Market Cap": 1e9,
             "Forward P/E": 8.0, "Price / Sales": 1.0})
         db.cache_set("yfinance", "fundamentals:VALB", {
             "Sector": "Technology", "Industry": "Tech", "Market Cap": 2e9,
             "Forward P/E": 60.0, "Price / Sales": 9.0})
+        db.cache_set("yfinance", "fundamentals:VALC", {
+            "Sector": "Technology", "Industry": "Tech", "Market Cap": 3e9,
+            "Forward P/E": 90.0, "Price / Sales": 12.0})
         rows = _build()["value"]["rows"]
-        self.assertEqual([r["symbol"] for r in rows], ["VALA", "VALB"])
+        self.assertEqual([r["symbol"] for r in rows],
+                         ["VALA", "VALB", "VALC"])
         self.assertGreater(rows[0]["value_score"], rows[1]["value_score"])
         for r in rows:
             for key in radar_contracts.METRIC_KEYS_BY_TAB["value"]:
@@ -124,6 +173,48 @@ class TestValueRows(_PinnedDB):
                    if r["symbol"] == "VALS")
         self.assertEqual(row["_state"], "insufficient-peers")
         self.assertIsNone(row["peer_percentile"])
+
+    @staticmethod
+    def _peer_ctx(names, fwd_pe_base=10.0):
+        prices = {s: _frame() for s in names}
+        fundamentals = {
+            s: {"Sector": "Technology", "Industry": "Tech",
+                "Market Cap": 1e9, "Forward P/E": fwd_pe_base + i,
+                "Price / Sales": 1.0 + i}
+            for i, s in enumerate(names)}
+        return {"symbols": list(names), "prices": prices,
+                "fundamentals": fundamentals, "short": {}, "earnings": {},
+                "source_as_of": {}, "built_at": radar.now_iso()}
+
+    def test_min_peer_pool_computes_metric_percentiles(self):
+        names = ["PEERA", "PEERB", "PEERC"]
+        rows, _ = radar._value_rows(self._peer_ctx(names))
+        by_sym = {r["symbol"]: r for r in rows}
+        self.assertEqual(by_sym["PEERA"]["fwd_pe_pct"], 100.0)  # cheapest
+        self.assertEqual(by_sym["PEERB"]["fwd_pe_pct"], 50.0)
+        self.assertEqual(by_sym["PEERC"]["fwd_pe_pct"], 0.0)
+        self.assertIsNone(by_sym["PEERA"]["_state"])
+        self.assertIsNotNone(by_sym["PEERA"]["peer_percentile"])
+
+    def test_below_min_peers_suppresses_metric_percentiles(self):
+        # Two valid multiples: percentile_rank alone would score a pool of
+        # this size, so None here pins the radar_min_peers gate specifically.
+        rows, _ = radar._value_rows(self._peer_ctx(["PEERX", "PEERY"]))
+        for r in rows:
+            self.assertIsNone(r["fwd_pe_pct"])
+            self.assertIsNone(r["peer_percentile"])
+            self.assertEqual(r["_state"], "insufficient-peers")
+
+    def test_value_cap_truncates_into_exclusion_ledger(self):
+        names = [f"CAP{i:02d}" for i in range(55)]
+        rows, excluded = radar._value_rows(self._peer_ctx(names))
+        self.assertEqual(len(rows), radar.VALUE_ROW_CAP)
+        self.assertEqual([r["symbol"] for r in rows],
+                         names[:radar.VALUE_ROW_CAP])
+        capped = [e for e in excluded if e["reason"] == "below-value-cap"]
+        self.assertEqual({e["symbol"] for e in capped},
+                         set(names[radar.VALUE_ROW_CAP:]))
+        self.assertEqual(len(rows) + len(capped), len(names))
 
 
 class TestSqueezeRows(_PinnedDB):
