@@ -470,6 +470,7 @@
           '/strategies':  { pillar: 'strategies', sub: 'strategies' },
           '/momentum':    { pillar: 'strategies', sub: 'strategies' },
           '/ai-summary':  { pillar: 'strategies', sub: 'ai-summary' },
+          '/radar':       { pillar: 'radar', sub: 'radar', noTicker: true },
           '/glossary':    { utility: 'glossary' },
           '/settings':    { utility: 'settings' }
         };
@@ -547,7 +548,8 @@
 
         if (ticker) {
           storeTicker(ticker);
-        } else if (ROUTE_MAP[path] && ROUTE_MAP[path].pillar) {
+        } else if (ROUTE_MAP[path] && ROUTE_MAP[path].pillar
+                   && !ROUTE_MAP[path].noTicker) {
           // A ticker-relevant route reached without one: rebind it to the session's
           // ticker so switching views keeps its subject. These pages are rendered
           // server-side from ?ticker=, so this has to be a redirect rather than a
