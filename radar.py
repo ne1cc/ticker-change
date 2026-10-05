@@ -62,6 +62,36 @@ def set_tunable(key: str, value):
 DRIFT_LOOKBACK_DAYS = 45
 DRIFT_HORIZON_DAYS = 30
 SCAN_PAYLOAD_TTL_HOURS = 24
+SCAN_CACHE_TTL_HOURS = 1
+
+
+def get_scan(tab: str, build_fn):
+    """Serve a scan payload from the cache, building (and storing) on miss.
+
+    The builders are pure pandas over warmed payloads — but over ~500 symbols
+    that is seconds of CPU per request on a small instance, so requests read
+    the cached payload and the warmer refreshes it each pass.
+    """
+    key = f"scan:{tab}"
+    cached = db.cache_get("radar", key, SCAN_CACHE_TTL_HOURS)
+    if cached is not None:
+        return cached
+    payload = build_fn()
+    if payload is not None:
+        db.cache_set("radar", key, payload)
+    return payload
+
+
+def refresh_scans():
+    """Pre-build + store all three scan payloads (called by the warmer after
+    each full pass, so tabs leave 'Warming' without a slow first request)."""
+    for tab, fn in (("drift", build_drift_scan),
+                    ("value", build_value_scan),
+                    ("squeeze", build_squeeze_scan)):
+        try:
+            db.cache_set("radar", f"scan:{tab}", fn())
+        except Exception as e:
+            print(f"[radar] scan {tab} refresh failed: {e}")
 
 
 def universe_symbols(min_bars: int = 253) -> list[str]:

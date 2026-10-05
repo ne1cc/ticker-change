@@ -1431,11 +1431,49 @@ def _normalize_insider_df(raw):
     return idf, None
 
 
+def _insider_rows_cached(ticker: str) -> list[dict] | None:
+    """Normalized insider rows, 24h-cached (JSON-safe: dates as ISO strings).
+
+    The summary card and the monthly chart each used to hit yfinance on every
+    request; filings are slow-moving data, so one fetch per ticker per day is
+    plenty. None is never cached (a failed fetch retries next request).
+    """
+    cached = db.cache_get("yfinance", f"insider:{ticker.upper()}", 24)
+    if cached is not None:
+        return cached
+    try:
+        raw = _get_yf_ticker(ticker).insider_transactions
+        idf, _err = _normalize_insider_df(raw)
+    except Exception as e:
+        print(f"Insider fetch failed for {ticker}: {e}")
+        return None
+    if idf is None or idf.empty:
+        return None
+    rows = [{
+        'date':      idx.strftime('%Y-%m-%d'),
+        '_signed':   int(r['_signed']),
+        '_name':     str(r['_name']),
+        '_position': str(r['_position']),
+        '_value':    float(r['_value']),
+        '_text':     str(r['_text']),
+    } for idx, r in idf.iterrows()]
+    db.cache_set("yfinance", f"insider:{ticker.upper()}", rows)
+    return rows
+
+
+def _insider_df_from_rows(rows: list[dict]) -> pd.DataFrame | None:
+    """Rebuild the normalized insider DataFrame (date-indexed) from cached rows."""
+    if not rows:
+        return None
+    idf = pd.DataFrame(rows)
+    idf.index = pd.DatetimeIndex(pd.to_datetime(idf.pop('date')))
+    return idf
+
+
 def get_insider_summary(ticker: str) -> dict | None:
     """Recent insider transactions + aggregate stats for the analytics card."""
     try:
-        raw = _get_yf_ticker(ticker).insider_transactions
-        idf, err = _normalize_insider_df(raw)
+        idf = _insider_df_from_rows(_insider_rows_cached(ticker))
         if idf is None:
             return None
 
@@ -1475,8 +1513,7 @@ def get_insider_summary(ticker: str) -> dict | None:
 def get_insider_chart(ticker: str, price_df: pd.DataFrame) -> str | None:
     """Dual-axis chart: net monthly insider share activity vs. stock price."""
     try:
-        raw = _get_yf_ticker(ticker).insider_transactions
-        idf, err = _normalize_insider_df(raw)
+        idf = _insider_df_from_rows(_insider_rows_cached(ticker))
         if idf is None or idf.empty:
             return None
 
@@ -3034,6 +3071,62 @@ def _universe_rank_scores(price_batch, symbols, strategy_id) -> dict:
 # /strategies — universe tab
 # --------------------------------------------------------------------------
 
+def _deserialize_universe_scores(cached):
+    """Rebuild (scores, spreads) from an api_cache payload, or None if malformed."""
+    if not isinstance(cached, dict) or not isinstance(cached.get("scores"), dict):
+        return None
+    try:
+        scores = {sym: momentum_engine.MomentumScore(**row)
+                  for sym, row in cached["scores"].items()}
+    except (TypeError, ValueError):
+        return None
+    spreads = cached.get("spreads", {})
+    return scores, spreads if isinstance(spreads, dict) else {}
+
+
+def _cached_universe_scores(strategy_id, symbols, price_df):
+    """Universe momentum scores, 1h-cached (TTL = daily_prices freshness).
+
+    `score_universe` over ~500 symbols dominates /strategies load time on a
+    small shared CPU; scores only change when cached closes do. Returns
+    (scores, spreads) — scores as {sym: MomentumScore}, spreads as {sym: float}
+    (sma family only, else {}). Stampede-protected: lock losers wait briefly
+    for the winner's payload, then compute anyway (slow beats failing).
+    """
+    key = f"scores:{strategy_id}"
+
+    def _compute():
+        hurdle = momentum_engine.absolute_hurdle(strategy_id)
+        scores = momentum_engine.score_universe(price_df, symbols, hurdle=hurdle)
+        spreads = (momentum_engine.sma_score_universe(price_df, symbols)
+                   if _strategy_family(strategy_id) == "sma" else {})
+        payload = {
+            "scores": {sym: {"symbol": s.symbol, "mom_12_1": s.mom_12_1,
+                             "mom_6m": s.mom_6m, "mom_3m": s.mom_3m,
+                             "mom_1m": s.mom_1m, "ann_vol_1y": s.ann_vol_1y,
+                             "risk_adj": s.risk_adj,
+                             "passes_absolute": bool(s.passes_absolute)}
+                       for sym, s in scores.items()},
+            "spreads": spreads,
+        }
+        db.cache_set("strategies", key, payload)
+        return scores, spreads
+
+    hit = _deserialize_universe_scores(db.cache_get("strategies", key, 1))
+    if hit is not None:
+        return hit
+
+    if db.try_claim_lock(f"strategies_scores_lock:{strategy_id}", ttl_hours=1.0):
+        return _compute()
+
+    for _ in range(6):
+        time.sleep(0.5)
+        hit = _deserialize_universe_scores(db.cache_get("strategies", key, 1))
+        if hit is not None:
+            return hit
+    return _compute()
+
+
 def _strategies_universe_data(symbols, price_df, strategy_id, period):
     """Leaderboard + top-N rotation backtest against SPY/QQQ.
 
@@ -3045,8 +3138,7 @@ def _strategies_universe_data(symbols, price_df, strategy_id, period):
     if len(price_df) < momentum_engine.MOMENTUM_LOOKBACK + 2:
         return None
 
-    hurdle = momentum_engine.absolute_hurdle(strategy_id)
-    scores = momentum_engine.score_universe(price_df, symbols, hurdle=hurdle)
+    scores, spreads = _cached_universe_scores(strategy_id, symbols, price_df)
 
     if _strategy_family(strategy_id) == "sma":
         # SMA spread is the primary score and sort key; `score_universe` is
@@ -3443,9 +3535,7 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
         return None
 
     is_sma = _strategy_family(strategy_id) == "sma"
-    hurdle = momentum_engine.absolute_hurdle(strategy_id)
-    scores = momentum_engine.score_universe(price_df, symbols, hurdle=hurdle)
-    spreads = momentum_engine.sma_score_universe(price_df, symbols) if is_sma else {}
+    scores, spreads = _cached_universe_scores(strategy_id, symbols, price_df)
 
     results = []
     for sym in symbols:
@@ -3689,9 +3779,9 @@ def radar_page():
     if tab not in {'drift', 'value', 'squeeze'}:
         tab = 'drift'
     builders = {
-        'drift': radar.build_drift_scan,
-        'value': radar.build_value_scan,
-        'squeeze': radar.build_squeeze_scan,
+        'drift': lambda: radar.get_scan('drift', radar.build_drift_scan),
+        'value': lambda: radar.get_scan('value', radar.build_value_scan),
+        'squeeze': lambda: radar.get_scan('squeeze', radar.build_squeeze_scan),
     }
     payload = _guard_section(f"radar:{tab}", builders[tab], default={"rows": [], "coverage": 0})
     warming = not payload["rows"]
@@ -4253,6 +4343,7 @@ def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True)
                 if done % 25 == 0:
                     time.sleep(2)  # chunk pause, mirrors heatmap politeness
             print(f"[radar] done ({done} tickers)")
+            radar.refresh_scans()
         except Exception as e:
             print(f"[radar] warmer error: {e}")
 
