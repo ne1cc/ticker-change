@@ -1,4 +1,4 @@
-"""Radar scans: built entirely from seeded api_cache + SQLite, never fetch."""
+"""Radar builder v2s: contract-driven rows over seeded caches, never fetch."""
 import os
 import tempfile
 import unittest
@@ -15,6 +15,7 @@ db.DB_PATH = _DB_PATH
 db.init_db()
 
 import radar  # noqa: E402
+import radar_contracts  # noqa: E402
 
 
 class _PinnedDB(unittest.TestCase):
@@ -29,6 +30,11 @@ class _PinnedDB(unittest.TestCase):
     def tearDown(self):
         db.DB_PATH = self._orig_db
 
+    def _wipe(self):
+        with db.get_conn() as conn:
+            conn.execute("DELETE FROM daily_prices")
+            conn.execute("DELETE FROM api_cache WHERE provider = 'yfinance'")
+
 
 def _store(sym, days=320, drift=0.001, volume=1_000_000):
     idx = pd.bdate_range("2024-06-03", periods=days)
@@ -38,80 +44,221 @@ def _store(sym, days=320, drift=0.001, volume=1_000_000):
          "Volume": np.full(days, volume)}, index=idx))
 
 
-class TestDriftScan(_PinnedDB):
-    def test_rows_ranked_with_remaining_window(self):
+def _frame(days=320, drift=0.001):
+    idx = pd.bdate_range("2024-06-03", periods=days)
+    close = 100 * np.exp(np.cumsum(np.full(days, drift)))
+    return pd.DataFrame(
+        {"open": close, "high": close, "low": close, "close": close,
+         "volume": np.full(days, 1_000_000)}, index=idx)
+
+
+def _build():
+    return radar.build_snapshot(radar.load_context())
+
+
+class TestDriftRows(_PinnedDB):
+    def test_empty_cache_yields_empty_rows_not_crash(self):
+        self._wipe()
+        snap = _build()
+        self.assertEqual(snap["drift"]["rows"], [])
+        self.assertEqual(snap["drift"]["excluded"], [])
+
+    def test_missing_prices_land_in_exclusion_ledger(self):
+        ctx = {"symbols": ["DRFTX"], "prices": {}, "fundamentals": {},
+               "earnings": {"DRFTX": [{"date": "2024-09-06", "eps_estimate": 1,
+                                       "eps_actual": 1.2, "surprise_pct": 10.0,
+                                       "is_upcoming": False}]},
+               "short": {}, "source_as_of": {}, "built_at": radar.now_iso()}
+        rows, excluded = radar._drift_rows(ctx)
+        self.assertEqual(rows, [])
+        self.assertEqual(excluded, [{"symbol": "DRFTX", "reason": "no-prices"}])
+
+    def test_rows_carry_full_contract_and_rank_by_remaining_window(self):
         _store("DRFTA", drift=0.002)
         db.cache_set("yfinance", "earnings:DRFTA", [
-            {"date": pd.Timestamp.today().date().isoformat(), "eps_estimate": 1,
-             "eps_actual": 1.2, "surprise_pct": 10.0, "is_upcoming": False}])
+            {"date": "2024-09-06", "eps_estimate": 1, "eps_actual": 1.2,
+             "surprise_pct": 10.0, "is_upcoming": False}])
+        last_day = pd.bdate_range("2024-06-03", periods=320)[-1].date().isoformat()
+        _store("DRFTB", drift=0.001)
         db.cache_set("yfinance", "earnings:DRFTB", [
-            {"date": (pd.Timestamp.today() - pd.Timedelta(days=40)).date().isoformat(),
-             "eps_estimate": 1, "eps_actual": 0.8, "surprise_pct": -20.0,
-             "is_upcoming": False}])
-        out = radar.build_drift_scan()
-        syms = [r["symbol"] for r in out["rows"]]
-        self.assertIn("DRFTA", syms)
-        for r in out["rows"]:
-            self.assertIn("remaining", r)
-            self.assertLessEqual(r["remaining"], 30)
-            self.assertIn("days_since", r)
+            {"date": last_day, "eps_estimate": 1, "eps_actual": 0.8,
+             "surprise_pct": -20.0, "is_upcoming": False}])
+        rows = _build()["drift"]["rows"]
+        self.assertEqual([r["symbol"] for r in rows], ["DRFTB", "DRFTA"])
+        remaining = [r["sessions_to_20d"] for r in rows]
+        self.assertEqual(remaining, sorted(remaining, reverse=True))
+        for r in rows:
+            for key in radar_contracts.METRIC_KEYS_BY_TAB["drift"]:
+                self.assertIn(key, r)
 
-    def test_empty_cache_yields_empty_rows_not_crash(self):
-        out = radar.build_drift_scan()
-        self.assertEqual(out["rows"], [])
-        self.assertEqual(out["coverage"], 0)
+    def test_excess_10d_is_drift_minus_sector_etf_return(self):
+        stock, etf = _frame(drift=0.002), _frame(drift=-0.001)
+        ctx = {"symbols": ["DRFTX"],
+               "prices": {"DRFTX": stock, "XLK": etf},
+               "fundamentals": {"DRFTX": {"Sector": "Technology",
+                                          "Market Cap": 1e9}},
+               "earnings": {"DRFTX": [{"date": "2024-09-06",
+                                       "eps_estimate": 1.0,
+                                       "eps_actual": 1.2,
+                                       "surprise_pct": 20.0,
+                                       "is_upcoming": False}]},
+               "short": {}, "source_as_of": {}, "built_at": radar.now_iso()}
+        rows, excluded = radar._drift_rows(ctx)
+        self.assertEqual(excluded, [])
+        row = rows[0]
+        self.assertIsNotNone(row["drift_10d"])
+        start = stock.index.get_loc(pd.Timestamp("2024-09-06"))
+        etf_ret = (float(etf["close"].iloc[start + 10])
+                   / float(etf["close"].iloc[start]) - 1)
+        self.assertNotAlmostEqual(row["drift_10d"], etf_ret, places=3)
+        self.assertEqual(row["excess_10d_sector"],
+                         round(row["drift_10d"] - etf_ret, 6))
+
+    def test_excess_10d_none_without_sector_etf_history(self):
+        ctx = {"symbols": ["DRFTX"], "prices": {"DRFTX": _frame()},
+               "fundamentals": {"DRFTX": {"Sector": "Technology",
+                                          "Market Cap": 1e9}},
+               "earnings": {"DRFTX": [{"date": "2024-09-06",
+                                       "eps_estimate": 1.0,
+                                       "eps_actual": 1.2,
+                                       "surprise_pct": 20.0,
+                                       "is_upcoming": False}]},
+               "short": {}, "source_as_of": {}, "built_at": radar.now_iso()}
+        rows, _ = radar._drift_rows(ctx)
+        self.assertIsNone(rows[0]["excess_10d_sector"])
 
 
-class TestValueScan(_PinnedDB):
-    def test_cheapest_with_positive_momentum_shortlisted(self):
+class TestValueRows(_PinnedDB):
+    def test_empty_cache_yields_empty_rows(self):
+        self._wipe()
+        snap = _build()
+        self.assertEqual(snap["value"]["rows"], [])
+        self.assertEqual(snap["value"]["excluded"], [])
+
+    def test_cheapest_names_rank_first_with_full_contract(self):
         _store("VALA", drift=0.002)
         _store("VALB", drift=-0.001)
+        _store("VALC", drift=-0.001)
         db.cache_set("yfinance", "fundamentals:VALA", {
-            "Industry": "Tech", "Forward P/E": 8.0, "Price / Sales": 1.0})
+            "Sector": "Technology", "Industry": "Tech", "Market Cap": 1e9,
+            "Forward P/E": 8.0, "Price / Sales": 1.0})
         db.cache_set("yfinance", "fundamentals:VALB", {
-            "Industry": "Tech", "Forward P/E": 60.0, "Price / Sales": 9.0})
-        out = radar.build_value_scan()
-        syms = [r["symbol"] for r in out["rows"]]
-        self.assertIn("VALA", syms)
-        self.assertNotIn("VALB", syms)  # expensive AND negative momentum
+            "Sector": "Technology", "Industry": "Tech", "Market Cap": 2e9,
+            "Forward P/E": 60.0, "Price / Sales": 9.0})
+        db.cache_set("yfinance", "fundamentals:VALC", {
+            "Sector": "Technology", "Industry": "Tech", "Market Cap": 3e9,
+            "Forward P/E": 90.0, "Price / Sales": 12.0})
+        rows = _build()["value"]["rows"]
+        self.assertEqual([r["symbol"] for r in rows],
+                         ["VALA", "VALB", "VALC"])
+        self.assertGreater(rows[0]["value_score"], rows[1]["value_score"])
+        for r in rows:
+            for key in radar_contracts.METRIC_KEYS_BY_TAB["value"]:
+                self.assertIn(key, r)
+
+    def test_negative_multiple_flags_nm_and_skips_pool(self):
+        _store("VALN", drift=0.001)
+        db.cache_set("yfinance", "fundamentals:VALN", {
+            "Sector": "Tech", "Industry": "Tech", "Forward P/E": -8.0})
+        row = next(r for r in _build()["value"]["rows"]
+                   if r["symbol"] == "VALN")
+        self.assertTrue(row["fwd_pe_nm"])
+        self.assertIsNone(row["fwd_pe_pct"])
+
+    def test_thin_pool_marks_insufficient_peers(self):
+        _store("VALS", drift=0.001)
+        db.cache_set("yfinance", "fundamentals:VALS", {
+            "Sector": "Utilities", "Industry": "Water", "Forward P/E": 9.0})
+        row = next(r for r in _build()["value"]["rows"]
+                   if r["symbol"] == "VALS")
+        self.assertEqual(row["_state"], "insufficient-peers")
+        self.assertIsNone(row["peer_percentile"])
+
+    @staticmethod
+    def _peer_ctx(names, fwd_pe_base=10.0):
+        prices = {s: _frame() for s in names}
+        fundamentals = {
+            s: {"Sector": "Technology", "Industry": "Tech",
+                "Market Cap": 1e9, "Forward P/E": fwd_pe_base + i,
+                "Price / Sales": 1.0 + i}
+            for i, s in enumerate(names)}
+        return {"symbols": list(names), "prices": prices,
+                "fundamentals": fundamentals, "short": {}, "earnings": {},
+                "source_as_of": {}, "built_at": radar.now_iso()}
+
+    def test_min_peer_pool_computes_metric_percentiles(self):
+        names = ["PEERA", "PEERB", "PEERC"]
+        rows, _ = radar._value_rows(self._peer_ctx(names))
+        by_sym = {r["symbol"]: r for r in rows}
+        self.assertEqual(by_sym["PEERA"]["fwd_pe_pct"], 100.0)  # cheapest
+        self.assertEqual(by_sym["PEERB"]["fwd_pe_pct"], 50.0)
+        self.assertEqual(by_sym["PEERC"]["fwd_pe_pct"], 0.0)
+        self.assertIsNone(by_sym["PEERA"]["_state"])
+        self.assertIsNotNone(by_sym["PEERA"]["peer_percentile"])
+
+    def test_below_min_peers_suppresses_metric_percentiles(self):
+        # Two valid multiples: percentile_rank alone would score a pool of
+        # this size, so None here pins the radar_min_peers gate specifically.
+        rows, _ = radar._value_rows(self._peer_ctx(["PEERX", "PEERY"]))
+        for r in rows:
+            self.assertIsNone(r["fwd_pe_pct"])
+            self.assertIsNone(r["peer_percentile"])
+            self.assertEqual(r["_state"], "insufficient-peers")
+
+    def test_value_cap_truncates_into_exclusion_ledger(self):
+        names = [f"CAP{i:02d}" for i in range(55)]
+        rows, excluded = radar._value_rows(self._peer_ctx(names))
+        self.assertEqual(len(rows), radar.VALUE_ROW_CAP)
+        self.assertEqual([r["symbol"] for r in rows],
+                         names[:radar.VALUE_ROW_CAP])
+        capped = [e for e in excluded if e["reason"] == "below-value-cap"]
+        self.assertEqual({e["symbol"] for e in capped},
+                         set(names[radar.VALUE_ROW_CAP:]))
+        self.assertEqual(len(rows) + len(capped), len(names))
+
+
+class TestSqueezeRows(_PinnedDB):
+    SI = {"short_pct_float": 0.22, "days_to_cover": 7.0, "si_mom_change": 0.3,
+          "shares_short": 1, "shares_short_prior_month": 1, "as_of": 1,
+          "source": "reported"}
 
     def test_empty_cache_yields_empty_rows(self):
-        out = radar.build_value_scan()
-        self.assertIsInstance(out["rows"], list)
+        self._wipe()
+        snap = _build()
+        self.assertEqual(snap["squeeze"]["rows"], [])
+        self.assertEqual(snap["squeeze"]["excluded"], [])
 
-
-class TestSqueezeScan(_PinnedDB):
     def test_floor_and_ranking(self):
         _store("SQZA", drift=0.003, volume=5_000_000)
         _store("SQZB", drift=0.001, volume=10_000)  # below liquidity floor
-        db.cache_set("yfinance", "short:SQZA", {
-            "short_pct_float": 0.22, "days_to_cover": 7.0, "si_mom_change": 0.3,
-            "shares_short": 1, "shares_short_prior_month": 1, "as_of": 1,
-            "source": "reported"})
-        db.cache_set("yfinance", "short:SQZB", {
-            "short_pct_float": 0.30, "days_to_cover": 9.0, "si_mom_change": None,
-            "shares_short": 1, "shares_short_prior_month": None, "as_of": 1,
-            "source": "reported"})
+        db.cache_set("yfinance", "short:SQZA", dict(self.SI))
+        db.cache_set("yfinance", "short:SQZB",
+                     {**self.SI, "si_mom_change": None,
+                      "shares_short_prior_month": None})
         with patch.object(radar, "get_tunable", return_value=5_000_000.0):
-            out = radar.build_squeeze_scan()
-        syms = [r["symbol"] for r in out["rows"]]
-        self.assertEqual(syms, ["SQZA"])
-        row = out["rows"][0]
+            snap = _build()
+        self.assertEqual([r["symbol"] for r in snap["squeeze"]["rows"]], ["SQZA"])
+        reasons = {e["symbol"]: e["reason"] for e in snap["squeeze"]["excluded"]}
+        self.assertEqual(reasons.get("SQZB"), "below-floor")
+        row = snap["squeeze"]["rows"][0]
         self.assertIn("squeeze_score", row)
         self.assertIn("squeeze_level", row)
+        for key in radar_contracts.METRIC_KEYS_BY_TAB["squeeze"]:
+            self.assertIn(key, row)
 
     def test_squeeze_score_pinned_to_percent_scale(self):
         _store("SQZC", drift=0.003, volume=5_000_000)
-        db.cache_set("yfinance", "short:SQZC", {
-            "short_pct_float": 0.22, "days_to_cover": 7.0, "si_mom_change": None,
-            "shares_short": 1, "shares_short_prior_month": 1, "as_of": 1,
-            "source": "reported"})
+        db.cache_set("yfinance", "short:SQZC",
+                     {**self.SI, "si_mom_change": None})
         with patch.object(radar, "get_tunable", return_value=5_000_000.0):
-            out = radar.build_squeeze_scan()
-        row = next(r for r in out["rows"] if r["symbol"] == "SQZC")
+            rows = _build()["squeeze"]["rows"]
+        row = next(r for r in rows if r["symbol"] == "SQZC")
         expected = radar.microstructure.compute_squeeze_risk_index(22.0, 7.0)[0]
         self.assertEqual(row["squeeze_score"], expected)
 
-    def test_empty_cache_yields_empty_rows(self):
-        out = radar.build_squeeze_scan()
-        self.assertEqual(out["rows"], [])
+    def test_missing_si_fields_excluded_as_assumed(self):
+        _store("SQZD", drift=0.001, volume=5_000_000)
+        db.cache_set("yfinance", "short:SQZD",
+                     {"short_pct_float": 0.1, "days_to_cover": None})
+        reasons = {e["symbol"]: e["reason"] for e in _build()["squeeze"]["excluded"]}
+        self.assertEqual(reasons.get("SQZD"), "assumed-si")

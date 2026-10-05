@@ -132,3 +132,15 @@ class TestBuildPeerComparison(unittest.TestCase):
         by_sym = {r["symbol"]: r for r in out["peers"]}
         self.assertIsNone(by_sym["BADMETRIC"]["forward_pe_pct"])
         self.assertIsNotNone(by_sym["OKMETRIC"]["forward_pe_pct"])
+
+
+class TestNmRules(unittest.TestCase):
+    def test_negative_pe_not_ranked_as_bargain(self):
+        # negative P/E must land in the NM state, never at the cheap end
+        self.assertTrue(peers.nm_state("fwd_pe", -5.0))
+        self.assertFalse(peers.nm_state("fwd_pe", 12.0))
+
+    def test_percentile_pool_skips_non_positive(self):
+        vals = [-5.0, 10.0, 20.0]  # -5.0 invalid for a multiple
+        # pool built with valid-only values → x=10 is the cheapest valid
+        self.assertEqual(peers.percentile_rank([v for v in vals if v and v > 0], 10.0, invert=True), 100.0)

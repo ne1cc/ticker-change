@@ -32,6 +32,8 @@ class TestRadarWarmer(unittest.TestCase):
                           return_value=[{"date": "2025-01-30", "eps_estimate": 1.0,
                                          "eps_actual": 1.1, "surprise_pct": 10.0,
                                          "is_upcoming": False}]), \
+             patch.object(app_module.heatmap, "refresh_universe",
+                          return_value={"fetched": 0, "failed": []}), \
              patch.object(app_module, "get_fundamentals",
                           return_value={"Name": "Warm Co"}), \
              patch.object(app_module.providers, "get_short_interest",

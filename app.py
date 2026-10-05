@@ -29,6 +29,7 @@ import event_study
 import sec_8k
 import earnings
 import radar
+import radar_contracts
 import peers
 import microstructure
 import macro_engine
@@ -811,6 +812,7 @@ def _get_fundamentals_uncached(ticker: str) -> dict | None:
             'EV / Revenue':      info.get('enterpriseToRevenue'),
             'Price / Book':      info.get('priceToBook'),
             'Price / Sales':     info.get('priceToSalesTrailing12Months'),
+            'Free Cash Flow':    info.get('freeCashflow'),
             'EPS (TTM)':         info.get('trailingEps'),
             'Forward EPS':       info.get('forwardEps'),
             'Revenue Growth':    info.get('revenueGrowth'),
@@ -3778,13 +3780,11 @@ def radar_page():
     tab = request.args.get('tab', 'drift')
     if tab not in {'drift', 'value', 'squeeze'}:
         tab = 'drift'
-    builders = {
-        'drift': lambda: radar.get_scan('drift', radar.build_drift_scan),
-        'value': lambda: radar.get_scan('value', radar.build_value_scan),
-        'squeeze': lambda: radar.get_scan('squeeze', radar.build_squeeze_scan),
-    }
-    payload = _guard_section(f"radar:{tab}", builders[tab], default={"rows": [], "coverage": 0})
-    warming = not payload["rows"]
+    snap = radar.current_snapshot()
+    meta = (snap or {}).get("meta") or {}
+    warmed_count = int(meta.get("warmed_count") or 0)
+    payload = snap if warmed_count else None
+    warming = snap is None or warmed_count == 0
     tunables = {key: radar.get_tunable(key) for key in radar.TUNABLES}
     return render_template('radar.html', tab=tab, payload=payload,
                            warming=warming, tunables=tunables)
@@ -4328,6 +4328,14 @@ def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True)
             if not syms:
                 return
             print(f"[radar] warming {len(syms)} tickers ...")
+            # Sector ETF closes feed the snapshot's excess-vs-sector math; the
+            # heatmap batch path stores their daily bars without per-ticker
+            # calls. 1y so t0+10-bar windows resolve for months, not days.
+            try:
+                heatmap.refresh_universe(radar_contracts.SECTOR_ETFS,
+                                         period="1y")
+            except Exception as e:
+                print(f"[radar] sector ETF price refresh failed: {e}")
             done = 0
             for sym in syms:
                 for key, fn in (("earnings", earnings.get_earnings_history),
@@ -4341,9 +4349,15 @@ def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True)
                         print(f"[radar] {fn.__name__} failed for {sym}: {e}")
                 done += 1
                 if done % 25 == 0:
+                    db.cache_set("radar", "warm_progress",
+                                 {"done": done, "total": len(syms),
+                                  "updated": radar.now_iso()})
                     time.sleep(2)  # chunk pause, mirrors heatmap politeness
+            db.cache_set("radar", "warm_progress",
+                         {"done": done, "total": len(syms),
+                          "updated": radar.now_iso()})
             print(f"[radar] done ({done} tickers)")
-            radar.refresh_scans()
+            radar.publish_snapshot(radar.load_context())
         except Exception as e:
             print(f"[radar] warmer error: {e}")
 

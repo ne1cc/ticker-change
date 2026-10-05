@@ -115,6 +115,25 @@ def cache_get(provider: str, key: str, ttl_hours: float):
         return None
 
 
+def cache_get_with_age(provider: str, key: str, ttl_hours: float):
+    """(payload, fetched_at_iso) for a live cached row; (None, None) on miss,
+    expiry, or unparsable payload. Source-age plumbing for snapshot builds."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT payload, fetched_at FROM api_cache WHERE provider = ? AND key = ?",
+            (provider, key),
+        ).fetchone()
+    if row is None:
+        return None, None
+    fetched_at = datetime.fromisoformat(row["fetched_at"])
+    if datetime.utcnow() - fetched_at > timedelta(hours=ttl_hours):
+        return None, None
+    try:
+        return json.loads(row["payload"]), row["fetched_at"]
+    except (ValueError, TypeError):
+        return None, None
+
+
 def cache_set(provider: str, key: str, payload):
     """Store a JSON-serialisable payload under (provider, key)."""
     with get_conn() as conn:
