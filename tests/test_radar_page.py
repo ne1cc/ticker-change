@@ -60,6 +60,17 @@ class TestRadarPage(unittest.TestCase):
         resp = self._get("drift")
         self.assertIn("warming", resp.get_data(as_text=True).lower())
 
+    def test_warming_progress_strip_renders(self):
+        db.cache_set("radar", "warm_progress",
+                     {"done": 214, "total": 500,
+                      "updated": "2026-10-04T14:32"})
+        with patch.object(app_module.radar, "current_snapshot",
+                          return_value=None):
+            resp = self._get("drift")
+        html = resp.get_data(as_text=True)
+        self.assertIn("214/500", html)
+        self.assertIn("14:32", html)
+
     def test_unknown_tab_falls_back(self):
         self.assertEqual(self._get("nope").status_code, 200)
 

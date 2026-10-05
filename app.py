@@ -3802,6 +3802,7 @@ def radar_page():
     warmed_count = int(meta.get("warmed_count") or 0)
     payload = snap if warmed_count else None
     warming = snap is None or warmed_count == 0
+    progress = db.cache_get("radar", "warm_progress", 24)
     tunables = {key: radar.get_tunable(key) for key in radar.TUNABLES}
     breadth_payload = None
     try:
@@ -3810,7 +3811,8 @@ def radar_page():
         breadth_payload = None
     breadth = _breadth_from_payload(breadth_payload) if breadth_payload else None
     return render_template('radar.html', tab=tab, payload=payload,
-                           warming=warming, tunables=tunables, breadth=breadth)
+                           warming=warming, tunables=tunables,
+                           breadth=breadth, progress=progress)
 
 
 @app.route('/api/radar/detail/<symbol>')

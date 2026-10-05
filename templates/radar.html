@@ -81,6 +81,9 @@
   {% if warming %}
   <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center text-sm text-zinc-400">
     Warming — the background warmer fills these screens. Check back shortly.
+    {% if progress %}
+    <div class="mt-2 text-xs">{{ progress.done }}/{{ progress.total }} · updated {{ progress.updated[:16].replace('T', ' ') }}</div>
+    {% endif %}
   </div>
   {% elif not payload[tab].rows %}
   <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center text-sm text-zinc-400">
