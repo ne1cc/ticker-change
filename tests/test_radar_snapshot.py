@@ -80,13 +80,22 @@ class TestPublish(unittest.TestCase):
 
     def test_retention_keeps_last_two(self):
         _seed_universe()
-        for _ in range(4):
-            radar.publish_snapshot(radar.load_context())
+        ctx = radar.load_context()
+        with patch.object(radar, "_snapshot_id",
+                          side_effect=[f"S{i}" for i in range(4)]):
+            for _ in range(4):
+                radar.publish_snapshot(ctx)
         with db.get_conn() as conn:
-            n = conn.execute(
-                "SELECT COUNT(*) c FROM api_cache WHERE provider='radar_snapshot' "
-                "AND key LIKE 'snapshot:%'").fetchone()["c"]
-        self.assertLessEqual(n, 2)
+            rows = conn.execute(
+                "SELECT key FROM api_cache WHERE provider='radar_snapshot' "
+                "AND key LIKE 'snapshot:%'").fetchall()
+        ids = {r["key"].split(":", 1)[1] for r in rows}
+        self.assertEqual(len(rows), 2)                   # pruned to keep=2
+        self.assertEqual(ids, {"S2", "S3"})              # newest two survive
+        self.assertEqual(radar.current_snapshot()["meta"]["snapshot_id"], "S3")
+        for gone in ("S0", "S1"):                        # oldest ids are gone
+            self.assertIsNone(db.cache_get("radar_snapshot",
+                                           f"snapshot:{gone}", 24 * 7))
 
     def test_nm_values_never_rank_as_bargains(self):
         _seed_universe()
