@@ -39,9 +39,11 @@ class TestRadarPage(unittest.TestCase):
         self.assertEqual(self._get("nope").status_code, 200)
 
     def test_tunables_echoed(self):
-        with patch.object(app_module.radar, "build_drift_scan",
-                          return_value={"rows": [{"symbol": "X", "car": 0.01, "surprise_pct": 5.0,
-                                                  "days_since": 3, "remaining": 27}], "coverage": 1}):
+        payload = {"meta": {"warmed_count": 2},
+                   "rows": [{"symbol": "X", "car": 0.01, "surprise_pct": 5.0,
+                             "days_since": 3, "remaining": 27}], "coverage": 1}
+        with patch.object(app_module.radar, "current_snapshot",
+                          return_value=payload):
             resp = self._get("drift")
         html = resp.get_data(as_text=True)
         self.assertIn("Radar", html)
