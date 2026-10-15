@@ -290,6 +290,7 @@ def render_treemap(data: dict, dark: bool = False) -> str:
         parents=parents,
         values=values,
         text=texts,
+        customdata=customdata,
         branchvalues="total",
         marker=dict(
             colors=colors,
