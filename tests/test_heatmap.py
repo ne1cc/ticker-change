@@ -168,6 +168,16 @@ class TestRenderTreemap(TempDBCase):
         self.assertEqual(["-1.00%", "MSFT", "Microsoft Corp.", 198.0], by_id["MSFT"])
         self.assertEqual(["+0.01%", "", "Technology", ""], by_id["sector::Technology"])
 
+    def test_sector_tooltip_omits_ticker_and_price(self):
+        html = heatmap.render_treemap(self._data())
+        chart_data = html.split('Plotly.newPlot(', 1)[1].split(',', 1)[1]
+        traces, _ = json.JSONDecoder().raw_decode(chart_data.lstrip())
+        trace = traces[0]
+        by_id = dict(zip(trace["ids"], trace["hovertemplate"]))
+        self.assertNotIn("customdata[3]", by_id["sector::Technology"])
+        self.assertNotIn("customdata[1]", by_id["sector::Technology"])
+        self.assertIn("customdata[3]", by_id["AAPL"])
+
 
 class TestRefreshUniverse(TempDBCase):
     def _download_payload(self, symbols, closes_by_symbol):
