@@ -2,6 +2,7 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import numpy as np
@@ -27,7 +28,7 @@ def _mk_df(days=300):
 
 class TestRadarWarmer(unittest.TestCase):
     def setUp(self):
-        # Each warm claims a 6h cross-worker lock; release it between tests.
+        # Each warm claims a cross-worker lock; release it between tests.
         with db.get_conn() as conn:
             conn.execute("DELETE FROM api_cache WHERE provider = 'internal' "
                          "AND key = 'radar_warmer_lock'")
@@ -85,3 +86,27 @@ class TestRadarWarmer(unittest.TestCase):
         self.assertIn("EQ1", universe)
         self.assertNotIn("XLF", universe)
         self.assertNotIn("SPY", universe)
+
+    def test_lock_left_by_killed_warm_lapses_within_an_hour(self):
+        # A redeploy kills the warm mid-run; its lock must not block the
+        # next container's warm for hours.
+        stale = (datetime.utcnow() - timedelta(hours=1)).isoformat()
+        with db.get_conn() as conn:
+            conn.execute("INSERT INTO api_cache (provider, key, fetched_at, payload) "
+                         "VALUES ('internal', 'radar_warmer_lock', ?, '{}')", (stale,))
+        with patch.object(app_module.heatmap, "refresh_universe",
+                          return_value={"fetched": 0, "failed": []}) as refresh, \
+             patch.object(app_module.radar, "universe_symbols", return_value=[]):
+            app_module._warm_radar_cache(symbols=["WARM1"], background=False)
+        refresh.assert_called_once()
+
+    def test_warm_due_until_a_full_warm_completes(self):
+        db.cache_set("radar", "warm_progress", {"done": 175, "total": 501})
+        self.assertTrue(app_module._radar_warm_due())  # interrupted
+        db.cache_set("radar", "warm_progress", {"done": 501, "total": 501})
+        self.assertFalse(app_module._radar_warm_due())  # fresh and complete
+        old = (datetime.utcnow() - timedelta(hours=13)).isoformat()
+        with db.get_conn() as conn:
+            conn.execute("UPDATE api_cache SET fetched_at = ? WHERE provider = 'radar' "
+                         "AND key = 'warm_progress'", (old,))
+        self.assertTrue(app_module._radar_warm_due())  # older than 12h
