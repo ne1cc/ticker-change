@@ -1,4 +1,5 @@
 """Snapshot publication: coherent build, validate, atomic pointer, last-good."""
+import json
 import os
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ db.DB_PATH = _DB_PATH
 db.init_db()
 
 import radar  # noqa: E402
+import radar_contracts  # noqa: E402
 
 
 def _store(sym, days=320, drift=0.001, volume=1_000_000):
@@ -50,6 +52,87 @@ class TestNoNetwork(unittest.TestCase):
             snap = radar.build_snapshot(ctx)
         self.assertIsNotNone(snap)
         self.assertTrue(snap["meta"]["validation_status"].startswith("ok"))
+
+
+class TestValidation(unittest.TestCase):
+    def _built(self):
+        _seed_universe()
+        return radar.build_snapshot(radar.load_context())
+
+    def test_built_snapshot_passes_contract_checks(self):
+        snap = self._built()
+        ok, problems = radar.validate_snapshot(snap)
+        self.assertTrue(ok, problems)
+        self.assertEqual(snap["meta"]["validation_status"], "ok")
+
+    def test_metric_key_without_contract_fails_validation(self):
+        snap = self._built()
+        snap["drift"]["rows"][0]["mystery_alpha"] = 1.0
+        ok, problems = radar.validate_snapshot(snap)
+        self.assertFalse(ok)
+        self.assertTrue(any("uncontracted" in p and "mystery_alpha" in p
+                            for p in problems), problems)
+        self.assertIn("uncontracted", snap["meta"]["validation_status"])
+
+    def test_exempt_non_metric_keys_do_not_fail(self):
+        snap = self._built()
+        snap["drift"]["rows"][0]["car_significant"] = True
+        snap["value"]["rows"][0]["peer_count"] = 3
+        snap["value"]["rows"][0]["input_coverage"] = 0.8
+        snap["value"]["rows"][0]["low_coverage"] = False
+        ok, problems = radar.validate_snapshot(snap)
+        self.assertTrue(ok, problems)
+
+    def test_incomplete_contract_entry_fails_validation(self):
+        snap = self._built()
+        broken = {**radar_contracts.contract("fwd_pe"), "unit": ""}
+        with patch.dict(radar_contracts._CONTRACTS, {"fwd_pe": broken}):
+            ok, problems = radar.validate_snapshot(snap)
+        self.assertFalse(ok)
+        self.assertTrue(any("fwd_pe" in p and "unit" in p for p in problems),
+                        problems)
+
+
+class TestFundamentalsAsOf(unittest.TestCase):
+    OLDEST = "2025-06-01T10:00:00"
+    T_A = "2026-01-01T10:00:00"
+    T_B = "2026-02-01T10:00:00"
+
+    def _cached(self, sym, fetched_at):
+        with db.get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO api_cache "
+                "(provider, key, fetched_at, payload) VALUES (?, ?, ?, ?)",
+                ("yfinance", f"fundamentals:{sym}", fetched_at,
+                 json.dumps({"Sector": "Technology"})))
+
+    def setUp(self):
+        self._cached("OLDCO", self.OLDEST)
+        self._cached("ASOA", self.T_A)
+        self._cached("ASOB", self.T_B)
+
+    def test_as_of_scoped_to_symbols_not_whole_cache(self):
+        self.assertEqual(radar._fundamentals_age(["ASOA"]), self.T_A)
+        self.assertEqual(radar._fundamentals_age(["ASOB"]), self.T_B)
+        self.assertEqual(radar._fundamentals_age(["ASOA", "ASOB"]), self.T_A)
+        self.assertNotEqual(radar._fundamentals_age(["ASOA"]), self.OLDEST)
+
+    def test_as_of_empty_scope_is_none(self):
+        self.assertIsNone(radar._fundamentals_age(["NOCACHE"]))
+
+    def test_load_context_as_of_excludes_out_of_universe_rows(self):
+        _seed_universe()
+        ctx = radar.load_context()
+        with db.get_conn() as conn:
+            rows = conn.execute(
+                "SELECT key, fetched_at FROM api_cache "
+                "WHERE provider = 'yfinance' AND key LIKE 'fundamentals:%'"
+            ).fetchall()
+        in_scope = [r["fetched_at"] for r in rows
+                    if r["key"][len("fundamentals:"):] in set(ctx["symbols"])]
+        self.assertNotIn(self.OLDEST, in_scope)
+        self.assertEqual(ctx["source_as_of"]["fundamentals"], min(in_scope))
+        self.assertNotEqual(ctx["source_as_of"]["fundamentals"], self.OLDEST)
 
 
 class TestPublish(unittest.TestCase):

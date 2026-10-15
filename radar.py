@@ -104,12 +104,22 @@ def _price_age(symbols: list[str]) -> str | None:
     return oldest
 
 
-def _fundamentals_age() -> str | None:
-    with db.get_conn() as conn:
-        row = conn.execute(
-            "SELECT MIN(fetched_at) m FROM api_cache "
-            "WHERE provider = 'yfinance' AND key LIKE 'fundamentals:%'").fetchone()
-    return row["m"] if row else None
+def _fundamentals_age(symbols: list[str]) -> str | None:
+    """Oldest fundamentals fetch among the scoped symbols — not a global
+    minimum over every fundamentals row in the database."""
+    oldest = None
+    syms = sorted(set(symbols))
+    for i in range(0, len(syms), 500):
+        chunk = syms[i:i + 500]
+        keys = [f"fundamentals:{s}" for s in chunk]
+        q = ",".join("?" * len(keys))
+        with db.get_conn() as conn:
+            row = conn.execute(
+                f"SELECT MIN(fetched_at) m FROM api_cache "
+                f"WHERE provider = 'yfinance' AND key IN ({q})", keys).fetchone()
+        if row and row["m"]:
+            oldest = row["m"] if oldest is None else min(oldest, row["m"])
+    return oldest
 
 
 def _f(v):
@@ -147,7 +157,7 @@ def load_context() -> dict:
     ctx["short"] = short_map
     ctx["source_as_of"] = {"prices": _price_age(symbols),
                            "earnings": earnings_age,
-                           "fundamentals": _fundamentals_age(),
+                           "fundamentals": _fundamentals_age(symbols),
                            "short": short_age}
     return ctx
 
@@ -598,6 +608,7 @@ def validate_snapshot(snap: dict) -> tuple[bool, list[str]]:
     """Scrub NaN/inf -> None in place, check row contracts + counts."""
     problems: list[str] = []
     try:
+        problems.extend(radar_contracts.incomplete_contracts())
         for tab, keys in radar_contracts.METRIC_KEYS_BY_TAB.items():
             section = snap.get(tab)
             if not isinstance(section, dict) or "rows" not in section \
@@ -609,6 +620,11 @@ def validate_snapshot(snap: dict) -> tuple[bool, list[str]]:
                 if missing:
                     problems.append(
                         f"{tab}/{row.get('symbol')}: missing {','.join(missing)}")
+                uncontracted = radar_contracts.uncontracted_row_keys(row)
+                if uncontracted:
+                    problems.append(
+                        f"{tab}/{row.get('symbol')}: uncontracted "
+                        f"{','.join(uncontracted)}")
         if not isinstance(snap.get("drift", {}).get("upcoming"), list):
             problems.append("drift: missing upcoming")
         total_rows = sum(len(snap.get(t, {}).get("rows", []))

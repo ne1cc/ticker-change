@@ -127,11 +127,33 @@ class TestBuildPeerComparison(unittest.TestCase):
             "Forward P/E": 25.0, "Price / Sales": 6.0, "Revenue Growth": 0.08})
         with patch.object(peers, "resolve_peers",
                           return_value=["BADMETRIC", "OKMETRIC"]):
-            out = peers.build_peer_comparison("FOCUS")
+            out = peers.build_peer_comparison("FOCUS", min_peers=2)
         self.assertIsNotNone(out)
         by_sym = {r["symbol"]: r for r in out["peers"]}
         self.assertIsNone(by_sym["BADMETRIC"]["forward_pe_pct"])
         self.assertIsNotNone(by_sym["OKMETRIC"]["forward_pe_pct"])
+
+    def test_gate_defaults_to_radar_min_peers_tunable(self):
+        # Pool of two valid forward-P/E values: below the tunable's default
+        # of 3 the percentile is suppressed, at 2 it is computed — only the
+        # tunable wiring can flip this.
+        db.cache_set("yfinance", "fundamentals:FOCUS", {
+            "Forward P/E": 10.0, "Price / Sales": 1.0})
+        db.cache_set("yfinance", "fundamentals:P1", {
+            "Forward P/E": 30.0, "Price / Sales": 5.0})
+        with patch.object(peers, "resolve_peers", return_value=["P1"]):
+            out = peers.build_peer_comparison("FOCUS")
+        self.assertEqual(out["focus"].get("forward_pe_state"),
+                         "insufficient-peers")
+        self.assertIsNone(out["focus"]["forward_pe_pct"])
+        db.set_setting("radar_min_peers", "2")
+        try:
+            with patch.object(peers, "resolve_peers", return_value=["P1"]):
+                out = peers.build_peer_comparison("FOCUS")
+            self.assertEqual(out["focus"]["forward_pe_pct"], 100.0)
+            self.assertNotIn("forward_pe_state", out["focus"])
+        finally:
+            db.set_setting("radar_min_peers", "")
 
 
 class TestNmRules(unittest.TestCase):

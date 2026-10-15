@@ -156,6 +156,41 @@ _CONTRACTS = {
     "ann_vol": _c("Annualized volatility", "Standard deviation of daily returns, "
                   "annualized, trailing year.", "%", "1 year", "daily_prices closes",
                   "absent under 273 bars"),
+    "fwd_pe_pct": _c("Forward P/E percentile", "Percentile of the forward P/E "
+                     "within the sector pool of valid multiples; radar_min_peers "
+                     "valid values required. Higher = cheaper.", "0-100",
+                     "snapshot", "derived", "insufficient-peers below the minimum"),
+    "trail_pe_pct": _c("Trailing P/E percentile", "Percentile of the trailing P/E "
+                       "within the sector pool of valid multiples; radar_min_peers "
+                       "valid values required. Higher = cheaper.", "0-100",
+                       "snapshot", "derived", "insufficient-peers below the minimum"),
+    "ps_pct": _c("Price / Sales percentile", "Percentile of price / sales within "
+                 "the sector pool of valid multiples; radar_min_peers valid "
+                 "values required. Higher = cheaper.", "0-100", "snapshot",
+                 "derived", "insufficient-peers below the minimum"),
+    "peg_pct": _c("PEG percentile", "Percentile of PEG within the sector pool of "
+                  "valid values; radar_min_peers valid values required. "
+                  "Higher = cheaper.", "0-100", "snapshot", "derived",
+                  "insufficient-peers below the minimum"),
+    "ev_ebitda_pct": _c("EV / EBITDA percentile", "Percentile of EV / EBITDA "
+                        "within the sector pool of valid multiples; "
+                        "radar_min_peers valid values required. Higher = cheaper.",
+                        "0-100", "snapshot", "derived",
+                        "insufficient-peers below the minimum"),
+    "rev_growth_pct": _c("Revenue growth percentile", "Percentile of revenue "
+                         "growth within the sector pool of valid values; "
+                         "radar_min_peers valid values required. Higher = "
+                         "faster growth.", "0-100", "snapshot", "derived",
+                         "insufficient-peers below the minimum"),
+    "eps_growth_pct": _c("EPS growth percentile", "Percentile of EPS growth "
+                         "within the sector pool of valid values; "
+                         "radar_min_peers valid values required. Higher = "
+                         "faster growth.", "0-100", "snapshot", "derived",
+                         "insufficient-peers below the minimum"),
+    "mom_pct": _c("Momentum percentile", "Percentile of momentum 12-1 within the "
+                  "sector pool of valid values; radar_min_peers valid values "
+                  "required. Higher = stronger momentum.", "0-100", "snapshot",
+                  "derived", "insufficient-peers below the minimum"),
     "value_score": _c("Value score", "Weighted mean of available component "
                       "percentiles: 50% cheapness (fwd P/E, P/S), 25% growth "
                       "(revenue, EPS), 25% momentum percentile. Higher = cheaper/"
@@ -208,6 +243,29 @@ _CONTRACTS = {
                         "context, not this score's decomposition. Descriptive "
                         "level label, not a probability.", "0-100", "snapshot",
                         "derived", "defaults flagged 'assumed' without real SI"),
+    "squeeze_level": _c("Squeeze level", "Descriptive level bucket (LOW / "
+                        "ELEVATED / HIGH / EXTREME) of the squeeze score. A "
+                        "label, not a probability.", "state", "snapshot",
+                        "derived", "follows the squeeze score's missing state"),
+    "si_age_days": _c("SI age", "Calendar days between the SI settlement date "
+                      "and today — a stale-settlement warning, not a live "
+                      "figure.", "days", "SI settlement date to today",
+                      "derived", "absent without a parseable settlement date"),
+    "crowding_score": _c("Crowding score", "Short-interest leg of the squeeze "
+                         "heuristic: short % of float scaled to a 0-40 "
+                         "sub-score. Related context, not the squeeze score's "
+                         "decomposition.", "0-40", "snapshot", "derived",
+                         "absent without short interest"),
+    "activation_score": _c("Activation score", "Days-to-cover leg of the squeeze "
+                           "heuristic: vendor days to cover scaled to a 0-30 "
+                           "sub-score. Related context, not the squeeze score's "
+                           "decomposition.", "0-30", "snapshot", "derived",
+                           "absent without days to cover"),
+    "tradability_score": _c("Tradability score", "Liquidity leg of the squeeze "
+                            "heuristic: median dollar volume scaled to a 0-30 "
+                            "sub-score. Related context, not the squeeze "
+                            "score's decomposition.", "0-30", "20 sessions",
+                            "derived", "absent without price history"),
 }
 
 METRIC_KEYS_BY_TAB = {
@@ -230,3 +288,33 @@ METRIC_KEYS_BY_TAB = {
 
 def contract(key: str) -> dict:
     return _CONTRACTS[key]
+
+
+CONTRACT_FIELDS = ("term", "definition", "unit", "window", "source",
+                   "missing_state")
+
+# Emitted row fields that are not metrics (identity text, state flags,
+# coverage diagnostics, counts, internal plumbing). Every other emitted
+# key must have a contract entry.
+NON_METRIC_ROW_KEYS = frozenset({
+    "industry",
+    "car_significant",
+    "fwd_pe_nm", "trail_pe_nm", "ps_nm", "peg_nm", "ev_ebitda_nm",
+    "input_coverage", "low_coverage",
+    "peer_count",
+    "_nm", "_state",
+})
+
+
+def incomplete_contracts() -> list[str]:
+    """Contract entries missing any required field, as "<key>: empty <field>"."""
+    return [f"{key}: empty {field}"
+            for key, entry in _CONTRACTS.items()
+            for field in CONTRACT_FIELDS
+            if not str(entry.get(field) or "").strip()]
+
+
+def uncontracted_row_keys(row: dict) -> list[str]:
+    """Row keys with neither a contract entry nor a non-metric listing."""
+    return sorted(k for k in row
+                  if k not in _CONTRACTS and k not in NON_METRIC_ROW_KEYS)
