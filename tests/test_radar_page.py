@@ -58,7 +58,7 @@ class TestRadarPage(unittest.TestCase):
             resp = self._get("drift")
         html = resp.get_data(as_text=True)
         self.assertIn("AAA", html)
-        self.assertIn("Published", html)
+        self.assertIn("Updated Oct 4, 3:00 AM PDT", html)
 
     def test_tunables_echoed(self):
         payload = {"meta": {"warmed_count": 2},
@@ -76,3 +76,59 @@ class TestRadarPage(unittest.TestCase):
         self.assertIn("Radar", html)
         self.assertIn("+1.0%", html)
         self.assertNotIn("%.1f", html)
+
+    def _snap(self, **tabs):
+        snap = {"meta": {"warmed_count": 3, "universe_count": 5,
+                         "published_at": "2026-10-15T03:12:00"},
+                "drift": {"rows": [], "upcoming": [], "excluded": []},
+                "value": {"rows": [], "excluded": []},
+                "squeeze": {"rows": [], "excluded": []}}
+        snap.update(tabs)
+        return snap
+
+    def _render(self, snap, tab):
+        with patch.object(app_module.radar, "current_snapshot", return_value=snap):
+            return self._get(tab).get_data(as_text=True)
+
+    def test_header_reports_coverage_in_pacific_time(self):
+        html = self._render(self._snap(), "drift")
+        self.assertIn("Scanning 5 stocks", html)
+        self.assertIn("Oct 14, 8:12 PM PDT", html)
+
+    def test_drift_splits_open_and_closed_windows_and_shows_upcoming(self):
+        blank = {"print_date": "2026-10-08", "surprise_pct": None,
+                 "car_30": None, "car_significant": False,
+                 "drift_to_date": None, "drift_to_date_sessions": None}
+        drift = {"rows": [dict(blank, symbol="OPEN1", sessions_since=4,
+                               sessions_to_20d=16),
+                          dict(blank, symbol="DONE1", sessions_since=40,
+                               sessions_to_20d=0)],
+                 "upcoming": [{"symbol": "SOON1", "date": "2026-10-17",
+                               "days_until": 3, "eps_estimate": 1.2}],
+                 "excluded": [{"symbol": "Z", "reason": "no-prices"}]}
+        html = self._render(self._snap(drift=drift), "drift")
+        self.assertIn("SOON1", html)
+        self.assertLess(html.index("OPEN1"), html.index("Window closed"))
+        self.assertLess(html.index("Window closed"), html.index("DONE1"))
+        self.assertIn("1 no price history", html)
+        # 5 in universe - 2 rows - 1 excluded = 2 never had earnings data
+        self.assertIn("2 no earnings data", html)
+
+    def test_value_missing_score_renders_dash_not_none(self):
+        value = {"rows": [{"symbol": "V1", "industry": "Widgets",
+                           "value_score": None, "mom_12_1": 0.1,
+                           "fwd_pe": 20.0}], "excluded": []}
+        html = self._render(self._snap(value=value), "value")
+        self.assertIn("V1", html)
+        self.assertNotIn(">None<", html.replace(" ", "").replace("\n", ""))
+
+    def test_value_tab_has_no_peer_cap_input(self):
+        html = self._render(self._snap(), "value")
+        self.assertNotIn("tunable-peer-cap", html)
+
+    def test_empty_tab_explains_exclusions(self):
+        squeeze = {"rows": [], "excluded": [
+            {"symbol": "A", "reason": "below-floor"},
+            {"symbol": "B", "reason": "below-floor"}]}
+        html = self._render(self._snap(squeeze=squeeze), "squeeze")
+        self.assertIn("2 below liquidity floor", html)
