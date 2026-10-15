@@ -33,6 +33,8 @@ import peers
 import microstructure
 import macro_engine
 import options
+from option_chain_data import (chain_quality, valid_iv, valid_quote, finite_number,
+                                get_cboe_snapshot, cboe_chain)
 from options import compute_options_terminal, calculate_greeks
 import derivatives_alpha
 import backtest_engine
@@ -858,6 +860,8 @@ def _chain_records(df) -> list:
 def _chain_from_payload(payload) -> tuple:
     calls = pd.DataFrame(payload.get('calls', []))
     puts = pd.DataFrame(payload.get('puts', []))
+    for frame in (calls, puts):
+        frame.attrs.update(source=payload.get('source', 'Yahoo Finance'), as_of=payload.get('as_of'))
     return calls, puts, payload.get('spot_price')
 
 
@@ -919,47 +923,66 @@ def get_cached_expirations(ticker: str, stock=None, force: bool = False) -> list
 def get_cached_chain(ticker: str, expiration: str, stock=None, spot_hint=None, force: bool = False) -> tuple | None:
     """One expiration's chain as (calls_df, puts_df, spot_price), read-through cached.
 
-    Read order: fresh S3 -> fresh SQLite -> live yfinance (written back to both
-    stores) -> stale S3 -> stale SQLite -> None.
+    Prefer complete fresh S3/SQLite chains; refresh partial responses through
+    Yahoo then Cboe delayed data. Preserve a better cached snapshot on failure.
     """
     ticker = ticker.upper()
     s3_key = f"{ticker}/{expiration}.json"
     sql_key = f"optchain:{ticker}:{expiration}"
 
-    stale = None
-    if not force:
-        hit = s3_cache.get_json(s3_key)
-        if hit is not None:
-            payload, age = hit
-            if age <= CHAIN_TTL_HOURS:
-                return _chain_from_payload(payload)
-            stale = payload
-        cached = db.cache_get("yfinance", sql_key, CHAIN_TTL_HOURS)
-        if cached is not None:
+    candidates = []
+    hit = s3_cache.get_json(s3_key)
+    if hit is not None:
+        payload, age = hit
+        candidates.append(payload)
+        if not force and age <= CHAIN_TTL_HOURS and len(chain_quality(payload)) == 6:
+            return _chain_from_payload(payload)
+    cached = db.cache_get("yfinance", sql_key, CHAIN_TTL_HOURS)
+    if cached is not None:
+        candidates.append(cached)
+        if not force and len(chain_quality(cached)) == 6:
             return _chain_from_payload(cached)
+    else:
+        stale = db.cache_get("yfinance", sql_key, _STALE_TTL_HOURS)
+        if stale is not None:
+            candidates.append(stale)
 
+    refresh_key = f"optchain-refresh:{ticker}:{expiration}"
+    if not force and candidates and db.cache_get("yfinance", refresh_key, 1 / 60):
+        return _chain_from_payload(max(candidates, key=lambda p: len(chain_quality(p))))
+    db.cache_set("yfinance", refresh_key, True)
+
+    live = None
     try:
         chain = (stock or _get_yf_ticker(ticker)).option_chain(expiration)
         calls = chain.calls.copy() if hasattr(chain, 'calls') else pd.DataFrame()
         puts = chain.puts.copy() if hasattr(chain, 'puts') else pd.DataFrame()
         if calls.empty and puts.empty:
             raise ValueError("retrieved option chain is empty")
-        spot = spot_hint or _spot_price(ticker, stock)
-        payload = {
-            'calls': _chain_records(calls),
-            'puts': _chain_records(puts),
-            'spot_price': spot,
+        live = {
+            'calls': _chain_records(calls), 'puts': _chain_records(puts),
+            'spot_price': spot_hint or _spot_price(ticker, stock),
+            'source': 'Yahoo Finance',
         }
-        s3_cache.put_json(s3_key, payload)
-        db.cache_set("yfinance", sql_key, payload)
-        return calls, puts, spot
     except Exception as e:
         print(f"[chain-cache] live fetch failed for {ticker} {expiration}: {type(e).__name__}: {e}")
 
-    if stale is not None:
-        return _chain_from_payload(stale)
-    cached = db.cache_get("yfinance", sql_key, _STALE_TTL_HOURS)
-    return _chain_from_payload(cached) if cached is not None else None
+    # Yahoo can return populated trades but empty quotes/OI. Recover from the
+    # same expiration at Cboe, keeping a whole snapshot rather than mixing fields.
+    if live is None or len(chain_quality(live)) < 6:
+        fallback = cboe_chain(get_cboe_snapshot(ticker), ticker, expiration)
+        if fallback and (live is None or len(chain_quality(fallback)) > len(chain_quality(live))):
+            live = fallback
+
+    best_cached = max(candidates, key=lambda p: len(chain_quality(p))) if candidates else None
+    if live is not None and (best_cached is None or
+                            chain_quality(live) >= chain_quality(best_cached)):
+        s3_cache.put_json(s3_key, live)
+        db.cache_set("yfinance", sql_key, live)
+        return _chain_from_payload(live)
+    if best_cached is not None:
+        return _chain_from_payload(best_cached)
+    return None
 
 
 def get_options_smile(ticker: str, current_price: float) -> str | None:
@@ -2598,10 +2621,12 @@ def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045, strike_
             return None
         exp_dt = datetime.strptime(expiration_date, '%Y-%m-%d')
         from zoneinfo import ZoneInfo
-        today = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
-        days_to_exp = (exp_dt - today).days + 1
-        t_years = max(1e-5, days_to_exp / 365.0)
-        
+        market_tz = ZoneInfo("America/New_York")
+        today = datetime.now(market_tz)
+        days_to_exp = max(0, (exp_dt.date() - today.date()).days)
+        expiry_close = exp_dt.replace(hour=16, tzinfo=market_tz)
+        t_years = max(0.0, (expiry_close - today).total_seconds() / (365.0 * 86400))
+
         call_strikes = calls['strike'].tolist() if not calls.empty else []
         put_strikes = puts['strike'].tolist() if not puts.empty else []
         all_strikes = sorted(list(set(call_strikes + put_strikes)))
@@ -2629,8 +2654,8 @@ def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045, strike_
             p_iv = p_opt.get('impliedVolatility', 0)
             
             # Avoid invalid values
-            c_iv = c_iv if (c_iv and not np.isnan(c_iv)) else 0
-            p_iv = p_iv if (p_iv and not np.isnan(p_iv)) else 0
+            c_iv = finite_number(c_iv) or 0
+            p_iv = finite_number(p_iv) or 0
             
             # Cross-IV fallback: if one side is missing IV but the other side has it,
             # use the other side's IV for Greeks computation (Put-Call parity / arbitrage alignment)
@@ -2657,15 +2682,14 @@ def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045, strike_
             p_pct_change = p_opt.get('percentChange', 0)
 
             def _safe_num(v):
-                if v is None or (isinstance(v, float) and np.isnan(v)):
-                    return 0
-                return v
+                return finite_number(v) or 0
 
             rows.append({
                 'strike': strike,
-                'call_bid': c_bid if not np.isnan(c_bid) else 0,
-                'call_ask': c_ask if not np.isnan(c_ask) else 0,
-                'call_last': c_last if not np.isnan(c_last) else 0,
+                'call_quote_valid': valid_quote(c_opt.get('bid'), c_opt.get('ask')),
+                'call_bid': _safe_num(c_bid),
+                'call_ask': _safe_num(c_ask),
+                'call_last': _safe_num(c_last),
                 'call_change': round(_safe_num(c_change), 2),
                 'call_pct_change': round(_safe_num(c_pct_change), 1),
                 'call_volume': int(_safe_num(c_opt.get('volume', 0))),
@@ -2676,9 +2700,10 @@ def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045, strike_
                 'call_theta': c_greeks['call_theta'] if c_greeks else 'N/A',
                 'call_vega': c_greeks['vega'] if c_greeks else 'N/A',
                 'call_rho': c_greeks['call_rho'] if c_greeks else 'N/A',
-                'put_bid': p_bid if not np.isnan(p_bid) else 0,
-                'put_ask': p_ask if not np.isnan(p_ask) else 0,
-                'put_last': p_last if not np.isnan(p_last) else 0,
+                'put_quote_valid': valid_quote(p_opt.get('bid'), p_opt.get('ask')),
+                'put_bid': _safe_num(p_bid),
+                'put_ask': _safe_num(p_ask),
+                'put_last': _safe_num(p_last),
                 'put_change': round(_safe_num(p_change), 2),
                 'put_pct_change': round(_safe_num(p_pct_change), 1),
                 'put_volume': int(_safe_num(p_opt.get('volume', 0))),
@@ -2697,6 +2722,14 @@ def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045, strike_
             'selected_expiration': expiration_date,
             'spot_price': spot_price,
             'days_to_expiration': days_to_exp,
+            'time_to_expiration_years': t_years,
+            'source': calls.attrs.get('source', 'Yahoo Finance'),
+            'source_as_of': calls.attrs.get('as_of'),
+            'oi_available': {
+                side: bool(not frame.empty and 'openInterest' in frame and
+                       frame['openInterest'].apply(lambda v: finite_number(v) is not None and float(v) >= 0).all())
+                for side, frame in (('call', calls), ('put', puts))
+            },
             'options': rows
         }
     except Exception as e:
@@ -4179,7 +4212,7 @@ def options_greeks_api(ticker):
 def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
     """Compile options statistics and quantitative posture metrics."""
     try:
-        greeks_data = get_options_greeks_data(ticker, expiration_date, rf_rate)
+        greeks_data = get_options_greeks_data(ticker, expiration_date, rf_rate, strike_count='all')
         if not greeks_data:
             return None
         
@@ -4200,51 +4233,52 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
             rolling_30d = returns.rolling(30).std() * np.sqrt(252) * 100
             vol_history = rolling_30d.dropna().tail(252)
         
-        # Calculate ATM IV
+        # Use the nearest usable near-ATM IV independently on each side.
         strikes = [r['strike'] for r in rows]
-        closest_strike = min(strikes, key=lambda s: abs(s - spot_price)) if strikes else spot_price
-        
-        atm_row = next((r for r in rows if r['strike'] == closest_strike), None)
-        c_iv = atm_row['call_iv'] if atm_row else 0.0
-        p_iv = atm_row['put_iv'] if atm_row else 0.0
-        
-        ivs = [v for v in [c_iv, p_iv] if v > 1.0]
-        atm_iv = float(np.mean(ivs)) if ivs else 0.0
-        
-        # Volatility Rank and Percentile compared to historical realized volatility
-        if not vol_history.empty and atm_iv > 0:
+        atm_row = min(rows, key=lambda r: abs(r['strike'] - spot_price)) if rows else None
+        ivs = []
+        for side in ('call', 'put'):
+            valid_rows = [r for r in rows if abs(r['strike'] - spot_price) <= spot_price * 0.05
+                          and valid_iv(r.get(f'{side}_iv', 0) / 100.0)]
+            if valid_rows:
+                nearest = min(valid_rows, key=lambda r: abs(r['strike'] - spot_price))
+                ivs.append(nearest[f'{side}_iv'])
+        atm_iv = float(np.mean(ivs)) if ivs else None
+
+        # Rank/percentile use the existing historical realized-vol proxy.
+        iv_rank, iv_percentile = None, None
+        if not vol_history.empty and atm_iv is not None:
             min_vol = float(vol_history.min())
             max_vol = float(vol_history.max())
             iv_rank = ((atm_iv - min_vol) / (max_vol - min_vol)) * 100 if max_vol > min_vol else 50.0
             iv_rank = max(0.0, min(100.0, iv_rank))
-            
-            below_count = (vol_history < atm_iv).sum()
-            iv_percentile = (below_count / len(vol_history)) * 100
-        else:
-            iv_rank, iv_percentile = 50.0, 50.0
-            
-        # Expected Move
-        expected_move_bs = 0.85 * spot_price * (atm_iv / 100.0) * np.sqrt(days_to_exp / 365.0) if atm_iv > 0 else 0.0
-        
-        c_bid = atm_row['call_bid'] if atm_row else 0
-        c_ask = atm_row['call_ask'] if atm_row else 0
-        p_bid = atm_row['put_bid'] if atm_row else 0
-        p_ask = atm_row['put_ask'] if atm_row else 0
-        
-        c_mid = (c_bid + c_ask) / 2.0
-        p_mid = (p_bid + p_ask) / 2.0
-        
-        expected_move_straddle = c_mid + p_mid if (c_mid > 0 and p_mid > 0) else expected_move_bs
-        
-        # Put-Call Ratio (PCR)
+            iv_percentile = float((vol_history < atm_iv).sum() / len(vol_history) * 100)
+
+        time_to_exp = greeks_data.get('time_to_expiration_years', days_to_exp / 365.0)
+        expected_move_bs = (0.85 * spot_price * (atm_iv / 100.0) * np.sqrt(time_to_exp)
+                            if atm_iv is not None and time_to_exp > 0 else None)
+        expected_move_straddle = None
+        if atm_row and all(atm_row.get(f'{side}_quote_valid',
+                                      valid_quote(atm_row[f'{side}_bid'], atm_row[f'{side}_ask']))
+                           for side in ('call', 'put')):
+            expected_move_straddle = sum(atm_row[f'{side}_{quote}']
+                                         for side in ('call', 'put') for quote in ('bid', 'ask')) / 2
+
         total_call_vol = sum(r.get('call_volume', 0) for r in rows)
         total_put_vol = sum(r.get('put_volume', 0) for r in rows)
         total_call_oi = sum(r.get('call_oi', 0) for r in rows)
         total_put_oi = sum(r.get('put_oi', 0) for r in rows)
-        
-        vol_pcr = total_put_vol / total_call_vol if total_call_vol > 0 else 0
-        oi_pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 0
-        
+        oi_available = greeks_data.get('oi_available', {'call': True, 'put': True})
+        if not oi_available['call']:
+            total_call_oi = None
+        if not oi_available['put']:
+            total_put_oi = None
+        if total_call_oi == 0 and total_put_oi == 0:
+            total_call_oi, total_put_oi = None, None
+        has_oi = total_call_oi is not None and total_put_oi is not None
+        vol_pcr = total_put_vol / total_call_vol if total_call_vol > 0 else None
+        oi_pcr = total_put_oi / total_call_oi if has_oi and total_call_oi > 0 else None
+
         # Max Pain
         pains = {}
         for strike_i in strikes:
@@ -4259,17 +4293,23 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
                     pain += put_oi * (strike - strike_i)
             pains[strike_i] = pain
             
-        max_pain = min(pains, key=pains.get) if pains else spot_price
+        max_pain = min(pains, key=pains.get) if pains and has_oi else None
         
         # GEX stats
         gex_profile = get_gex_profile(ticker, spot_price, rf_rate)
         gex_stats = gex_profile['stats'] if gex_profile else None
         
         # Strategy recommendations
-        selling_environment = atm_iv > hv30
+        selling_environment = atm_iv > hv30 if atm_iv is not None else None
         strategy_recommendation = ""
         strategy_rationale = ""
-        if iv_rank > 50:
+        if atm_iv is None:
+            strategy_recommendation = 'Insufficient IV data'
+            strategy_rationale = 'Implied volatility is unavailable from the option chain. Premium pricing cannot be assessed.'
+        elif df is None or df.empty or len(df) <= 30:
+            strategy_recommendation = 'Insufficient volatility history'
+            strategy_rationale = 'Realized volatility history is unavailable. Premium pricing cannot be compared.'
+        elif iv_rank is not None and iv_rank > 50:
             strategy_recommendation = "Sell Premium (Strangle / Iron Condor)"
             strategy_rationale = f"IV Rank is high ({iv_rank:.1f}%), meaning implied volatility is elevated relative to history. Selling premium takes advantage of the volatility risk premium (VRP) contraction."
         elif selling_environment:
@@ -4281,20 +4321,22 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
             
         return {
             'ticker': ticker.upper(),
+            'source': greeks_data.get('source'),
+            'source_as_of': greeks_data.get('source_as_of'),
             'spot_price': round(spot_price, 2),
             'selected_expiration': selected_expiration,
             'days_to_expiration': days_to_exp,
             'expirations': greeks_data['expirations'],
             'hv30': round(hv30, 2),
             'hv90': round(hv90, 2),
-            'atm_iv': round(atm_iv, 2),
-            'iv_rank': round(iv_rank, 1),
-            'iv_percentile': round(iv_percentile, 1),
-            'expected_move_bs': round(expected_move_bs, 2),
-            'expected_move_straddle': round(expected_move_straddle, 2),
-            'vol_pcr': round(vol_pcr, 3),
-            'oi_pcr': round(oi_pcr, 3),
-            'max_pain': round(max_pain, 2),
+            'atm_iv': round(atm_iv, 2) if atm_iv is not None else None,
+            'iv_rank': round(iv_rank, 1) if iv_rank is not None else None,
+            'iv_percentile': round(iv_percentile, 1) if iv_percentile is not None else None,
+            'expected_move_bs': round(expected_move_bs, 2) if expected_move_bs is not None else None,
+            'expected_move_straddle': round(expected_move_straddle, 2) if expected_move_straddle is not None else None,
+            'vol_pcr': round(vol_pcr, 3) if vol_pcr is not None else None,
+            'oi_pcr': round(oi_pcr, 3) if oi_pcr is not None else None,
+            'max_pain': round(max_pain, 2) if max_pain is not None else None,
             'total_call_vol': total_call_vol,
             'total_put_vol': total_put_vol,
             'total_call_oi': total_call_oi,
