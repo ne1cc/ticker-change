@@ -29,7 +29,6 @@ import event_study
 import sec_8k
 import earnings
 import radar
-import radar_contracts
 import peers
 import microstructure
 import macro_engine
@@ -3786,8 +3785,48 @@ def radar_page():
     payload = snap if warmed_count else None
     warming = snap is None or warmed_count == 0
     tunables = {key: radar.get_tunable(key) for key in radar.TUNABLES}
+    updated_pt = None
+    excluded_summary = []
+    if payload:
+        try:
+            from zoneinfo import ZoneInfo
+            dt = datetime.fromisoformat(meta.get("published_at") or "").replace(
+                tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("America/Los_Angeles"))
+            updated_pt = f"{dt:%b} {dt.day}, {dt.hour % 12 or 12}:{dt:%M %p %Z}"
+        except ValueError:
+            updated_pt = None
+        section = payload.get(tab) or {}
+        counts = {}
+        for entry in section.get("excluded") or []:
+            counts[entry["reason"]] = counts.get(entry["reason"], 0) + 1
+        # Drift/squeeze only see symbols that have an earnings/SI payload;
+        # the rest of the universe never reaches their exclusion ledgers.
+        if tab in _RADAR_UNCOVERED_REASON:
+            uncovered = (int(meta.get("universe_count") or 0)
+                         - len(section.get("rows") or []) - sum(counts.values()))
+            if uncovered > 0:
+                counts[_RADAR_UNCOVERED_REASON[tab]] = uncovered
+        excluded_summary = [(n, _RADAR_EXCLUDED_LABELS.get(r, r))
+                            for r, n in sorted(counts.items(),
+                                               key=lambda kv: -kv[1])]
     return render_template('radar.html', tab=tab, payload=payload,
-                           warming=warming, tunables=tunables)
+                           warming=warming, tunables=tunables,
+                           updated_pt=updated_pt,
+                           excluded_summary=excluded_summary)
+
+
+_RADAR_UNCOVERED_REASON = {"drift": "no-earnings", "squeeze": "assumed-si"}
+_RADAR_EXCLUDED_LABELS = {
+    "no-earnings": "no earnings data",
+    "bad-date": "unreadable earnings date",
+    "no-prices": "no price history",
+    "no-aligned-session": "print not yet traded",
+    "no-fundamentals": "no fundamentals data",
+    "insufficient-history": "too little price history",
+    "below-value-cap": "outside the top 50",
+    "assumed-si": "no short-interest data",
+    "below-floor": "below liquidity floor",
+}
 
 
 # User-configurable provider keys. Saved server-side (SQLite) so they apply to the
@@ -4324,18 +4363,21 @@ def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True)
         try:
             if not db.try_claim_lock("radar_warmer_lock", ttl_hours=6.0):
                 return
+            # The heatmap warmer keeps only ~10 sessions per S&P 500 name, so
+            # backfill a year (batched, no per-ticker calls) before the
+            # 200-bar universe cut. Sector ETF + SPY closes feed the drift
+            # excess-vs-sector and CAR math.
+            backfill = list(radar.BENCHMARK_SYMBOLS)
+            if not symbols:
+                backfill += [c["symbol"] for c in heatmap.get_constituents()]
+            try:
+                heatmap.refresh_universe(sorted(set(backfill)), period="1y")
+            except Exception as e:
+                print(f"[radar] price backfill failed: {e}")
             syms = symbols or radar.universe_symbols(min_bars=200)
             if not syms:
                 return
             print(f"[radar] warming {len(syms)} tickers ...")
-            # Sector ETF closes feed the snapshot's excess-vs-sector math; the
-            # heatmap batch path stores their daily bars without per-ticker
-            # calls. 1y so t0+10-bar windows resolve for months, not days.
-            try:
-                heatmap.refresh_universe(radar_contracts.SECTOR_ETFS,
-                                         period="1y")
-            except Exception as e:
-                print(f"[radar] sector ETF price refresh failed: {e}")
             done = 0
             for sym in syms:
                 for key, fn in (("earnings", earnings.get_earnings_history),
@@ -4597,6 +4639,12 @@ def api_radar_settings():
         return jsonify({"error": str(e)}), 400
     for key, val in stored.items():
         radar.set_tunable(key, val)
+    # Tunables apply at snapshot build time; rebuild from cache (no network).
+    # The 1-minute lock keeps repeated saves from stacking rebuilds.
+    if db.try_claim_lock("radar_republish_lock", ttl_hours=1 / 60):
+        threading.Thread(
+            target=lambda: radar.publish_snapshot(radar.load_context()),
+            daemon=True, name="radar-republish").start()
     return jsonify(stored), 200
 
 
