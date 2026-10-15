@@ -65,8 +65,10 @@
         const step = gaps.length ? Math.min(...gaps) : 1;
         return { ...series, type: 'custom', encode: { x: 0, y: 1 }, renderItem(params, api) {
           const end = api.coord([api.value(0), api.value(1)]), start = api.coord([0, api.value(1)]);
-          const height = Math.max(1, Math.abs(api.size([0, step])[1]) * .72);
-          const shape = echarts.graphic.clipRectByRect({ x: Math.min(start[0],end[0]), y: end[1]-height/2, width: Math.abs(end[0]-start[0]), height }, params.coordSys);
+          const height = Math.max(3, Math.min(24, Math.abs(api.size([0, step])[1]) * .75));
+          const rawWidth = Math.abs(end[0] - start[0]);
+          const width = rawWidth > 0 ? Math.max(rawWidth, 1.5) : 0;
+          const shape = echarts.graphic.clipRectByRect({ x: Math.min(start[0],end[0]), y: end[1]-height/2, width, height }, params.coordSys);
           return shape && { type: 'rect', shape, style: api.style() };
         } };
       });
@@ -130,7 +132,7 @@
     }
     state = { element, option, chart: null, loading: false }; states.set(element, state);
     element.classList.add('terminal-chart');
-    if (!element.style.height) element.style.height = '340px';
+    if (!element.style.height) element.style.height = element.clientHeight ? (element.clientHeight + 'px') : '380px';
     element.setAttribute('role','img'); element.setAttribute('aria-label',option.title?.text || 'Interactive financial chart');
     const controls = document.createElement('div'); controls.className = 'chart-controls';
     if (option.terminalViews) {

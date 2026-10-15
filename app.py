@@ -2216,6 +2216,7 @@ def get_full_option_chain_df(
                         'iv': float(iv),
                         'open_interest': _safe_int(r.get('openInterest', 0)),
                         'volume': _safe_int(r.get('volume', 0)),
+                        'underlying_price': float(current_price) if current_price else None,
                     })
 
         return pd.DataFrame(rows) if rows else pd.DataFrame()
