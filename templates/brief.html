@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}{{ ticker }} daily brief — ticker/change{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <h1 class="text-2xl font-semibold tracking-tight mb-1">Daily brief — {{ ticker }}</h1>
+  <p class="text-xs text-zinc-400 mb-6">
+    Nightly per-ticker brief over warmed caches — never fetches on load.
+    {% if brief and brief.meta %}
+    Built {{ brief.meta.built_at[:16].replace('T', ' ') }}
+    {% if brief.meta.published_at %} · Published {{ brief.meta.published_at[:16].replace('T', ' ') }}{% endif %}
+    · contract v{{ brief.meta.contract_version }}
+    {% endif %}
+  </p>
+
+  {% if warming %}
+  <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center text-sm text-zinc-400">
+    Warming — the brief build fills this page from warmed caches. Check back shortly.
+  </div>
+  {% else %}
+  <div class="flex flex-wrap gap-2 mb-6 text-[11px] text-zinc-400">
+    {% for source, as_of in receipts.items() %}
+    <span class="rounded border border-zinc-200 dark:border-zinc-800 px-2 py-1">
+      {{ source }}{% if as_of %} as of {{ as_of[:16].replace('T', ' ') }}{% else %}: no cached data{% endif %}
+    </span>
+    {% endfor %}
+  </div>
+
+  {% for sec in sections %}
+  <section class="mb-6 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+    <h2 class="text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">{{ sec.title }}</h2>
+    {% if sec.state == 'missing' %}
+    <div class="rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700 px-3 py-2 my-2 text-xs italic text-zinc-400">
+      {% if sec.as_of %}No data as of {{ sec.as_of[:16].replace('T', ' ') }}{% else %}No cached data (never fetched){% endif %}
+    </div>
+    {% endif %}
+    <table class="w-full text-sm">
+      <tbody>
+        {% for r in sec.rows %}
+        <tr class="border-b border-zinc-100 dark:border-zinc-800/50" title="{{ r.definition }}">
+          <td class="py-1.5 pr-4 text-zinc-500 dark:text-zinc-400">{{ r.term }}</td>
+          {% if r.value is not none %}
+          <td class="py-1.5 pr-4 text-right font-mono">{{ r.value }}</td>
+          {% else %}
+          <td class="py-1.5 pr-4 text-right text-xs italic text-zinc-400">{{ r.missing_state }}</td>
+          {% endif %}
+          <td class="text-right text-[10px] text-zinc-400 whitespace-nowrap">
+            {{ r.source }}{% if r.value is not none and receipts.get(r.source) %} · as of {{ receipts[r.source][:16].replace('T', ' ') }}{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endfor %}
+  {% endif %}
+</div>
+{% endblock %}

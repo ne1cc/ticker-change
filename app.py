@@ -27,8 +27,12 @@ import ai
 import corporate_actions
 import event_study
 import sec_8k
+import snapshot_store
 import earnings
 import radar
+import radar_contracts
+import brief
+import brief_contracts
 import peers
 import microstructure
 import macro_engine
@@ -3389,6 +3393,170 @@ _RADAR_EXCLUDED_LABELS = {
     "assumed-si": "no short-interest data",
     "below-floor": "below liquidity floor",
 }
+
+
+# --- Daily brief: per-ticker publication + page / JSON twin ----------------
+# Each ticker gets its own snapshot_store namespace ("brief:<TICKER>"), so the
+# current-pointer and last-2 retention are per ticker, exactly as radar's are
+# per universe.
+
+_BRIEF_SECTION_TITLES = {"price": "Last session", "earnings": "Earnings",
+                         "context": "Context"}
+_BRIEF_SECTION_SOURCE = {"price": "prices", "earnings": "earnings",
+                         "context": "fundamentals"}
+_BRIEF_PCT_FRACTIONS = frozenset({
+    "session_return", "gap_pct", "reaction_ret", "print_gap_pct",
+    "post_drift_5d", "post_drift_10d", "post_drift_20d"})
+
+
+def _fmt_usd_compact(v: float) -> str:
+    for div, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
+        if abs(v) >= div:
+            return f"${v / div:.1f}{suffix}"
+    return f"${v:,.0f}"
+
+
+def _fmt_brief_value(key: str, value):
+    if value is None:
+        return None
+    if key == "eps_surprise_nm":
+        return "NM" if value else "meaningful"
+    if key == "div_yield":
+        return f"{float(value):.2f}%"
+    if key in _BRIEF_PCT_FRACTIONS:
+        return f"{float(value) * 100:+.2f}%"
+    if key in ("eps_surprise_pct", "si_change_pct"):
+        return f"{float(value):+.1f}%"
+    if key in ("volume_ratio", "print_rel_volume"):
+        return f"{float(value):.2f}x"
+    if key in ("fwd_pe", "ps"):
+        return f"{float(value):.1f}x"
+    if key == "z_score":
+        return f"{float(value):.2f}σ"
+    if key == "mkt_cap":
+        return _fmt_usd_compact(float(value))
+    return str(value)
+
+
+def _brief_view_sections(out: dict) -> list[dict]:
+    """Contract-driven display rows per section: term, receipt-bearing value,
+    and the declared missing state — no cell renders blank without a label."""
+    sections = []
+    receipts = (out.get("meta") or {}).get("receipts") or {}
+    for name, keys in brief_contracts.METRIC_KEYS_BY_SECTION.items():
+        sec = (out.get("sections") or {}).get(name) or {}
+        rows = []
+        for key in keys:
+            c = brief_contracts.contract(key)
+            rows.append({
+                "term": c["term"],
+                "definition": c["definition"],
+                "value": _fmt_brief_value(key, sec.get(key)),
+                "missing_state": c["missing_state"],
+                "source": c["source"],
+            })
+        sections.append({
+            "name": name,
+            "title": _BRIEF_SECTION_TITLES.get(name, name.title()),
+            "source": _BRIEF_SECTION_SOURCE.get(name, name),
+            "state": sec.get("state"),
+            "as_of": receipts.get(_BRIEF_SECTION_SOURCE.get(name, name)),
+            "rows": rows,
+        })
+    return sections
+
+
+def _brief_provider(ticker: str) -> str:
+    return f"brief:{ticker}"
+
+
+def current_brief(ticker: str) -> dict | None:
+    """The published brief payload for one ticker, or None when never published."""
+    return snapshot_store.current(_brief_provider((ticker or '').strip().upper()))
+
+
+def publish_brief(ticker: str) -> dict | None:
+    """Load context (cache-only) -> build -> validate -> store -> move pointer
+    (last) -> prune. On any failure the pointer stays untouched and the
+    last-good brief serves."""
+    ticker = (ticker or '').strip().upper()
+    if not ticker:
+        return None
+    started = brief.now_iso()
+    try:
+        ctx = brief.load_brief_context(ticker)
+        out = brief.build_brief(ticker, ctx)
+        ok, problems = brief.validate_brief(out)
+        if not ok:
+            print(f"[brief] validation failed for {ticker}: {problems}")
+            return None
+        snapshot_id = snapshot_store.new_snapshot_id()
+        out["meta"]["snapshot_id"] = snapshot_id
+        out["meta"]["build_started_at"] = started
+        out["meta"]["build_completed_at"] = brief.now_iso()
+        out["meta"]["published_at"] = started
+        snapshot_store.publish(_brief_provider(ticker), snapshot_id, out)
+        return out
+    except Exception as e:
+        print(f"[brief] publish failed for {ticker} (pointer untouched): {e}")
+        return None
+
+
+_BRIEF_WARM_INFLIGHT: set[str] = set()
+_BRIEF_WARM_LOCK = threading.Lock()
+
+
+def kick_brief_build(ticker: str, background: bool = True):
+    """Cold-page seam: rebuild one ticker's brief from warmed caches (zero
+    network) in a background thread, deduped while in flight. Never blocks
+    the request."""
+    ticker = (ticker or '').strip().upper()
+    if not ticker:
+        return
+    with _BRIEF_WARM_LOCK:
+        if ticker in _BRIEF_WARM_INFLIGHT:
+            return
+        _BRIEF_WARM_INFLIGHT.add(ticker)
+
+    def _worker():
+        try:
+            publish_brief(ticker)
+        finally:
+            with _BRIEF_WARM_LOCK:
+                _BRIEF_WARM_INFLIGHT.discard(ticker)
+
+    if background:
+        threading.Thread(target=_worker, daemon=True,
+                         name=f"brief-warm-{ticker}").start()
+    else:
+        _worker()
+
+
+@app.route('/brief/<ticker>')
+def brief_page(ticker):
+    """Per-ticker daily brief over the published snapshot; cold renders a
+    warming skeleton and kicks a cache-only background build."""
+    ticker = (ticker or '').strip().upper()
+    out = current_brief(ticker)
+    if out is None:
+        kick_brief_build(ticker)
+        return render_template('brief.html', ticker=ticker, warming=True,
+                               brief=None, sections=[], receipts={})
+    return render_template('brief.html', ticker=ticker, warming=False,
+                           brief=out, sections=_brief_view_sections(out),
+                           receipts=out.get("meta", {}).get("receipts") or {})
+
+
+@app.route('/api/brief/<ticker>')
+def brief_api(ticker):
+    """JSON twin of /brief/<ticker>: the published payload verbatim (it
+    carries no rendered HTML), or a warming stub before the first publish."""
+    ticker = (ticker or '').strip().upper()
+    out = current_brief(ticker)
+    if out is None:
+        kick_brief_build(ticker)
+        return jsonify({"ticker": ticker, "status": "warming"}), 200
+    return jsonify(out)
 
 
 # User-configurable provider keys. Saved server-side (SQLite) so they apply to the
