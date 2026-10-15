@@ -264,6 +264,19 @@ class TestOptionsTerminalFlaskRoutes:
             assert 'Dealer Convention' in html
             assert 'AAPL' in html
 
+    def test_options_terminal_full_width_layout(self, client):
+        """Verify options terminal expands full-width without max-w-7xl constraint,
+        while maintaining alignment across nav, subnav, and main content."""
+        from unittest.mock import patch
+        with patch('app.get_current_price_yfinance', return_value=150.0),              patch('app.get_full_option_chain_df', return_value=pd.DataFrame()):
+            resp = client.get('/options?ticker=AAPL')
+            assert resp.status_code == 200
+            html = resp.get_data(as_text=True)
+            assert '<main class="w-full px-4 sm:px-6 lg:px-8 py-5 sm:py-8">' in html
+            assert '<div class="w-full px-4 sm:px-6 lg:px-8">' in html
+            assert '<div class="w-full px-4 sm:px-6 lg:px-8 flex flex-wrap' in html
+            assert 'max-w-7xl' not in html
+
     def test_api_options_terminal_json_endpoint(self, client, monkeypatch):
         from unittest.mock import patch
         with patch('app.get_current_price_yfinance', return_value=150.0), \
