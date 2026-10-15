@@ -11,6 +11,7 @@ import requests
 from datetime import datetime, timezone
 import yfinance as yf
 import pandas as pd
+from option_chain_data import chain_quality, get_cboe_snapshot, cboe_chain
 
 # Standard boto3 client initialization
 import boto3
@@ -97,6 +98,7 @@ def main():
 
     today_str = datetime.now().strftime('%Y-%m-%d')
     success_count = 0
+    preserved_count = 0
     failures = []
 
     # Step 3: Fetch and upload options data
@@ -135,21 +137,40 @@ def main():
             # Only process the first 6 expirations to stay efficient
             for exp in expirations[:6]:
                 try:
-                    chain = stock.option_chain(exp)
-                    calls = chain.calls.copy() if hasattr(chain, 'calls') else pd.DataFrame()
-                    puts = chain.puts.copy() if hasattr(chain, 'puts') else pd.DataFrame()
-                    if calls.empty and puts.empty:
-                        print(f"[warm-s3] Empty chain returned for {sym} {exp}. Skipping upload.")
-                        continue
+                    try:
+                        chain = stock.option_chain(exp)
+                        calls = chain.calls.copy() if hasattr(chain, 'calls') else pd.DataFrame()
+                        puts = chain.puts.copy() if hasattr(chain, 'puts') else pd.DataFrame()
+                    except Exception as exc:
+                        print(f"[warm-s3] Yahoo chain failed for {sym} {exp}: {exc}")
+                        calls, puts = pd.DataFrame(), pd.DataFrame()
 
                     spot = _spot_price(sym, stock)
                     payload = {
                         'calls': _chain_records(calls),
                         'puts': _chain_records(puts),
                         'spot_price': spot,
+                        'source': 'Yahoo Finance',
                     }
 
                     chain_key = _full_key(f"{sym}/{exp}.json")
+                    if len(chain_quality(payload)) < 6:
+                        fallback = cboe_chain(get_cboe_snapshot(sym), sym, exp)
+                        if fallback and len(chain_quality(fallback)) > len(chain_quality(payload)):
+                            payload = fallback
+                        # Do not overwrite a better snapshot with a partial response.
+                        try:
+                            with s3.get_object(Bucket=s3_bucket, Key=chain_key)['Body'] as body:
+                                previous = json.loads(body.read())
+                            if not chain_quality(payload) >= chain_quality(previous):
+                                print(f"[warm-s3] Preserved better cached chain for {sym} {exp}.")
+                                preserved_count += 1
+                                continue
+                        except s3.exceptions.NoSuchKey:
+                            pass
+                    if not payload['calls'] and not payload['puts']:
+                        print(f"[warm-s3] No chain available for {sym} {exp}. Skipping upload.")
+                        continue
                     s3.put_object(
                         Bucket=s3_bucket,
                         Key=chain_key,
@@ -174,7 +195,7 @@ def main():
     if failures:
         print(f"[warm-s3] FAILED: {len(failures)} error(s); first: {failures[0]}")
         sys.exit(1)
-    if success_count == 0:
+    if success_count + preserved_count == 0:
         print("[warm-s3] FAILED: no option chains were uploaded.")
         sys.exit(1)
 

@@ -732,6 +732,7 @@
 
     <!-- Tab 4: AI Strategy Analyst -->
     <div id="workspace-tab-ai" class="hidden p-4 sm:p-6 space-y-6">
+      <p id="opt-ai-data-source" class="text-xs text-zinc-500 mb-4" aria-live="polite"></p>
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
         <!-- Volatility & Skew Profile -->
@@ -1656,20 +1657,27 @@
 
       optionsAnalysisData = await res.json();
 
-      // Populate volatility stats
-      document.getElementById('opt-ai-atm-iv').innerText = `${optionsAnalysisData.atm_iv.toFixed(1)}%`;
-      document.getElementById('opt-ai-hv30').innerText = `${optionsAnalysisData.hv30.toFixed(1)}%`;
-      document.getElementById('opt-ai-hv90').innerText = `${optionsAnalysisData.hv90.toFixed(1)}%`;
-      document.getElementById('opt-ai-iv-rank').innerText = `${optionsAnalysisData.iv_rank.toFixed(1)}%`;
-      document.getElementById('opt-ai-iv-pct').innerText = `${optionsAnalysisData.iv_percentile.toFixed(1)}%`;
+      const fmt = (value, digits = 1, prefix = '', suffix = '') =>
+        Number.isFinite(value) ? `${prefix}${value.toFixed(digits)}${suffix}` : 'N/A';
+      document.getElementById('opt-ai-data-source').innerText =
+        `${optionsAnalysisData.source || 'Option chain'}${optionsAnalysisData.source_as_of ? ` · Snapshot: ${optionsAnalysisData.source_as_of}` : ''} · Selected expiration: ${optionsAnalysisData.selected_expiration || date}. Missing inputs display as N/A.`;
 
-      const vrp = optionsAnalysisData.atm_iv - optionsAnalysisData.hv30;
-      document.getElementById('opt-ai-vrp').innerText = `${vrp >= 0 ? '+' : ''}${vrp.toFixed(1)}% (${vrp >= 0 ? 'Rich Premium' : 'Discounted'})`;
-      document.getElementById('opt-ai-vrp').className = `font-mono font-semibold ${vrp >= 0 ? 'text-emerald-500' : 'text-rose-500'}`;
+      // Populate volatility stats
+      document.getElementById('opt-ai-atm-iv').innerText = fmt(optionsAnalysisData.atm_iv, 1, '', '%');
+      document.getElementById('opt-ai-hv30').innerText = fmt(optionsAnalysisData.hv30, 1, '', '%');
+      document.getElementById('opt-ai-hv90').innerText = fmt(optionsAnalysisData.hv90, 1, '', '%');
+      document.getElementById('opt-ai-iv-rank').innerText = fmt(optionsAnalysisData.iv_rank, 1, '', '%');
+      document.getElementById('opt-ai-iv-pct').innerText = fmt(optionsAnalysisData.iv_percentile, 1, '', '%');
+
+      const vrp = Number.isFinite(optionsAnalysisData.atm_iv) && Number.isFinite(optionsAnalysisData.hv30)
+        ? optionsAnalysisData.atm_iv - optionsAnalysisData.hv30 : null;
+      document.getElementById('opt-ai-vrp').innerText = vrp === null ? 'N/A'
+        : `${vrp >= 0 ? '+' : ''}${vrp.toFixed(1)}% (${vrp >= 0 ? 'Rich Premium' : 'Discounted'})`;
+      document.getElementById('opt-ai-vrp').className = `font-mono font-semibold ${vrp === null ? 'text-zinc-500' : vrp >= 0 ? 'text-emerald-500' : 'text-rose-500'}`;
 
       // Expected range
-      document.getElementById('opt-ai-em-bs').innerText = `±$${optionsAnalysisData.expected_move_bs.toFixed(2)}`;
-      document.getElementById('opt-ai-em-straddle').innerText = `±$${optionsAnalysisData.expected_move_straddle.toFixed(2)}`;
+      document.getElementById('opt-ai-em-bs').innerText = fmt(optionsAnalysisData.expected_move_bs, 2, '±$');
+      document.getElementById('opt-ai-em-straddle').innerText = fmt(optionsAnalysisData.expected_move_straddle, 2, '±$');
 
       const gex = optionsAnalysisData.gex_stats;
       if (gex) {
@@ -1682,13 +1690,13 @@
         document.getElementById('opt-ai-gamma-flip').innerText = 'N/A';
       }
 
-      document.getElementById('opt-ai-max-pain').innerText = `$${optionsAnalysisData.max_pain.toFixed(2)}`;
+      document.getElementById('opt-ai-max-pain').innerText = fmt(optionsAnalysisData.max_pain, 2, '$');
 
       // Volume & Sentiment
-      document.getElementById('opt-ai-vol-pcr').innerText = optionsAnalysisData.vol_pcr.toFixed(2);
-      document.getElementById('opt-ai-oi-pcr').innerText = optionsAnalysisData.oi_pcr.toFixed(2);
+      document.getElementById('opt-ai-vol-pcr').innerText = fmt(optionsAnalysisData.vol_pcr, 2);
+      document.getElementById('opt-ai-oi-pcr').innerText = fmt(optionsAnalysisData.oi_pcr, 2);
 
-      const fmtBig = v => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v;
+      const fmtBig = v => Number.isFinite(v) ? (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v) : 'N/A';
       document.getElementById('opt-ai-call-vol').innerText = fmtBig(optionsAnalysisData.total_call_vol);
       document.getElementById('opt-ai-put-vol').innerText = fmtBig(optionsAnalysisData.total_put_vol);
       document.getElementById('opt-ai-call-oi').innerText = fmtBig(optionsAnalysisData.total_call_oi);
