@@ -3560,11 +3560,24 @@ def _build_brief_on_demand(ticker: str) -> dict | None:
             _BRIEF_WARM_INFLIGHT.discard(ticker)
 
 
+def _brief_ai_garnish(ticker: str, out: dict) -> dict | None:
+    """Render-time attachment seam for the labeled AI interpretation: the
+    published payload is handed to ai.py's cache-gated provider chain, and any
+    failure yields None so the deterministic page never depends on it."""
+    try:
+        return ai.generate_brief_interpretation(ticker, out)
+    except Exception as e:
+        print(f"[brief] ai garnish failed for {ticker}: {e}")
+        return None
+
+
 @app.route('/brief/<ticker>')
 def brief_page(ticker):
     """Per-ticker daily brief over the published snapshot; a cold page builds
     once on demand from cached context and serves it, falling back to the
-    warming skeleton plus a background kick when the build cannot."""
+    warming skeleton plus a background kick when the build cannot. An optional
+    labeled AI interpretation is attached at render time — never inside the
+    published payload, so the contract and its JSON twin stay AI-free."""
     ticker = (ticker or '').strip().upper()
     out = current_brief(ticker)
     if out is None and ticker:
@@ -3572,10 +3585,11 @@ def brief_page(ticker):
     if out is not None:
         return render_template('brief.html', ticker=ticker, warming=False,
                                brief=out, sections=_brief_view_sections(out),
-                               receipts=out.get("meta", {}).get("receipts") or {})
+                               receipts=out.get("meta", {}).get("receipts") or {},
+                               garnish=_brief_ai_garnish(ticker, out))
     kick_brief_build(ticker)
     return render_template('brief.html', ticker=ticker, warming=True,
-                           brief=None, sections=[], receipts={})
+                           brief=None, sections=[], receipts={}, garnish=None)
 
 
 @app.route('/api/brief/<ticker>')
