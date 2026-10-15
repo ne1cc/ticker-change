@@ -3051,20 +3051,42 @@ def _universe_rank_scores(price_batch, symbols, strategy_id) -> dict:
     drops out. The ticker tab's rank has always been computed against each
     symbol's own trailing bars, and stays that way.
     """
-    is_sma = _strategy_family(strategy_id) == "sma"
+    fam = _strategy_family(strategy_id)
     scores = {}
     for sym in symbols:
         sym_df = price_batch.get(sym)
         if sym_df is None:
             continue
         close = sym_df["close"]
-        series = (momentum_engine.sma_spread(close) if is_sma
-                  else momentum_engine.rolling_score(close))
-        if not len(series):
+        if not len(close):
             continue
-        value = series.iloc[-1]
-        if pd.notna(value):
-            scores[sym] = float(value)
+        if fam == "sma":
+            series = momentum_engine.sma_spread(close)
+            if len(series):
+                val = series.iloc[-1]
+                if pd.notna(val):
+                    scores[sym] = float(val)
+        elif fam == "rsi":
+            sma200 = close.rolling(200).mean()
+            r2 = momentum_engine.calc_rsi(close, 2)
+            c = close.iloc[-1]
+            s = sma200.iloc[-1]
+            r = r2.iloc[-1]
+            val = (100.0 - r) if (pd.notna(c) and pd.notna(s) and c > s) else -r
+            if pd.notna(val):
+                scores[sym] = float(val)
+        elif fam == "composite":
+            series = momentum_engine.composite_score_series(close)
+            if len(series):
+                val = series.iloc[-1]
+                if pd.notna(val):
+                    scores[sym] = float(val)
+        else:
+            series = momentum_engine.rolling_score(close)
+            if len(series):
+                val = series.iloc[-1]
+                if pd.notna(val):
+                    scores[sym] = float(val)
     return scores
 
 
@@ -3091,7 +3113,7 @@ def _cached_universe_scores(strategy_id, symbols, price_df):
     `score_universe` over ~500 symbols dominates /strategies load time on a
     small shared CPU; scores only change when cached closes do. Returns
     (scores, spreads) — scores as {sym: MomentumScore}, spreads as {sym: float}
-    (sma family only, else {}). Stampede-protected: lock losers wait briefly
+    (sma/rsi/composite family only, else {}). Stampede-protected: lock losers wait briefly
     for the winner's payload, then compute anyway (slow beats failing).
     """
     key = f"scores:{strategy_id}"
@@ -3099,8 +3121,14 @@ def _cached_universe_scores(strategy_id, symbols, price_df):
     def _compute():
         hurdle = momentum_engine.absolute_hurdle(strategy_id)
         scores = momentum_engine.score_universe(price_df, symbols, hurdle=hurdle)
-        spreads = (momentum_engine.sma_score_universe(price_df, symbols)
-                   if _strategy_family(strategy_id) == "sma" else {})
+        fam = _strategy_family(strategy_id)
+        spreads = {}
+        if fam == "sma":
+            spreads = momentum_engine.sma_score_universe(price_df, symbols)
+        elif fam == "rsi":
+            spreads = momentum_engine.rsi_score_universe(price_df, symbols)
+        elif fam == "composite":
+            spreads = momentum_engine.composite_score_universe(price_df, symbols)
         payload = {
             "scores": {sym: {"symbol": s.symbol, "mom_12_1": s.mom_12_1,
                              "mom_6m": s.mom_6m, "mom_3m": s.mom_3m,
@@ -3140,12 +3168,9 @@ def _strategies_universe_data(symbols, price_df, strategy_id, period):
         return None
 
     scores, spreads = _cached_universe_scores(strategy_id, symbols, price_df)
+    fam = _strategy_family(strategy_id)
 
-    if _strategy_family(strategy_id) == "sma":
-        # SMA spread is the primary score and sort key; `score_universe` is
-        # still consulted purely to populate the volatility column so the
-        # table keeps one shape across strategies.
-        spreads = momentum_engine.sma_score_universe(price_df, symbols)
+    if fam == "sma":
         ranked = sorted(spreads.items(), key=lambda kv: kv[1], reverse=True)
         leaderboard = []
         for idx, (sym, spread) in enumerate(ranked):
@@ -3157,6 +3182,32 @@ def _strategies_universe_data(symbols, price_df, strategy_id, period):
                 "vol": round(vol * 100, 1),
                 "risk_adj": round(spread / vol, 2) if vol > 0 else 0.0,
                 "passes_absolute": spread > 0,
+                "rank": idx + 1,
+            })
+    elif fam == "rsi":
+        ranked = sorted(spreads.items(), key=lambda kv: kv[1], reverse=True)
+        leaderboard = []
+        for idx, (sym, spread) in enumerate(ranked):
+            vol = scores[sym].ann_vol_1y if sym in scores else 0.0
+            leaderboard.append({
+                "symbol": sym,
+                "score": round(spread, 1),
+                "vol": round(vol * 100, 1),
+                "risk_adj": round(spread / (vol * 100), 2) if vol > 0 else 0.0,
+                "passes_absolute": spread > 0,
+                "rank": idx + 1,
+            })
+    elif fam == "composite":
+        ranked = sorted(spreads.items(), key=lambda kv: kv[1], reverse=True)
+        leaderboard = []
+        for idx, (sym, c_score) in enumerate(ranked):
+            vol = scores[sym].ann_vol_1y if sym in scores else 0.0
+            leaderboard.append({
+                "symbol": sym,
+                "score": round(c_score, 1),
+                "vol": round(vol * 100, 1),
+                "risk_adj": round(c_score / (vol * 100), 2) if vol > 0 else 0.0,
+                "passes_absolute": c_score >= 50.0,
                 "rank": idx + 1,
             })
     else:
@@ -3193,15 +3244,11 @@ def _strategies_universe_data(symbols, price_df, strategy_id, period):
             if has_qqq:
                 qqq_series = qqq_series[mask]
 
-    # Stats (geometric CAGR + standard Sharpe/Sortino) plus the
-    # benchmark-relative alpha/beta/information ratio that actually tell you
-    # whether the strategy added value versus just owning the index.
     strat_stats = _perf_stats(strat_series)
     spy_stats = _perf_stats(spy_series)
     qqq_stats = _perf_stats(qqq_series)
     rel_spy = _relative_stats(strat_series, spy_series)
 
-    # Data-driven verdict — describe what actually happened, don't assert a win.
     excess_spy = round(strat_stats["total_return"] - spy_stats["total_return"], 1)
     beat_spy = strat_stats["total_return"] > spy_stats["total_return"]
     beat_qqq = strat_stats["total_return"] > qqq_stats["total_return"]
@@ -3268,20 +3315,13 @@ def _strategies_universe_chart(dates, strat_series, spy_series, qqq_series,
 # --------------------------------------------------------------------------
 
 def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, period):
-    """Single-ticker long/cash trend backtest plus its universe rank.
-
-    `df` is the searched ticker's own price frame (caller has already
-    rejected short histories); `price_batch` is the batched read for the
-    whole universe, used only for the rank display.
-
-    Returns None when `df` is too short to score (mirrors
-    `_strategies_universe_data` / `_strategies_screener_data`) so callers
-    that bypass the route's own length guard don't hit an AttributeError or
-    IndexError further down.
-    """
+    """Single-ticker long/cash trend or mean-reversion backtest plus its universe rank."""
     close = df['close']
     daily_rets = close.pct_change(fill_method=None)
-    is_sma = _strategy_family(strategy_id) == "sma"
+    fam = _strategy_family(strategy_id)
+    is_sma = fam == "sma"
+    is_rsi = fam == "rsi"
+    is_composite = fam == "composite"
     hurdle = momentum_engine.absolute_hurdle(strategy_id)
 
     score = momentum_engine.score_series(close, symbol=symbol)
@@ -3293,12 +3333,15 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
     univ_ranks = {sym: idx + 1 for idx, (sym, _) in enumerate(ranked)}
     rank = univ_ranks.get(symbol, len(symbols))
 
-    # The signal series the strategy trades on, and the threshold it crosses.
-    # A zero threshold stays an int — Plotly serialises `0` and `0.0`
-    # differently into the embedded chart JSON.
     if is_sma:
         signal_series = momentum_engine.sma_spread(close)
         threshold = 0
+    elif is_rsi:
+        signal_series = momentum_engine.calc_rsi(close, 2)
+        threshold = 15.0
+    elif is_composite:
+        signal_series = momentum_engine.composite_score_series(close)
+        threshold = 55.0
     else:
         signal_series = momentum_engine.rolling_score(close)
         threshold = 0 if hurdle is None else hurdle
@@ -3323,14 +3366,10 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
     strat_stats = _perf_stats(strat_series)
     hold_stats = _perf_stats(hold_series)
 
-    # Fraction of the backtest the trend signal was actually invested.
     pct_invested = round(float(trade_signals.mean()) * 100, 1) if len(trade_signals) else 0.0
-
     cum_strat = (1 + strat_series).cumprod() * 10000
     cum_hold = (1 + hold_series).cumprod() * 10000
 
-    # Full-length Buy & Hold: spans the entire available ticker history
-    # (the strategy needs 252 days of warm-up, but Buy & Hold can start from day 1)
     hold_full_dates = df.index
     hold_full_rets = daily_rets.fillna(0.0)
     if start_cutoff is not None:
@@ -3346,6 +3385,7 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
     # Individual round-trip trade returns, charged entry + exit cost.
     cost_bps = momentum_engine.DEFAULT_COST_BPS / 1e4
     trade_records = []
+    trade_history = []
     in_trade = False
     entry_idx = 0
     backtest_start_idx = df.index.get_loc(backtest_dates[0])
@@ -3356,9 +3396,24 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
             entry_idx = idx
         elif sig == 0 and in_trade:
             in_trade = False
-            trade_records.append(close.iloc[backtest_start_idx + idx] / close.iloc[backtest_start_idx + entry_idx] - 1 - cost_bps * 2)
+            e_price = float(close.iloc[backtest_start_idx + entry_idx])
+            x_price = float(close.iloc[backtest_start_idx + idx])
+            t_ret = (x_price / e_price - 1 - cost_bps * 2)
+            trade_records.append(t_ret)
+            trade_history.append({
+                "entry_date": backtest_dates[entry_idx].strftime('%Y-%m-%d'),
+                "exit_date": backtest_dates[idx].strftime('%Y-%m-%d'),
+                "entry_price": round(e_price, 2),
+                "exit_price": round(x_price, 2),
+                "return_pct": round(t_ret * 100, 2),
+                "duration_days": int((backtest_dates[idx] - backtest_dates[entry_idx]).days),
+                "is_win": t_ret > 0,
+            })
     if in_trade:
-        trade_records.append(close.iloc[-1] / close.iloc[backtest_start_idx + entry_idx] - 1 - cost_bps)
+        e_price = float(close.iloc[backtest_start_idx + entry_idx])
+        curr_price = float(close.iloc[-1])
+        t_ret = (curr_price / e_price - 1 - cost_bps)
+        trade_records.append(t_ret)
 
     trade_count = len(trade_records)
     wins = [r for r in trade_records if r > 0]
@@ -3366,26 +3421,91 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
     win_rate = round(len(wins) / trade_count * 100, 1) if trade_count > 0 else 0.0
     profit_factor = round(sum(wins) / abs(sum(losses)), 2) if losses and sum(losses) != 0.0 else (99.0 if wins else 0.0)
 
-    # Rolling signal series for the score chart, on the same period window.
-    roll_series = signal_series.iloc[warmup:] * 100
+    # Current position & tactical cockpit details
+    curr_sig = trade_signals.iloc[-1] if len(trade_signals) else 0.0
+    in_position = bool(curr_sig > 0)
+    position_days = 0
+    for i in range(len(trade_signals) - 1, -1, -1):
+        if trade_signals.iloc[i] == curr_sig:
+            position_days += 1
+        else:
+            break
+
+    entry_price = None
+    entry_date_str = None
+    unrealized_pct = None
+    if in_position and len(trade_signals):
+        e_idx = max(0, len(trade_signals) - position_days)
+        entry_date_str = backtest_dates[e_idx].strftime('%Y-%m-%d')
+        entry_price = round(float(close.loc[backtest_dates[e_idx]]), 2)
+        unrealized_pct = round(((float(close.iloc[-1]) / entry_price) - 1) * 100, 2)
+
+    # Rolling signal series for the score chart
     roll_dates = df.index[warmup:]
+    roll_series = signal_series.iloc[warmup:]
+    if fam in ("sma", "momentum"):
+        roll_series = roll_series * 100
     if start_cutoff is not None:
         mask_roll = roll_dates >= start_cutoff
         if mask_roll.any():
             roll_dates = roll_dates[mask_roll]
             roll_series = roll_series[mask_roll]
 
-    current = signal_series.iloc[-1]
-    bullish = bool(pd.notna(current) and current > threshold)
+    # Engine status details
+    p_last = float(close.iloc[-1])
     if is_sma:
-        trend_state = "GOLDEN CROSS (Long)" if bullish else "DEATH CROSS (Flat/Cash)"
+        sp_now = float(momentum_engine.sma_spread(close).iloc[-1]) * 100
+        engine_metric_label = "50/200 SMA Spread"
+        engine_metric_val = f"{sp_now:+.2f}%"
+        engine_metric_status = "Golden Cross Active (Long)" if sp_now > 0 else "Death Cross Active (Cash)"
+        trend_state = "GOLDEN CROSS (Long)" if in_position else "DEATH CROSS (Cash)"
+    elif is_rsi:
+        r2_now = float(momentum_engine.calc_rsi(close, 2).iloc[-1])
+        s200_now = float(close.rolling(200).mean().iloc[-1])
+        engine_metric_label = "Connors RSI(2)"
+        engine_metric_val = f"{r2_now:.1f}"
+        engine_metric_status = (
+            f"Oversold Entry (<15) · 200 SMA: ${s200_now:.2f}"
+            if in_position else f"Neutral Pullback Zone · 200 SMA: ${s200_now:.2f}"
+        )
+        trend_state = "OVERSOLD PULLBACK (Long)" if in_position else "WAITING FOR DIP (Cash)"
+    elif is_composite:
+        c_now = float(momentum_engine.composite_score_series(close).iloc[-1])
+        engine_metric_label = "Composite Confluence"
+        engine_metric_val = f"{c_now:.0f} / 100"
+        engine_metric_status = (
+            "Bullish Confluence Active (≥55)" if in_position else "Defensive Regimes (<45)"
+        )
+        trend_state = "CONFLUENCE BUY (Long)" if in_position else "DEFENSIVE CASH (Flat)"
     else:
-        trend_state = "BULLISH (Long)" if bullish else "BEARISH (Flat/Cash)"
-    trend_color = "text-emerald-500" if bullish else "text-rose-500"
+        m_now = score.mom_12_1 * 100
+        engine_metric_label = "12-1 Momentum"
+        engine_metric_val = f"{m_now:+.2f}%"
+        engine_metric_status = (
+            f"Risk-Adj: {score.risk_adj} · Vol: {score.ann_vol_1y * 100:.1f}%"
+        )
+        trend_state = "BULLISH (Long)" if in_position else "BEARISH (Flat/Cash)"
+
+    trend_color = "text-emerald-500" if in_position else "text-amber-500"
+
+    # Compute SPY benchmark stats for comparison
+    spy_df = price_batch.get("SPY")
+    if spy_df is not None and len(spy_df):
+        spy_close = spy_df["close"]
+        spy_sub = spy_close.pct_change(fill_method=None).reindex(backtest_dates).fillna(0.0)
+        rel_spy = momentum_engine.relative_stats(strat_series, spy_sub)
+    else:
+        rel_spy = {"alpha": 0.0, "beta": 1.0, "info_ratio": 0.0, "corr": 1.0}
+
+    # Moving averages for the chart
+    sma50 = close.rolling(50).mean().reindex(backtest_dates)
+    sma200 = close.rolling(200).mean().reindex(backtest_dates)
+    sma5 = close.rolling(5).mean().reindex(backtest_dates)
+    close_sub = close.reindex(backtest_dates)
 
     return {
         "symbol": symbol,
-        "latest_price": float(close.iloc[-1]),
+        "latest_price": p_last,
         "mom_12_1": round(score.mom_12_1 * 100, 2),
         "mom_6m": round(score.mom_6m * 100, 2),
         "mom_3m": round(score.mom_3m * 100, 2),
@@ -3394,14 +3514,26 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
         "total_rank_count": len(rank_scores),
         "trend_state": trend_state,
         "trend_color": trend_color,
+        "in_position": in_position,
+        "position_days": position_days,
+        "entry_date": entry_date_str,
+        "entry_price": entry_price,
+        "unrealized_pct": unrealized_pct,
+        "engine_metric_label": engine_metric_label,
+        "engine_metric_val": engine_metric_val,
+        "engine_metric_status": engine_metric_status,
         "strat_stats": strat_stats,
         "hold_stats": hold_stats,
         "trade_count": trade_count,
+        "wins_count": len(wins),
+        "losses_count": len(losses),
         "win_rate": win_rate,
         "profit_factor": profit_factor,
         "risk_adj_mom": score.risk_adj,
         "ann_vol_1y": round(score.ann_vol_1y * 100, 1),
         "pct_invested": pct_invested,
+        "rel_spy": rel_spy,
+        "trade_history": trade_history[-10:],
         "start_date": backtest_dates[0].strftime('%Y-%m-%d'),
         "end_date": backtest_dates[-1].strftime('%Y-%m-%d'),
         "_series": {
@@ -3415,76 +3547,177 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
             "roll_dates": roll_dates,
             "roll_series": roll_series,
             "threshold": threshold,
+            "close": close_sub,
+            "sma50": sma50,
+            "sma200": sma200,
+            "sma5": sma5,
+            "trade_signals": trade_signals,
         },
     }
 
 
 def _strategies_ticker_charts(symbol, series, strategy_id) -> dict:
-    """Performance, drawdown and rolling-score charts for the ticker tab."""
+    """Synchronized Interactive Canvas (Price + Signals on top, Growth & DD on bottom)
+    plus rolling indicator diagnostic chart."""
     dates_str = series["dates"].strftime('%Y-%m-%d').tolist()
     cum_strat = series["cum_strat"]
     cum_hold = series["cum_hold"]
+    close = series["close"]
+    strat_label = momentum_engine.STRATEGIES.get(strategy_id, {}).get("label", strategy_id)
+    fam = _strategy_family(strategy_id)
 
-    fig_perf = go.Figure()
-    fig_perf.add_trace(go.Scatter(x=dates_str, y=cum_strat.tolist(), mode='lines', name='Trend-Following (Long/Cash)', line=dict(color='#fbbf24', width=2), hoverlabel=dict(bgcolor='#000000', bordercolor='#fbbf24', font=dict(color='#fbbf24'))))
-    fig_perf.add_trace(go.Scatter(x=series["hold_full_dates"].strftime('%Y-%m-%d').tolist(), y=series["cum_hold_full"].tolist(), mode='lines', name=f'Buy & Hold {symbol}', line=dict(color='#64748b', width=1.5, dash='dash')))
-
-    if not series["buy_dates"].empty:
-        fig_perf.add_trace(go.Scatter(
-            x=series["buy_dates"].strftime('%Y-%m-%d').tolist(),
-            y=cum_strat.loc[series["buy_dates"]].tolist(),
-            mode='markers',
-            marker=dict(symbol='triangle-up', size=10, color='#10b981', line=dict(width=1, color='black')),
-            name='Buy Entry'
-        ))
-    if not series["sell_dates"].empty:
-        fig_perf.add_trace(go.Scatter(
-            x=series["sell_dates"].strftime('%Y-%m-%d').tolist(),
-            y=cum_strat.loc[series["sell_dates"]].tolist(),
-            mode='markers',
-            marker=dict(symbol='triangle-down', size=10, color='#ef4444', line=dict(width=1, color='black')),
-            name='Sell Exit'
-        ))
-
-    fig_perf.update_layout(
-        title=f'Trend-Following Strategy vs Buy & Hold for {symbol}',
-        xaxis_title='Date',
-        yaxis_title='Portfolio Value ($)',
-        template='plotly_white',
-        height=350,
-        margin=dict(l=50, r=30, t=60, b=80),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        showlegend=True,
-        legend=dict(orientation='h', yanchor='top', y=-0.18, xanchor='center', x=0.5),
-        font=dict(family='Inter, sans-serif')
+    # 1. SYNCHRONIZED INTERACTIVE CANVAS
+    fig_canvas = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        row_heights=[0.58, 0.42],
+        specs=[[{"secondary_y": False}], [{"secondary_y": True}]],
     )
 
+    # --- Upper Pane: Price, Overlays, and Execution Flags ---
+    fig_canvas.add_trace(
+        go.Scatter(x=dates_str, y=close.tolist(), mode='lines', name=f'{symbol} Price',
+                   line=dict(color='#38bdf8', width=2)),
+        row=1, col=1
+    )
+
+    if fam == "sma":
+        fig_canvas.add_trace(
+            go.Scatter(x=dates_str, y=series["sma50"].tolist(), mode='lines', name='50-day SMA',
+                       line=dict(color='#fbbf24', width=1.4)),
+            row=1, col=1
+        )
+        fig_canvas.add_trace(
+            go.Scatter(x=dates_str, y=series["sma200"].tolist(), mode='lines', name='200-day SMA',
+                       line=dict(color='#a855f7', width=1.4)),
+            row=1, col=1
+        )
+    elif fam == "rsi":
+        fig_canvas.add_trace(
+            go.Scatter(x=dates_str, y=series["sma200"].tolist(), mode='lines', name='200-day SMA (Regime)',
+                       line=dict(color='#a855f7', width=1.4, dash='dash')),
+            row=1, col=1
+        )
+        fig_canvas.add_trace(
+            go.Scatter(x=dates_str, y=series["sma5"].tolist(), mode='lines', name='5-day SMA (Exit)',
+                       line=dict(color='#34d399', width=1.2)),
+            row=1, col=1
+        )
+    else:
+        fig_canvas.add_trace(
+            go.Scatter(x=dates_str, y=series["sma50"].tolist(), mode='lines', name='50-day SMA',
+                       line=dict(color='#fbbf24', width=1.4)),
+            row=1, col=1
+        )
+        fig_canvas.add_trace(
+            go.Scatter(x=dates_str, y=series["sma200"].tolist(), mode='lines', name='200-day SMA',
+                       line=dict(color='#a855f7', width=1.4)),
+            row=1, col=1
+        )
+
+    if not series["buy_dates"].empty:
+        buy_prices = [close.loc[d] if d in close.index else None for d in series["buy_dates"]]
+        fig_canvas.add_trace(
+            go.Scatter(
+                x=series["buy_dates"].strftime('%Y-%m-%d').tolist(),
+                y=buy_prices,
+                mode='markers',
+                marker=dict(symbol='triangle-up', size=11, color='#10b981', line=dict(width=1, color='#047857')),
+                name='Buy Entry'
+            ),
+            row=1, col=1
+        )
+    if not series["sell_dates"].empty:
+        sell_prices = [close.loc[d] if d in close.index else None for d in series["sell_dates"]]
+        fig_canvas.add_trace(
+            go.Scatter(
+                x=series["sell_dates"].strftime('%Y-%m-%d').tolist(),
+                y=sell_prices,
+                mode='markers',
+                marker=dict(symbol='triangle-down', size=11, color='#ef4444', line=dict(width=1, color='#b91c1c')),
+                name='Exit to Cash'
+            ),
+            row=1, col=1
+        )
+
+    # --- Lower Pane: Strategy Equity Curve & Underwater Drawdown ---
     dd_strat = (cum_strat - cum_strat.cummax()) / cum_strat.cummax() * 100
     dd_hold = (cum_hold - cum_hold.cummax()) / cum_hold.cummax() * 100
 
-    fig_dd = go.Figure()
-    fig_dd.add_trace(go.Scatter(x=dates_str, y=dd_strat.tolist(), mode='lines', name='Trend-Following DD', line=dict(color='#fbbf24', width=1.5), fill='tozeroy', fillcolor='rgba(251,191,36,0.1)'))
-    fig_dd.add_trace(go.Scatter(x=dates_str, y=dd_hold.tolist(), mode='lines', name=f'{symbol} DD', line=dict(color='#ef4444', width=1, dash='dash'), fill='tozeroy', fillcolor='rgba(239,68,68,0.15)'))
-
-    fig_dd.update_layout(
-        title='Drawdown Comparison (%)',
-        xaxis_title='Date',
-        yaxis_title='Drawdown (%)',
-        template='plotly_white',
-        height=250,
-        margin=dict(l=50, r=30, t=60, b=80),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        showlegend=True,
-        legend=dict(orientation='h', yanchor='top', y=-0.22, xanchor='center', x=0.5),
-        font=dict(family='Inter, sans-serif')
+    fig_canvas.add_trace(
+        go.Scatter(x=dates_str, y=cum_strat.tolist(), mode='lines', name='Strategy ($10k)',
+                   line=dict(color='#fbbf24', width=2.5)),
+        row=2, col=1, secondary_y=False
+    )
+    fig_canvas.add_trace(
+        go.Scatter(x=dates_str, y=cum_hold.tolist(), mode='lines', name=f'Buy & Hold {symbol} ($10k)',
+                   line=dict(color='#94a3b8', width=1.5, dash='dash')),
+        row=2, col=1, secondary_y=False
     )
 
-    if _strategy_family(strategy_id) == "sma":
+    fig_canvas.add_trace(
+        go.Scatter(x=dates_str, y=dd_strat.tolist(), mode='lines', name='Strategy Drawdown (%)',
+                   line=dict(color='#f59e0b', width=1), fill='tozeroy', fillcolor='rgba(245, 158, 11, 0.12)'),
+        row=2, col=1, secondary_y=True
+    )
+    fig_canvas.add_trace(
+        go.Scatter(x=dates_str, y=dd_hold.tolist(), mode='lines', name=f'{symbol} Drawdown (%)',
+                   line=dict(color='#ef4444', width=1, dash='dot')),
+        row=2, col=1, secondary_y=True
+    )
+
+    fig_canvas.update_layout(
+        template='plotly_white',
+        height=620,
+        margin=dict(l=55, r=55, t=30, b=60),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        hovermode='x unified',
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5, font=dict(size=11)),
+        font=dict(family='Inter, sans-serif')
+    )
+    fig_canvas.update_xaxes(
+        showspikes=True, spikemode='across', spikesnap='cursor', spikethickness=1,
+        spikecolor='#71717a', gridcolor='rgba(113, 113, 122, 0.15)', row=1, col=1
+    )
+    fig_canvas.update_xaxes(
+        showspikes=True, spikemode='across', spikesnap='cursor', spikethickness=1,
+        spikecolor='#71717a', gridcolor='rgba(113, 113, 122, 0.15)', row=2, col=1
+    )
+    fig_canvas.update_yaxes(title_text=f'{symbol} Price ($)', tickformat='$.2f', row=1, col=1, gridcolor='rgba(113, 113, 122, 0.15)')
+    fig_canvas.update_yaxes(title_text='Portfolio ($10k)', tickformat='$,.0f', row=2, col=1, secondary_y=False, gridcolor='rgba(113, 113, 122, 0.15)')
+    fig_canvas.update_yaxes(title_text='Drawdown (%)', ticksuffix='%', range=[-100, 5], showgrid=False, row=2, col=1, secondary_y=True)
+
+    # 2. SEPARATE PERF & DD CHARTS (backward compatibility for macros/tests)
+    fig_perf = go.Figure()
+    fig_perf.add_trace(go.Scatter(x=dates_str, y=cum_strat.tolist(), mode='lines', name='Strategy (Long/Cash)', line=dict(color='#fbbf24', width=2)))
+    fig_perf.add_trace(go.Scatter(x=series["hold_full_dates"].strftime('%Y-%m-%d').tolist(), y=series["cum_hold_full"].tolist(), mode='lines', name=f'Buy & Hold {symbol}', line=dict(color='#64748b', width=1.5, dash='dash')))
+    if not series["buy_dates"].empty:
+        fig_perf.add_trace(go.Scatter(x=series["buy_dates"].strftime('%Y-%m-%d').tolist(), y=cum_strat.loc[series["buy_dates"]].tolist(), mode='markers', marker=dict(symbol='triangle-up', size=10, color='#10b981', line=dict(width=1, color='black')), name='Buy Entry'))
+    if not series["sell_dates"].empty:
+        fig_perf.add_trace(go.Scatter(x=series["sell_dates"].strftime('%Y-%m-%d').tolist(), y=cum_strat.loc[series["sell_dates"]].tolist(), mode='markers', marker=dict(symbol='triangle-down', size=10, color='#ef4444', line=dict(width=1, color='black')), name='Sell Exit'))
+    fig_perf.update_layout(title=f'{strat_label} vs Buy & Hold for {symbol}', xaxis_title='Date', yaxis_title='Portfolio Value ($)', template='plotly_white', height=350, margin=dict(l=50, r=30, t=60, b=80), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=True, legend=dict(orientation='h', yanchor='top', y=-0.18, xanchor='center', x=0.5), font=dict(family='Inter, sans-serif'))
+
+    fig_dd = go.Figure()
+    fig_dd.add_trace(go.Scatter(x=dates_str, y=dd_strat.tolist(), mode='lines', name='Strategy DD', line=dict(color='#fbbf24', width=1.5), fill='tozeroy', fillcolor='rgba(251,191,36,0.1)'))
+    fig_dd.add_trace(go.Scatter(x=dates_str, y=dd_hold.tolist(), mode='lines', name=f'{symbol} DD', line=dict(color='#ef4444', width=1, dash='dash'), fill='tozeroy', fillcolor='rgba(239,68,68,0.15)'))
+    fig_dd.update_layout(title='Drawdown Comparison (%)', xaxis_title='Date', yaxis_title='Drawdown (%)', template='plotly_white', height=250, margin=dict(l=50, r=30, t=60, b=80), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=True, legend=dict(orientation='h', yanchor='top', y=-0.22, xanchor='center', x=0.5), font=dict(family='Inter, sans-serif'))
+
+    # 3. ROLLING INDICATOR DIAGNOSTIC CHART
+    if fam == "sma":
         score_name, score_axis = 'SMA 50/200 Spread %', 'SMA Spread (%)'
         score_title = f'Rolling SMA 50/200 Spread (%) for {symbol}'
-        threshold_text = "Golden Cross Threshold (Trend Switch)"
+        threshold_text = "Golden Cross Line (0%)"
+    elif fam == "rsi":
+        score_name, score_axis = 'Connors RSI(2)', 'RSI (2-day)'
+        score_title = f'Rolling 2-Day RSI for {symbol}'
+        threshold_text = "Oversold Entry (15)"
+    elif fam == "composite":
+        score_name, score_axis = 'Composite Score', 'Score (0-100)'
+        score_title = f'Rolling Multi-Factor Composite Score for {symbol}'
+        threshold_text = "Bullish Entry (55)"
     else:
         score_name, score_axis = '12-1 Momentum %', 'Momentum Score (%)'
         score_title = f'Rolling 12-1 Momentum Score (%) for {symbol}'
@@ -3492,9 +3725,11 @@ def _strategies_ticker_charts(symbol, series, strategy_id) -> dict:
                           else "Absolute Hurdle (Trend Switch)")
 
     fig_roll = go.Figure()
-    fig_roll.add_trace(go.Scatter(x=series["roll_dates"].strftime('%Y-%m-%d').tolist(), y=series["roll_series"].tolist(), mode='lines', name=score_name, line=dict(color='#818cf8', width=1.5)))
+    fig_roll.add_trace(go.Scatter(x=series["roll_dates"].strftime('%Y-%m-%d').tolist(),
+                                  y=series["roll_series"].tolist(),
+                                  mode='lines', name=score_name, line=dict(color='#818cf8', width=1.5)))
     fig_roll.add_hline(
-        y=series["threshold"] * 100,
+        y=series["threshold"] * (100 if fam in ("sma", "momentum") else 1),
         line_dash='dash',
         line_color='#ef4444',
         line_width=1,
@@ -3502,6 +3737,18 @@ def _strategies_ticker_charts(symbol, series, strategy_id) -> dict:
         annotation_position="bottom right",
         annotation_font=dict(size=10, color='#71717a')
     )
+    if fam == "rsi":
+        fig_roll.add_hline(
+            y=70, line_dash='dot', line_color='#10b981', line_width=1,
+            annotation_text="Overbought Exit (70)", annotation_position="top right",
+            annotation_font=dict(size=10, color='#10b981')
+        )
+    elif fam == "composite":
+        fig_roll.add_hline(
+            y=45, line_dash='dot', line_color='#ef4444', line_width=1,
+            annotation_text="Defensive Exit (45)", annotation_position="bottom right",
+            annotation_font=dict(size=10, color='#ef4444')
+        )
 
     fig_roll.update_layout(
         title=score_title,
@@ -3517,6 +3764,7 @@ def _strategies_ticker_charts(symbol, series, strategy_id) -> dict:
     )
 
     return {
+        "canvas_chart_html": fig_canvas.to_html(full_html=False, include_plotlyjs=False),
         "perf_chart_html": fig_perf.to_html(full_html=False, include_plotlyjs=False),
         "dd_chart_html": fig_dd.to_html(full_html=False, include_plotlyjs=False),
         "roll_chart_html": fig_roll.to_html(full_html=False, include_plotlyjs=False),
@@ -3535,7 +3783,10 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
     if len(price_df) < momentum_engine.MOMENTUM_LOOKBACK + momentum_engine.MOMENTUM_EXCLUDE:
         return None
 
-    is_sma = _strategy_family(strategy_id) == "sma"
+    fam = _strategy_family(strategy_id)
+    is_sma = fam == "sma"
+    is_rsi = fam == "rsi"
+    is_composite = fam == "composite"
     scores, spreads = _cached_universe_scores(strategy_id, symbols, price_df)
 
     results = []
@@ -3546,7 +3797,6 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
 
         score_pct = score.mom_12_1 * 100
         vol_pct = score.ann_vol_1y * 100
-        # Filtered on the unrounded ratio, displayed (and sorted) rounded.
         risk_adj = score.mom_12_1 / score.ann_vol_1y if score.ann_vol_1y > 0 else 0.0
 
         if score_pct < filters["min_mom"]:
@@ -3556,20 +3806,32 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
         if risk_adj < filters["min_risk_adj"]:
             continue
 
-        trend = "BULLISH" if score_pct > 0 else "BEARISH"
-        if filters["trend_filter"] == 'bullish' and trend != 'BULLISH':
-            continue
-        if filters["trend_filter"] == 'bearish' and trend != 'BEARISH':
-            continue
-
         if is_sma:
-            # Only symbols the SMA filter can actually score are eligible.
             spread = spreads.get(sym)
             if spread is None:
                 continue
             passes_absolute = spread > 0
+            trend = "BULLISH" if spread > 0 else "BEARISH"
+        elif is_rsi:
+            spread = spreads.get(sym)
+            if spread is None:
+                continue
+            passes_absolute = spread > 0
+            trend = "BULLISH" if spread > 0 else "BEARISH"
+        elif is_composite:
+            spread = spreads.get(sym)
+            if spread is None:
+                continue
+            passes_absolute = spread >= 50.0
+            trend = "BULLISH" if spread >= 50.0 else "BEARISH"
         else:
             passes_absolute = bool(score.passes_absolute)
+            trend = "BULLISH" if score_pct > 0 else "BEARISH"
+
+        if filters["trend_filter"] == 'bullish' and trend != 'BULLISH':
+            continue
+        if filters["trend_filter"] == 'bearish' and trend != 'BEARISH':
+            continue
 
         if filters["abs_only"] and not passes_absolute:
             continue
@@ -3585,6 +3847,8 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
         }
         if is_sma:
             row["sma_spread"] = round(spread * 100, 2)
+        elif is_rsi or is_composite:
+            row["strategy_score"] = round(spread, 1)
         results.append(row)
 
     results = sorted(results, key=lambda r: r["risk_adj"], reverse=True)

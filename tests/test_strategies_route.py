@@ -124,6 +124,7 @@ class TestStrategiesRoute(unittest.TestCase):
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self.temp_db_path = path
+        self._prev_db_path = db.DB_PATH
         db.DB_PATH = path
         db.init_db()
 
@@ -153,6 +154,7 @@ class TestStrategiesRoute(unittest.TestCase):
         self.addCleanup(app_module._PRICE_MEMO.clear)
 
     def tearDown(self):
+        db.DB_PATH = getattr(self, '_prev_db_path', db.DB_PATH)
         try:
             os.remove(self.temp_db_path)
         except OSError:

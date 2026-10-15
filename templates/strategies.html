@@ -154,6 +154,16 @@
           <p>
             Each ticker is scored by the spread between its 50-day and 200-day simple moving averages, expressed as a percentage of the 200-day. A positive spread is a golden cross (the classic long regime); a negative spread is a death cross. Because the score is a moving-average distance rather than a return, it reacts more slowly than a 12-1 return and turns over less.
           </p>
+          {% elif strategy_id == 'rsi_reversion' %}
+          <h4 class="font-bold text-zinc-900 dark:text-zinc-100 text-xs uppercase tracking-wide">1. Connors RSI(2) Mean Reversion</h4>
+          <p>
+            Exploits short-term oversold pullbacks inside secular uptrends. Tickers are screened for price > 200-day SMA, entering long when 2-day RSI falls under 15. The exit triggers aggressively when RSI crosses above 70 or price closes above the 5-day SMA.
+          </p>
+          {% elif strategy_id == 'buyer_signal' %}
+          <h4 class="font-bold text-zinc-900 dark:text-zinc-100 text-xs uppercase tracking-wide">1. Multi-Factor Composite (Buyer Signals Alpha)</h4>
+          <p>
+            Blends Macro Trend (40% weight on 50/200 SMA), Intermediate Momentum (35% weight on 3M/6M returns), and Volatility Quality (25% weight on inverse 1Y vol) into a 0–100 confluence rating. Holds long when score ≥ 55 and pivots to cash below 45.
+          </p>
           {% elif strategy_id == 'dual_momentum' %}
           <h4 class="font-bold text-zinc-900 dark:text-zinc-100 text-xs uppercase tracking-wide">1. Dual momentum: relative rank, then absolute gate</h4>
           <p>
@@ -485,13 +495,16 @@
   </div>
   {% endif %}
 
-  <!-- Tab Content: Single-Ticker Scanner -->
+  <!-- Tab Content: Single-Ticker Quant Lab -->
   {% if tab == 'ticker' %}
   <!-- Search Control Header -->
   <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
     <div class="space-y-1">
-      <h2 class="text-lg font-bold text-zinc-900 dark:text-zinc-50">Single-Ticker Scanner</h2>
-      <p class="text-xs text-zinc-400">Evaluate a specific ticker's trend strength and historical trend-following backtest net returns.</p>
+      <div class="flex items-center gap-2">
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold border border-amber-500/20">Quant Lab</span>
+        <h2 class="text-lg font-bold text-zinc-900 dark:text-zinc-50">Single-Ticker Workbench & Diagnostics</h2>
+      </div>
+      <p class="text-xs text-zinc-400">Tactical signal telemetry, algorithmic trade execution, and synchronized equity canvas.</p>
     </div>
 
     {# The strategy select auto-submits; the symbol box and period select in
@@ -508,7 +521,7 @@
           type="text"
           name="symbol"
           list="tickers-list"
-          placeholder="Enter ticker (e.g. AAPL, NVDA)..."
+          placeholder="Enter ticker (e.g. AAPL, NVDA, SPY)..."
           value="{{ searched_symbol }}"
           class="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 text-sm font-semibold focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
           autocomplete="off"
@@ -549,198 +562,209 @@
   </div>
   {% else %}
 
-  <!-- Ticker Dashboard Grid -->
-  <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
-    <!-- Stat 1: 12-1 Score -->
-    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-      <span class="text-xs font-semibold text-zinc-400 uppercase tracking-widest">12-1 Momentum Score</span>
-      <h3 class="text-2xl font-bold mt-1 text-zinc-900 dark:text-zinc-50 {% if data.mom_12_1 >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
-        {{ '+' if data.mom_12_1 >= 0 }}{{ data.mom_12_1 }}%
-      </h3>
-      <p class="text-[10px] text-zinc-400 mt-1">1yr return ex-last 21d · {{ metric('risk-adj', 'risk_adj_mom') }} {{ data.risk_adj_mom }} ({{ metric('vol', 'annualised_vol') }} {{ data.ann_vol_1y }}%)</p>
-    </div>
-
-    <!-- Stat 2: Trend State -->
-    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-      <span class="text-xs font-semibold text-zinc-400 uppercase tracking-widest">Current Trend Regime</span>
-      <h3 class="text-2xl font-bold mt-1 {{ data.trend_color }}">
+  <!-- Tactical Cockpit Status Strip -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <!-- Strip 1: Active Position & Tactical State -->
+    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Tactical Position</span>
+        {% if data.in_position %}
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">LONG</span>
+        {% else %}
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30">CASH</span>
+        {% endif %}
+      </div>
+      <h3 class="text-xl font-bold mt-2 {{ data.trend_color }}">
         {{ data.trend_state }}
       </h3>
-      <p class="text-[10px] text-zinc-400 mt-1">
-        {% if strategy_id == 'sma_trend' %}
-        Based on the sign of the 50/200-day SMA spread
-        {% elif strategy_id == 'dual_momentum' %}
-        Based on 12-1 momentum versus the absolute cash hurdle
+      <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1 font-mono">
+        {% if data.in_position %}
+        Entry: {{ data.entry_date }} @ ${{ data.entry_price }} ({{ data.position_days }} bars)
+        {% if data.unrealized_pct is not none %}
+        <span class="block font-semibold {% if data.unrealized_pct >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
+          Unrealized P&L: {{ '+' if data.unrealized_pct >= 0 }}{{ data.unrealized_pct }}%
+        </span>
+        {% endif %}
         {% else %}
-        Based on positive/negative 12-1 momentum
+        Capital preservation mode · In Cash for {{ data.position_days }} bars
         {% endif %}
       </p>
     </div>
 
-    <!-- Stat 3: Rank in Universe -->
-    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-      <span class="text-xs font-semibold text-zinc-400 uppercase tracking-widest">Universe Rank</span>
-      <h3 class="text-2xl font-bold mt-1 text-zinc-900 dark:text-zinc-50">
-        #{{ data.rank }} <span class="text-xs text-zinc-400 font-normal">of {{ data.total_rank_count }}</span>
+    <!-- Strip 2: Engine Metric Status -->
+    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">{{ data.engine_metric_label }}</span>
+        <span class="text-[10px] font-mono text-zinc-400 font-semibold">SPOT: ${{ data.latest_price | round(2) }}</span>
+      </div>
+      <h3 class="text-xl font-bold mt-2 text-zinc-900 dark:text-zinc-50 font-mono">
+        {{ data.engine_metric_val }}
       </h3>
-      <p class="text-[10px] text-zinc-400 mt-1">Relative position in the ranked universe</p>
+      <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
+        {{ data.engine_metric_status }}
+      </p>
     </div>
 
-    <!-- Stat 4: Spot Price -->
-    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-      <span class="text-xs font-semibold text-zinc-400 uppercase tracking-widest">Current Spot Price</span>
-      <h3 class="text-2xl font-bold mt-1 text-zinc-900 dark:text-zinc-50">
-        ${{ data.latest_price | round(2) }}
+    <!-- Strip 3: Universe Ranking Context -->
+    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Universe Rank</span>
+        <span class="text-[10px] font-mono text-zinc-400">{{ data.total_rank_count }} Tracked</span>
+      </div>
+      <h3 class="text-xl font-bold mt-2 text-zinc-900 dark:text-zinc-50 font-mono">
+        #{{ data.rank }} <span class="text-xs text-zinc-400 font-normal">of {{ data.total_rank_count }}</span>
       </h3>
-      <p class="text-[10px] text-zinc-400 mt-1">Last daily close price</p>
+      <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1 font-mono">
+        Vol: {{ data.ann_vol_1y }}% · {{ metric('Risk-Adj', 'risk_adj_mom') }}: {{ data.risk_adj_mom }}
+      </p>
+    </div>
+
+    <!-- Strip 4: Execution Efficiency -->
+    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Trade Win Rate</span>
+        <span class="text-[10px] font-mono text-indigo-400 font-bold">{{ data.pct_invested }}% Invested</span>
+      </div>
+      <h3 class="text-xl font-bold mt-2 text-emerald-500 font-mono">
+        {{ data.win_rate }}% <span class="text-xs text-zinc-400 font-normal font-sans">PF: {{ data.profit_factor }}</span>
+      </h3>
+      <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1 font-mono">
+        {{ data.trade_count }} trades ({{ data.wins_count }}W / {{ data.losses_count }}L) · net of costs
+      </p>
     </div>
   </div>
 
-  <!-- Multi-Horizon Metrics Table -->
-  <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm">
-    <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-50 mb-3">Multi-Horizon Returns</h3>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center font-mono">
-      <div class="p-3 bg-zinc-50 dark:bg-zinc-800/40 rounded-lg">
-        <span class="text-[10px] text-zinc-400 uppercase block font-sans">1 Month</span>
-        <span class="text-lg font-bold {% if data.mom_1m >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
+  <!-- Trailing Performance Ribbon (Clean, distinct, no duplicate 12-1 stat) -->
+  <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 shadow-sm">
+    <div class="flex items-center justify-between mb-3 px-1">
+      <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400">Trailing Asset Return Horizons ({{ symbol }})</h3>
+      <span class="text-[11px] text-zinc-500">Unannualized Price Return</span>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-center font-mono">
+      <div class="p-3 bg-zinc-50 dark:bg-zinc-800/40 rounded-lg border border-zinc-100 dark:border-zinc-800/60">
+        <span class="text-[10px] text-zinc-400 uppercase block font-sans font-medium mb-0.5">1 Month</span>
+        <span class="text-base font-bold {% if data.mom_1m >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
           {{ '+' if data.mom_1m >= 0 }}{{ data.mom_1m }}%
         </span>
       </div>
-      <div class="p-3 bg-zinc-50 dark:bg-zinc-800/40 rounded-lg">
-        <span class="text-[10px] text-zinc-400 uppercase block font-sans">3 Months</span>
-        <span class="text-lg font-bold {% if data.mom_3m >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
+      <div class="p-3 bg-zinc-50 dark:bg-zinc-800/40 rounded-lg border border-zinc-100 dark:border-zinc-800/60">
+        <span class="text-[10px] text-zinc-400 uppercase block font-sans font-medium mb-0.5">3 Months</span>
+        <span class="text-base font-bold {% if data.mom_3m >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
           {{ '+' if data.mom_3m >= 0 }}{{ data.mom_3m }}%
         </span>
       </div>
-      <div class="p-3 bg-zinc-50 dark:bg-zinc-800/40 rounded-lg">
-        <span class="text-[10px] text-zinc-400 uppercase block font-sans">6 Months</span>
-        <span class="text-lg font-bold {% if data.mom_6m >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
+      <div class="p-3 bg-zinc-50 dark:bg-zinc-800/40 rounded-lg border border-zinc-100 dark:border-zinc-800/60">
+        <span class="text-[10px] text-zinc-400 uppercase block font-sans font-medium mb-0.5">6 Months</span>
+        <span class="text-base font-bold {% if data.mom_6m >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
           {{ '+' if data.mom_6m >= 0 }}{{ data.mom_6m }}%
         </span>
       </div>
-      <div class="p-3 bg-zinc-50 dark:bg-zinc-800/40 rounded-lg">
-        <span class="text-[10px] text-zinc-400 uppercase block font-sans">12-1 Momentum</span>
-        <span class="text-lg font-bold {% if data.mom_12_1 >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
+      <div class="p-3 bg-zinc-50 dark:bg-zinc-800/40 rounded-lg border border-zinc-100 dark:border-zinc-800/60">
+        <span class="text-[10px] text-zinc-400 uppercase block font-sans font-medium mb-0.5">1-Year Baseline</span>
+        <span class="text-base font-bold {% if data.mom_12_1 >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
           {{ '+' if data.mom_12_1 >= 0 }}{{ data.mom_12_1 }}%
         </span>
       </div>
     </div>
   </div>
 
-  <!-- Detailed Charts: Backtest & Rolling Curve -->
-  <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-    <!-- Left: Backtest Chart (7/12 wide) -->
-    <div class="lg:col-span-7 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm">
-      <div class="mb-4">
-        <h3 class="text-base font-bold text-zinc-900 dark:text-zinc-50">Trend-Following Backtest</h3>
-        <p class="text-xs text-zinc-400">
-          Cumulative return comparison versus buying and holding the stock, trading
-          {% if strategy_id == 'sma_trend' %}
-          long while the 50-day SMA is above the 200-day SMA and cash otherwise.
-          {% elif strategy_id == 'dual_momentum' %}
-          long while the 12-1 score clears the absolute cash hurdle and cash otherwise.
-          {% else %}
-          long while the 12-1 score is positive and cash otherwise.
-          {% endif %}
+  <!-- Synchronized Interactive Canvas -->
+  <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm">
+    <div class="mb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+      <div>
+        <h3 class="text-base font-bold text-zinc-900 dark:text-zinc-50">Synchronized Execution & Equity Canvas</h3>
+        <p class="text-xs text-zinc-400 mt-0.5">
+          Dual-pane interactive workbench: Upper pane tracks closing price with algorithmic Buy / Cash execution flags. Lower pane synchronizes portfolio equity ($10,000) against buy-and-hold with underwater drawdown depth.
         </p>
       </div>
-      <div class="w-full bg-zinc-50 dark:bg-zinc-950/20 rounded-xl overflow-hidden">
-        {{ data.perf_chart_html | safe }}
-      </div>
-
-      <!-- Drawdown Comparison Chart -->
-      <div class="w-full bg-zinc-50 dark:bg-zinc-950/20 rounded-xl overflow-hidden mt-4">
-        {{ data.dd_chart_html | safe }}
-      </div>
-
-      <!-- Trade Execution Stats Grid -->
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 my-6 text-center">
-        <div class="p-3 bg-zinc-50 dark:bg-zinc-800/30 rounded-xl border border-zinc-100 dark:border-zinc-800/80">
-          <span class="text-[10px] text-zinc-400 uppercase block font-sans font-medium">Number of Trades</span>
-          <span class="text-lg font-mono font-bold text-zinc-900 dark:text-zinc-100">
-            {{ data.trade_count }}
-          </span>
-        </div>
-        <div class="p-3 bg-zinc-50 dark:bg-zinc-800/30 rounded-xl border border-zinc-100 dark:border-zinc-800/80">
-          <span class="text-[10px] text-zinc-400 uppercase block font-sans font-medium">Win Rate</span>
-          <span class="text-lg font-mono font-bold text-emerald-500">
-            {{ data.win_rate }}%
-          </span>
-        </div>
-        <div class="p-3 bg-zinc-50 dark:bg-zinc-800/30 rounded-xl border border-zinc-100 dark:border-zinc-800/80">
-          <span class="text-[10px] text-zinc-400 uppercase block font-sans font-medium">Profit Factor</span>
-          <span class="text-lg font-mono font-bold text-zinc-900 dark:text-zinc-100">
-            {{ data.profit_factor }}
-          </span>
-        </div>
-        <div class="p-3 bg-zinc-50 dark:bg-zinc-800/30 rounded-xl border border-zinc-100 dark:border-zinc-800/80">
-          <span class="text-[10px] text-zinc-400 uppercase block font-sans font-medium">Time Invested</span>
-          <span class="text-lg font-mono font-bold text-indigo-500 dark:text-indigo-400">
-            {{ data.pct_invested }}%
-          </span>
-        </div>
-      </div>
-
-      <!-- Backtest Stat Table -->
-      {# The only table on this page that lacked a scroll container, so at
-         narrow widths its eight columns overflowed the card instead of
-         scrolling -- Calmar was drawn outside the right border. min-w keeps the
-         columns legible once it does scroll. #}
-      <div class="mt-6 overflow-x-auto">
-        <table class="w-full min-w-[660px] text-left text-xs font-mono">
-          <thead class="bg-zinc-50 dark:bg-zinc-800/50 text-zinc-400 uppercase">
-            <tr>
-              <th class="py-2.5 px-3 font-sans">Strategy</th>
-              <th class="py-2.5 px-3 text-right">Total Return</th>
-              <th class="py-2.5 px-3 text-right">CAGR</th>
-              <th class="py-2.5 px-3 text-right">{{ metric('Volatility', 'annualised_vol') }}</th>
-              <th class="py-2.5 px-3 text-right">{{ metric('Sharpe', 'sharpe') }}</th>
-              <th class="py-2.5 px-3 text-right">{{ metric('Sortino', 'sortino') }}</th>
-              <th class="py-2.5 px-3 text-right">{{ metric('Max DD', 'max_drawdown') }}</th>
-              <th class="py-2.5 px-3 text-right">{{ metric('Calmar', 'calmar') }}</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-zinc-100 dark:divide-zinc-800/50">
-            <tr>
-              <td class="py-3 px-3 font-sans font-semibold text-zinc-900 dark:text-zinc-100">{{ strategy_label }}</td>
-              <td class="py-3 px-3 text-right font-bold">{{ data.strat_stats.total_return }}%</td>
-              <td class="py-3 px-3 text-right">{{ data.strat_stats.annual_return }}%</td>
-              <td class="py-3 px-3 text-right">{{ data.strat_stats.volatility }}%</td>
-              <td class="py-3 px-3 text-right font-bold text-zinc-800 dark:text-zinc-200">{{ data.strat_stats.sharpe }}</td>
-              <td class="py-3 px-3 text-right">{{ data.strat_stats.sortino }}</td>
-              <td class="py-3 px-3 text-right text-rose-500">{{ data.strat_stats.max_dd }}%</td>
-              <td class="py-3 px-3 text-right">{{ data.strat_stats.calmar }}</td>
-            </tr>
-            <tr class="text-zinc-500 dark:text-zinc-400">
-              <td class="py-3 px-3 font-sans font-semibold">Buy & Hold {{ data.symbol }}</td>
-              <td class="py-3 px-3 text-right font-bold">{{ data.hold_stats.total_return }}%</td>
-              <td class="py-3 px-3 text-right">{{ data.hold_stats.annual_return }}%</td>
-              <td class="py-3 px-3 text-right">{{ data.hold_stats.volatility }}%</td>
-              <td class="py-3 px-3 text-right font-bold">{{ data.hold_stats.sharpe }}</td>
-              <td class="py-3 px-3 text-right">{{ data.hold_stats.sortino }}</td>
-              <td class="py-3 px-3 text-right text-rose-500">{{ data.hold_stats.max_dd }}%</td>
-              <td class="py-3 px-3 text-right">{{ data.hold_stats.calmar }}</td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="flex items-center gap-2 self-start sm:self-auto shrink-0">
+        <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
+          7.5 bps Friction Model
+        </span>
       </div>
     </div>
+    <div class="w-full bg-zinc-50 dark:bg-zinc-950/20 rounded-xl overflow-hidden">
+      {{ data.canvas_chart_html | safe }}
+    </div>
+  </div>
 
-    <!-- Right: Rolling Momentum Score Curve (5/12 wide) -->
-    <div class="lg:col-span-5 flex flex-col gap-6">
+  <!-- Tale of the Tape Scorecard (Side-by-Side Strategy vs Buy & Hold) -->
+  <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm">
+    <div class="mb-4">
+      <h3 class="text-base font-bold text-zinc-900 dark:text-zinc-50">Tale of the Tape: Backtest Scorecard</h3>
+      <p class="text-xs text-zinc-400">
+        Side-by-side risk and return comparison over the evaluated window ({{ data.start_date }} → {{ data.end_date }}).
+      </p>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full min-w-[700px] text-left text-xs font-mono">
+        <thead class="bg-zinc-50 dark:bg-zinc-800/50 text-zinc-400 uppercase">
+          <tr>
+            <th class="py-2.5 px-3 font-sans">Execution Approach</th>
+            <th class="py-2.5 px-3 text-right">Total Return</th>
+            <th class="py-2.5 px-3 text-right">CAGR</th>
+            <th class="py-2.5 px-3 text-right">{{ metric('Volatility', 'annualised_vol') }}</th>
+            <th class="py-2.5 px-3 text-right">{{ metric('Sharpe', 'sharpe') }}</th>
+            <th class="py-2.5 px-3 text-right">{{ metric('Sortino', 'sortino') }}</th>
+            <th class="py-2.5 px-3 text-right">{{ metric('Max DD', 'max_drawdown') }}</th>
+            <th class="py-2.5 px-3 text-right">{{ metric('Calmar', 'calmar') }}</th>
+            <th class="py-2.5 px-3 text-right">Beta (SPY)</th>
+            <th class="py-2.5 px-3 text-right">Alpha (SPY)</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-100 dark:divide-zinc-800/50">
+          <tr class="bg-amber-500/5">
+            <td class="py-3 px-3 font-sans font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+              {{ strategy_label }}
+            </td>
+            <td class="py-3 px-3 text-right font-bold {% if data.strat_stats.total_return >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
+              {{ '+' if data.strat_stats.total_return >= 0 }}{{ data.strat_stats.total_return }}%
+            </td>
+            <td class="py-3 px-3 text-right">{{ data.strat_stats.annual_return }}%</td>
+            <td class="py-3 px-3 text-right">{{ data.strat_stats.volatility }}%</td>
+            <td class="py-3 px-3 text-right font-bold text-zinc-800 dark:text-zinc-200">{{ data.strat_stats.sharpe }}</td>
+            <td class="py-3 px-3 text-right">{{ data.strat_stats.sortino }}</td>
+            <td class="py-3 px-3 text-right text-rose-500 font-bold">{{ data.strat_stats.max_dd }}%</td>
+            <td class="py-3 px-3 text-right">{{ data.strat_stats.calmar }}</td>
+            <td class="py-3 px-3 text-right">{{ data.rel_spy.beta }}</td>
+            <td class="py-3 px-3 text-right font-semibold {% if data.rel_spy.alpha >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
+              {{ '+' if data.rel_spy.alpha >= 0 }}{{ data.rel_spy.alpha }}%
+            </td>
+          </tr>
+          <tr class="text-zinc-500 dark:text-zinc-400">
+            <td class="py-3 px-3 font-sans font-semibold flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-zinc-400"></span>
+              Buy & Hold {{ data.symbol }}
+            </td>
+            <td class="py-3 px-3 text-right font-bold {% if data.hold_stats.total_return >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
+              {{ '+' if data.hold_stats.total_return >= 0 }}{{ data.hold_stats.total_return }}%
+            </td>
+            <td class="py-3 px-3 text-right">{{ data.hold_stats.annual_return }}%</td>
+            <td class="py-3 px-3 text-right">{{ data.hold_stats.volatility }}%</td>
+            <td class="py-3 px-3 text-right font-bold">{{ data.hold_stats.sharpe }}</td>
+            <td class="py-3 px-3 text-right">{{ data.hold_stats.sortino }}</td>
+            <td class="py-3 px-3 text-right text-rose-500">{{ data.hold_stats.max_dd }}%</td>
+            <td class="py-3 px-3 text-right">{{ data.hold_stats.calmar }}</td>
+            <td class="py-3 px-3 text-right">1.00</td>
+            <td class="py-3 px-3 text-right">0.00%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Lower Section: Indicator Diagnostics & Trade Execution Log -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+    <!-- Left: Rolling Indicator Diagnostic Chart (7/12) -->
+    <div class="lg:col-span-7 space-y-6">
       <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm">
-        <div class="mb-4">
+        <div class="mb-3">
           <h3 class="text-base font-bold text-zinc-900 dark:text-zinc-50">
-            {% if strategy_id == 'sma_trend' %}Historical SMA Spread{% else %}Historical Momentum Score{% endif %}
+            Indicator Diagnostics: Historical Trigger Oscillation
           </h3>
           <p class="text-xs text-zinc-400">
-            {% if strategy_id == 'sma_trend' %}
-            Rolling 50/200-day SMA spread over time. Crossings of the zero line are the golden and death crosses that flip the position.
-            {% elif strategy_id == 'dual_momentum' %}
-            Rolling 12-1 momentum score over time. The marked threshold is the absolute cash hurdle, not zero — crossings of it flip the position.
-            {% else %}
-            Rolling 12-1 momentum score over time. Positive zones indicate periods of trend accumulation; crossings mark trend-regime shifts.
-            {% endif %}
+            Tracking the underlying mathematical trigger across the active backtest horizon.
           </p>
         </div>
         <div class="w-full bg-zinc-50 dark:bg-zinc-950/20 rounded-xl overflow-hidden">
@@ -748,39 +772,98 @@
         </div>
       </div>
 
-      <!-- Trend Strategy Notes -->
+      <!-- Strategy Logic Notes -->
       <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm">
-        <h3 class="font-bold text-zinc-900 dark:text-zinc-50 mb-3">Notes</h3>
+        <h3 class="font-bold text-zinc-900 dark:text-zinc-50 mb-3">Strategy Logic & Execution Blueprint</h3>
         <div class="space-y-3 text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
-          {% if strategy_id == 'sma_trend' %}
+          {% if strategy_id == 'rsi_reversion' %}
           <p>
-            <strong class="text-zinc-900 dark:text-zinc-100">Drawdown control:</strong> the strategy exits to cash on the death cross — once the 50-day SMA falls back below the 200-day — rather than staying fully exposed through sustained downtrends.
+            <strong class="text-zinc-900 dark:text-zinc-100">Connors Pullback Mechanics:</strong> Entries require a macro uptrend regime (Close > 200-day SMA) coupled with severe short-term exhaustion (RSI-2 < 15).
           </p>
           <p>
-            <strong class="text-zinc-900 dark:text-zinc-100">Trend capture:</strong> moving averages lag price, so entries and exits arrive late by construction; the trade-off is far fewer whipsaws than a return-based signal in choppy markets.
+            <strong class="text-zinc-900 dark:text-zinc-100">Exit Discipline:</strong> Position closes cleanly when either the 2-day RSI rebounds above 70 or price moves back above the 5-day SMA.
+          </p>
+          {% elif strategy_id == 'buyer_signal' %}
+          <p>
+            <strong class="text-zinc-900 dark:text-zinc-100">Multi-Factor Weighting:</strong> Trend (40% weight on 50/200 SMA), Intermediate Momentum (35% weight on 3M/6M price velocity), and Quality Volatility (25% weight on inverse 1-year volatility).
+          </p>
+          <p>
+            <strong class="text-zinc-900 dark:text-zinc-100">Hysteresis Thresholds:</strong> Enters long when the composite score crosses ≥ 55. Drops to cash when score falls below 45 to prevent whipsaws.
+          </p>
+          {% elif strategy_id == 'sma_trend' %}
+          <p>
+            <strong class="text-zinc-900 dark:text-zinc-100">Drawdown Control:</strong> Exits to cash on the death cross (50-day SMA < 200-day SMA), avoiding catastrophic secular bear markets.
+          </p>
+          <p>
+            <strong class="text-zinc-900 dark:text-zinc-100">Lag vs Whipsaw Trade-off:</strong> Moving averages lag by definition, but eliminate noise compared to faster oscillators.
           </p>
           {% elif strategy_id == 'dual_momentum' %}
           <p>
-            <strong class="text-zinc-900 dark:text-zinc-100">Drawdown control:</strong> the strategy exits to cash once the ticker's 12-1 momentum drops below the absolute cash hurdle — a higher bar than zero, so it de-risks earlier than plain relative strength.
-          </p>
-          <p>
-            <strong class="text-zinc-900 dark:text-zinc-100">Trend capture:</strong> the same higher bar keeps it out of weak-but-positive trends, which costs upside in grinding recoveries and is the price paid for the earlier exits.
+            <strong class="text-zinc-900 dark:text-zinc-100">Cash Hurdle Filter:</strong> Must beat both the universe peers and the absolute risk-free cash hurdle to justify taking equity risk.
           </p>
           {% else %}
           <p>
-            <strong class="text-zinc-900 dark:text-zinc-100">Drawdown control:</strong> the strategy exits to cash once the ticker's own 12-1 momentum score turns negative, rather than staying fully exposed through sustained downtrends.
-          </p>
-          <p>
-            <strong class="text-zinc-900 dark:text-zinc-100">Trend capture:</strong> because it only enters on positive 12-1 momentum, it participates in sustained uptrends while sitting out extended sideways or declining periods.
+            <strong class="text-zinc-900 dark:text-zinc-100">Classic Momentum:</strong> Capitalizes on 12-1 momentum drift while sidestepping extended 1-month reversal friction.
           </p>
           {% endif %}
         </div>
       </div>
     </div>
+
+    <!-- Right: Recent Trade History Log (5/12) -->
+    <div class="lg:col-span-5 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <div>
+          <h3 class="text-base font-bold text-zinc-900 dark:text-zinc-50">Recent Trade Executions</h3>
+          <p class="text-xs text-zinc-400">Completed round-trip trades with entry/exit pricing.</p>
+        </div>
+        <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-400 font-semibold">
+          Last 10 Round-Trips
+        </span>
+      </div>
+
+      {% if data.trade_history %}
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs font-mono">
+          <thead class="bg-zinc-50 dark:bg-zinc-800/50 text-zinc-400 uppercase text-[10px]">
+            <tr>
+              <th class="py-2 px-2">Entry → Exit</th>
+              <th class="py-2 px-2 text-right">Prices</th>
+              <th class="py-2 px-2 text-right">Duration</th>
+              <th class="py-2 px-2 text-right">Return</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-zinc-100 dark:divide-zinc-800/50">
+            {% for t in data.trade_history | reverse %}
+            <tr class="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/20">
+              <td class="py-2.5 px-2">
+                <span class="text-zinc-900 dark:text-zinc-200 font-semibold block">{{ t.entry_date }}</span>
+                <span class="text-[10px] text-zinc-400 block">→ {{ t.exit_date }}</span>
+              </td>
+              <td class="py-2.5 px-2 text-right">
+                <span class="text-zinc-600 dark:text-zinc-400 block">${{ t.entry_price }}</span>
+                <span class="text-zinc-900 dark:text-zinc-200 font-semibold block">${{ t.exit_price }}</span>
+              </td>
+              <td class="py-2.5 px-2 text-right text-zinc-500">{{ t.duration_days }}d</td>
+              <td class="py-2.5 px-2 text-right">
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold {% if t.is_win %}bg-emerald-500/10 text-emerald-500{% else %}bg-rose-500/10 text-rose-500{% endif %}">
+                  {{ '+' if t.return_pct >= 0 }}{{ t.return_pct }}%
+                </span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="py-8 text-center text-xs text-zinc-400">
+        No completed round-trip trades recorded in this window.
+      </div>
+      {% endif %}
+    </div>
   </div>
   {% endif %}
   {% endif %}
-
   <!-- Tab Content: Screener -->
   {% if tab == 'screener' %}
   <div class="space-y-6">
