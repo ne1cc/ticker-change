@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Today — ticker/change{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <h1 class="text-2xl font-semibold tracking-tight mb-1">What changed today</h1>
+  <p class="text-xs text-zinc-400 mb-6">
+    The universe front door, assembled from published nightly briefs — never fetches on load.
+    {% if progress %}· Warming pass {{ progress.done }}/{{ progress.total }} published{% if progress.updated %} · updated {{ progress.updated[:16].replace('T', ' ') }}{% endif %}{% endif %}
+  </p>
+
+  <form id="dashboard-search-form" onsubmit="return dashboardSearch(event)"
+        class="mb-8 flex flex-col sm:flex-row gap-3">
+    <input id="dashboard-search-input" type="text"
+           placeholder="Jump to a ticker — e.g. AAPL"
+           autocomplete="off" spellcheck="false"
+           class="flex-1 px-4 py-2.5 font-mono uppercase placeholder:normal-case placeholder:font-sans bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none transition">
+    <button type="submit"
+            class="px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg transition">
+      Open brief
+    </button>
+  </form>
+
+  {% if warming %}
+  <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center text-sm text-zinc-400 mb-8">
+    Warming — the nightly brief pass fills this dashboard from warmed caches. Check back shortly.
+  </div>
+  {% else %}
+  <section class="mb-8 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+    <div class="flex items-baseline justify-between mb-3">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Notable moves</h2>
+      <span class="text-[11px] text-zinc-400">{{ cards|length }} published · as of {{ generated_at }}</span>
+    </div>
+    {% if cards %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+            <th class="py-2 pr-4 font-medium">Ticker</th>
+            <th class="py-2 pr-4 font-medium text-right">Session</th>
+            <th class="py-2 pr-4 font-medium text-right">Move z</th>
+            <th class="py-2 pr-4 font-medium text-right">Volume</th>
+            <th class="py-2 pr-4 font-medium">Significance</th>
+            <th class="py-2 pr-4 font-medium">Earnings</th>
+            <th class="py-2 font-medium text-right">Prices as of</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in cards %}
+          <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
+            <td class="py-2 pr-4 whitespace-nowrap">
+              <a href="{{ c.href }}" class="font-mono font-bold text-amber-600 dark:text-amber-400 hover:underline">{{ c.ticker }}</a>
+              <span class="ml-1.5 text-[10px] text-zinc-400">{{ c.depth }}</span>
+            </td>
+            {% if c.return_fmt %}
+            <td class="py-2 pr-4 text-right font-mono font-semibold {% if c.direction == 'up' %}text-emerald-500{% elif c.direction == 'down' %}text-rose-500{% else %}text-zinc-400{% endif %}" title="session {{ c.session_date }}">{{ c.return_fmt }}</td>
+            {% else %}
+            <td class="py-2 pr-4 text-right text-xs italic text-zinc-400">{{ c.return_missing }}</td>
+            {% endif %}
+            {% if c.z_fmt %}
+            <td class="py-2 pr-4 text-right font-mono">{{ c.z_fmt }}</td>
+            {% else %}
+            <td class="py-2 pr-4 text-right text-xs italic text-zinc-400">{{ c.z_missing }}</td>
+            {% endif %}
+            {% if c.volume_fmt %}
+            <td class="py-2 pr-4 text-right font-mono">{{ c.volume_fmt }}</td>
+            {% else %}
+            <td class="py-2 pr-4 text-right text-xs italic text-zinc-400">{{ c.volume_missing }}</td>
+            {% endif %}
+            <td class="py-2 pr-4 text-xs">
+              {% if c.significance_note == 'notable' %}
+              <span class="rounded border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5">notable</span>
+              {% elif c.significance_note == 'elevated' %}
+              <span class="rounded border border-zinc-300 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 px-1.5 py-0.5">elevated</span>
+              {% elif c.significance_note %}
+              <span class="italic text-zinc-400">{{ c.significance_note }}</span>
+              {% else %}
+              <span class="text-xs italic text-zinc-400">{{ c.z_missing }}</span>
+              {% endif %}
+            </td>
+            <td class="py-2 pr-4 text-xs {% if not c.earnings_note %}italic text-zinc-400{% endif %}">{{ c.earnings_note or 'no recent print' }}</td>
+            <td class="py-2 text-right text-[10px] text-zinc-400 whitespace-nowrap">
+              {{ c.as_of or 'no cached data' }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700 px-3 py-2 text-xs italic text-zinc-400">
+      No briefs published yet — the warming pass fills this table.
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if pending %}
+  <section class="mb-8 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+    <h2 class="text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-3">
+      Not yet published — {{ pending|length }} awaiting the warming pass
+    </h2>
+    <div class="flex flex-wrap gap-2">
+      {% for p in pending %}
+      <a href="{{ p.href }}" title="not yet published"
+         class="px-2.5 py-1 font-mono text-xs border border-dashed border-zinc-300 dark:border-zinc-700 rounded-md text-zinc-400 hover:border-amber-500 hover:text-amber-600 dark:hover:text-amber-400 transition">{{ p.ticker }}</a>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function dashboardSearch(e) {
+    e.preventDefault();
+    const input = document.getElementById('dashboard-search-input');
+    const val = input ? input.value.trim().toUpperCase() : '';
+    if (val) window.location.href = '/brief/' + encodeURIComponent(val);
+    return false;
+  }
+</script>
+{% endblock %}

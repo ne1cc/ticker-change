@@ -73,7 +73,6 @@ button {
   -webkit-overflow-scrolling: touch;
 }
 
-
 @media (max-width: 767px) {
   .responsive-tabs {
     margin-inline: -1rem;

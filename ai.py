@@ -16,6 +16,7 @@ report section simply doesn't render.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import requests
 
@@ -225,13 +226,17 @@ def parse_html_sections(html: str) -> dict[str, str]:
     return sections
 
 
-def _anthropic_report(key: str, model: str, user_msg: str, system_prompt: str = SYSTEM) -> str | None:
+def _anthropic_report(key: str, model: str, user_msg: str, system_prompt: str = SYSTEM,
+                      timeout: float | None = None) -> str | None:
     """Generate the report via the Anthropic SDK (native Claude API)."""
     try:
         import anthropic
     except Exception:
         return None
-    client = anthropic.Anthropic(api_key=key)
+    client_kwargs = {"api_key": key}
+    if timeout:
+        client_kwargs["timeout"] = timeout
+    client = anthropic.Anthropic(**client_kwargs)
     # Streaming + get_final_message keeps us safe from HTTP timeouts on the
     # longer reports; adaptive thinking lets Claude reason over the numbers.
     with client.messages.stream(
@@ -252,7 +257,9 @@ def _anthropic_report(key: str, model: str, user_msg: str, system_prompt: str = 
     return text or None
 
 
-def _openai_compatible_report(base_url: str, key: str, model: str, user_msg: str, system_prompt: str = SYSTEM) -> str | None:
+def _openai_compatible_report(base_url: str, key: str, model: str, user_msg: str,
+                              system_prompt: str = SYSTEM,
+                              timeout: float = HTTP_TIMEOUT) -> str | None:
     """Generate the report via an OpenAI-compatible /chat/completions endpoint.
 
     Shared by OpenAI, Google Gemini (OpenAI-compat base), and OpenRouter — they
@@ -270,7 +277,7 @@ def _openai_compatible_report(base_url: str, key: str, model: str, user_msg: str
             "max_tokens": 4000,
             "temperature": 0.4,
         },
-        timeout=HTTP_TIMEOUT,
+        timeout=timeout,
     )
     if resp.status_code != 200:
         raise Exception(f"HTTP {resp.status_code}: {resp.text[:300]}")
@@ -510,3 +517,82 @@ def generate_options_report(ticker: str, data: dict, force: bool = False) -> tup
     html = _to_html(cleaned_md)
     db.cache_set("ai_options_report", cache_key, {"html": html, "markdown": text, "provider": used})
     return html, None
+
+
+BRIEF_GARNISH_TTL_HOURS = 24
+BRIEF_GARNISH_TIMEOUT = 15
+
+BRIEF_GARNISH_SYSTEM = """You are a seasoned equity analyst adding one short \
+interpretation paragraph to a daily brief. You are given the brief's \
+deterministic sections (price action, earnings events, context) as JSON.
+
+Rules:
+- Ground every statement in the numbers provided. Never invent data, events, \
+or prices not present in the input.
+- Note honestly where data is missing or thin.
+- Be balanced: no cheerleading, no advice, no price targets.
+- Write 3-5 sentences of plain prose. No markdown headings, no bullet lists.
+- Educational interpretation of delayed data — not financial advice."""
+
+
+def generate_brief_interpretation(ticker: str, brief_payload: dict) -> dict | None:
+    """Optional labeled AI garnish for the daily brief page: a short
+    interpretation of the published payload's deterministic sections, via the
+    same provider chain and api_cache machinery as the analyst reports.
+
+    Returns {"html", "provider", "generated_at"} or None when no provider is
+    configured, every call fails or times out (bounded by
+    BRIEF_GARNISH_TIMEOUT, well under the report paths' 90s), or the cache
+    layer errors — the brief page renders complete without it. The cache key
+    includes the brief snapshot id, so each publication is interpreted at
+    most once per TTL and repeat requests never re-call the provider.
+    """
+    try:
+        ticker = (ticker or '').strip().upper()
+        meta = brief_payload.get("meta") or {}
+        configured = providers.ai_providers()
+        if not configured:
+            return None
+        snapshot = meta.get("snapshot_id") or meta.get("published_at") or "x"
+        cache_key = f"{ticker}:{snapshot}"
+        cached = db.cache_get("ai_brief_garnish", cache_key, BRIEF_GARNISH_TTL_HOURS)
+        if cached is not None:
+            return cached
+
+        context = json.dumps({
+            "ticker": ticker,
+            "sections": brief_payload.get("sections") or {},
+            "receipts": meta.get("receipts") or {},
+        }, default=str)
+        user_msg = (
+            f"Write the interpretation paragraph for {ticker}'s daily brief "
+            f"from this snapshot:\n\n{context}"
+        )
+
+        text, used = None, None
+        for prov in configured:
+            try:
+                if prov["id"] == "anthropic":
+                    text = _anthropic_report(
+                        prov["key"], prov["model"], user_msg,
+                        BRIEF_GARNISH_SYSTEM, timeout=BRIEF_GARNISH_TIMEOUT)
+                else:
+                    text = _openai_compatible_report(
+                        prov["base_url"], prov["key"], prov["model"], user_msg,
+                        BRIEF_GARNISH_SYSTEM, timeout=BRIEF_GARNISH_TIMEOUT)
+            except Exception as e:
+                print(f"AI brief interpretation via {prov['id']} failed for {ticker}: {e}")
+                text = None
+            if text:
+                used = prov["id"]
+                break
+
+        if not text:
+            return None
+        out = {"html": _to_html(text), "provider": used,
+               "generated_at": datetime.utcnow().isoformat()}
+        db.cache_set("ai_brief_garnish", cache_key, out)
+        return out
+    except Exception as e:
+        print(f"AI brief interpretation failed for {ticker}: {e}")
+        return None

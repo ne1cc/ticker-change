@@ -223,12 +223,14 @@
               </svg>
               <span class="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">ticker<span class="text-amber-500">/</span>change</span>
             </a>
-            <div class="hidden md:flex items-center gap-5 lg:gap-6">
-              <a id="nav-markets" href="/stock" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Markets</a>
-              <a id="nav-options" href="/options" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Options</a>
-              <a id="nav-analytics" href="/analytics" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Analytics</a>
-              <a id="nav-strategies" href="/strategies" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Strategies</a>
-              <a id="nav-radar" href="/radar" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Radar</a>
+            <div class="hidden md:flex items-center gap-4 lg:gap-5">
+              <a id="nav-brief" href="/" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-semibold border-b-2 border-transparent pb-0.5">Brief</a>
+              <span class="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 select-none" aria-hidden="true">Evidence</span>
+              <a id="nav-markets" href="/stock" class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Markets</a>
+              <a id="nav-options" href="/options" class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Options</a>
+              <a id="nav-analytics" href="/analytics" class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Analytics</a>
+              <a id="nav-strategies" href="/strategies" class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Strategies</a>
+              <a id="nav-radar" href="/radar" class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Radar</a>
             </div>
           </div>
           <div class="flex items-center gap-2">
@@ -285,6 +287,12 @@
           </div>
         </div>
         <div id="mobile-nav-menu" class="hidden md:hidden border-t border-zinc-200 dark:border-zinc-800 py-3 space-y-3">
+          <div>
+            <div class="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 px-2 mb-1">Brief</div>
+            <div class="grid grid-cols-1 gap-1.5">
+              <a id="mobile-nav-brief" href="/" class="mobile-nav-link">Daily brief</a>
+            </div>
+          </div>
           <div>
             <div class="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 px-2 mb-1">Markets</div>
             <div class="grid grid-cols-2 gap-1.5">
@@ -461,7 +469,7 @@
         };
 
         const ROUTE_MAP = {
-          '/':            { pillar: 'markets', sub: 'stock' },
+          '/':            { utility: 'brief' },
           '/stock':       { pillar: 'markets', sub: 'stock' },
           '/news':        { pillar: 'markets', sub: 'news' },
           '/live':        { pillar: 'markets', sub: 'live' },

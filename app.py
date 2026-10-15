@@ -15,6 +15,7 @@ import threading
 import math
 import os
 import hmac
+import sqlite3
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from db import init_db, is_fresh, get_prices, store_prices
@@ -27,8 +28,12 @@ import ai
 import corporate_actions
 import event_study
 import sec_8k
+import snapshot_store
 import earnings
 import radar
+import radar_contracts
+import brief
+import brief_contracts
 import peers
 import microstructure
 import macro_engine
@@ -512,7 +517,12 @@ def get_stock_data(ticker):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    """Front door: universe dashboard assembled from published briefs; the
+    cold state renders a warming skeleton and kicks the universe warmer."""
+    data = compute_dashboard()
+    if data["warming"]:
+        _warm_brief_universe()
+    return render_template('dashboard.html', **data)
 
 
 @app.route('/health')
@@ -668,7 +678,7 @@ def stock_page():
         data['custom_result'] = custom_result
         data['fundamentals'] = get_fundamentals(ticker)
         return render_template('stock.html', data=data)
-    return render_template('index.html')
+    return redirect(url_for('index'))
 
 def get_fundamentals(ticker: str) -> dict | None:
     """Fetch key valuation multiples, short interest, consensus forecasts, and upcoming events from yfinance.
@@ -3391,6 +3401,370 @@ _RADAR_EXCLUDED_LABELS = {
 }
 
 
+# --- Daily brief: per-ticker publication + page / JSON twin ----------------
+# Each ticker gets its own snapshot_store namespace ("brief:<TICKER>"), so the
+# current-pointer and last-2 retention are per ticker, exactly as radar's are
+# per universe.
+
+_BRIEF_SECTION_TITLES = {"price": "Last session", "earnings": "Earnings",
+                         "context": "Context"}
+_BRIEF_SECTION_SOURCE = {"price": "prices", "earnings": "earnings",
+                         "context": "fundamentals"}
+_BRIEF_PCT_FRACTIONS = frozenset({
+    "session_return", "gap_pct", "reaction_ret", "print_gap_pct",
+    "post_drift_5d", "post_drift_10d", "post_drift_20d"})
+
+
+def _fmt_usd_compact(v: float) -> str:
+    for div, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
+        if abs(v) >= div:
+            return f"${v / div:.1f}{suffix}"
+    return f"${v:,.0f}"
+
+
+def _fmt_brief_value(key: str, value):
+    if value is None:
+        return None
+    if key == "eps_surprise_nm":
+        return "NM" if value else "meaningful"
+    if key == "div_yield":
+        return f"{float(value):.2f}%"
+    if key in _BRIEF_PCT_FRACTIONS:
+        return f"{float(value) * 100:+.2f}%"
+    if key in ("eps_surprise_pct", "si_change_pct"):
+        return f"{float(value):+.1f}%"
+    if key in ("volume_ratio", "print_rel_volume"):
+        return f"{float(value):.2f}x"
+    if key in ("fwd_pe", "ps"):
+        return f"{float(value):.1f}x"
+    if key == "z_score":
+        return f"{float(value):.2f}σ"
+    if key == "mkt_cap":
+        return _fmt_usd_compact(float(value))
+    return str(value)
+
+
+def _brief_view_sections(out: dict) -> list[dict]:
+    """Contract-driven display rows per section: term, receipt-bearing value,
+    and the declared missing state — no cell renders blank without a label.
+    Only the sections the brief's declared depth names are rendered, so a
+    deltas brief never grows a phantom context section."""
+    sections = []
+    receipts = (out.get("meta") or {}).get("receipts") or {}
+    depth = (out.get("meta") or {}).get("depth") or brief.DEFAULT_DEPTH
+    required = brief.DEPTH_SECTIONS.get(depth, brief.DEPTH_SECTIONS[brief.DEFAULT_DEPTH])
+    for name, keys in brief_contracts.METRIC_KEYS_BY_SECTION.items():
+        if name not in required:
+            continue
+        sec = (out.get("sections") or {}).get(name) or {}
+        rows = []
+        for key in keys:
+            c = brief_contracts.contract(key)
+            rows.append({
+                "term": c["term"],
+                "definition": c["definition"],
+                "value": _fmt_brief_value(key, sec.get(key)),
+                "missing_state": c["missing_state"],
+                "source": c["source"],
+            })
+        sections.append({
+            "name": name,
+            "title": _BRIEF_SECTION_TITLES.get(name, name.title()),
+            "source": _BRIEF_SECTION_SOURCE.get(name, name),
+            "state": sec.get("state"),
+            "as_of": receipts.get(_BRIEF_SECTION_SOURCE.get(name, name)),
+            "rows": rows,
+        })
+    return sections
+
+
+def _brief_provider(ticker: str) -> str:
+    return f"brief:{ticker}"
+
+
+def current_brief(ticker: str) -> dict | None:
+    """The published brief payload for one ticker, or None when never published."""
+    return snapshot_store.current(_brief_provider((ticker or '').strip().upper()))
+
+
+def _brief_history(ticker: str) -> list[dict]:
+    """Retained editions for one ticker, newest first — light rows for the
+    history strip. The store keeps at most the last two publications."""
+    rows = []
+    for snapshot_id, out in snapshot_store.history(_brief_provider(ticker)):
+        meta = out.get("meta") or {}
+        price = (out.get("sections") or {}).get("price") or {}
+        rows.append({
+            "snapshot_id": snapshot_id,
+            "published": (meta.get("published_at")
+                          or meta.get("built_at") or "")[:16].replace("T", " ")
+                         or None,
+            "session_date": price.get("session_date"),
+            "depth": meta.get("depth") or brief.DEFAULT_DEPTH,
+        })
+    return rows
+
+
+def publish_brief(ticker: str, depth: str = brief.DEFAULT_DEPTH) -> dict | None:
+    """Load context (cache-only) -> build -> validate -> store -> move pointer
+    (last) -> prune. depth="deltas" publishes the price/earnings sections only.
+    On any failure the pointer stays untouched and the last-good brief serves."""
+    ticker = (ticker or '').strip().upper()
+    if not ticker:
+        return None
+    started = brief.now_iso()
+    try:
+        ctx = brief.load_brief_context(ticker)
+        out = brief.build_brief(ticker, ctx, depth=depth)
+        ok, problems = brief.validate_brief(out)
+        if not ok:
+            print(f"[brief] validation failed for {ticker}: {problems}")
+            return None
+        snapshot_id = snapshot_store.new_snapshot_id()
+        out["meta"]["snapshot_id"] = snapshot_id
+        out["meta"]["build_started_at"] = started
+        out["meta"]["build_completed_at"] = brief.now_iso()
+        out["meta"]["published_at"] = started
+        snapshot_store.publish(_brief_provider(ticker), snapshot_id, out)
+        return out
+    except Exception as e:
+        print(f"[brief] publish failed for {ticker} (pointer untouched): {e}")
+        return None
+
+
+_BRIEF_WARM_INFLIGHT: set[str] = set()
+_BRIEF_WARM_LOCK = threading.Lock()
+
+
+def kick_brief_build(ticker: str, background: bool = True):
+    """Cold-page seam: rebuild one ticker's brief from warmed caches (zero
+    network) in a background thread, deduped while in flight. Never blocks
+    the request."""
+    ticker = (ticker or '').strip().upper()
+    if not ticker:
+        return
+    with _BRIEF_WARM_LOCK:
+        if ticker in _BRIEF_WARM_INFLIGHT:
+            return
+        _BRIEF_WARM_INFLIGHT.add(ticker)
+
+    def _worker():
+        try:
+            publish_brief(ticker)
+        finally:
+            with _BRIEF_WARM_LOCK:
+                _BRIEF_WARM_INFLIGHT.discard(ticker)
+
+    if background:
+        threading.Thread(target=_worker, daemon=True,
+                         name=f"brief-warm-{ticker}").start()
+    else:
+        _worker()
+
+
+def _build_brief_on_demand(ticker: str) -> dict | None:
+    """Cold-page fallback: build and publish one ticker's brief synchronously
+    from cached context, deduped against the background kick through the same
+    in-flight guard. None means a build for this ticker is already running or
+    the build failed — the caller serves the warming skeleton."""
+    with _BRIEF_WARM_LOCK:
+        if ticker in _BRIEF_WARM_INFLIGHT:
+            return None
+        _BRIEF_WARM_INFLIGHT.add(ticker)
+    try:
+        return publish_brief(ticker)
+    finally:
+        with _BRIEF_WARM_LOCK:
+            _BRIEF_WARM_INFLIGHT.discard(ticker)
+
+
+def _brief_ai_garnish(ticker: str, out: dict) -> dict | None:
+    """Render-time attachment seam for the labeled AI interpretation: the
+    published payload is handed to ai.py's cache-gated provider chain, and any
+    failure yields None so the deterministic page never depends on it."""
+    try:
+        return ai.generate_brief_interpretation(ticker, out)
+    except Exception as e:
+        print(f"[brief] ai garnish failed for {ticker}: {e}")
+        return None
+
+
+@app.route('/brief/<ticker>')
+def brief_page(ticker):
+    """Per-ticker daily brief over the published snapshot; a cold page builds
+    once on demand from cached context and serves it, falling back to the
+    warming skeleton plus a background kick when the build cannot. An optional
+    labeled AI interpretation is attached at render time — never inside the
+    published payload, so the contract and its JSON twin stay AI-free."""
+    ticker = (ticker or '').strip().upper()
+    out = current_brief(ticker)
+    if out is None and ticker:
+        out = _build_brief_on_demand(ticker)
+    if out is not None:
+        return render_template('brief.html', ticker=ticker, warming=False,
+                               historical=False, gone=False,
+                               brief=out, sections=_brief_view_sections(out),
+                               receipts=out.get("meta", {}).get("receipts") or {},
+                               garnish=_brief_ai_garnish(ticker, out),
+                               history=_brief_history(ticker),
+                               current_id=(out.get("meta") or {}).get("snapshot_id"))
+    kick_brief_build(ticker)
+    return render_template('brief.html', ticker=ticker, warming=True,
+                           historical=False, gone=False,
+                           brief=None, sections=[], receipts={}, garnish=None,
+                           history=_brief_history(ticker), current_id=None)
+
+
+@app.route('/brief/<ticker>/<snapshot_id>')
+def brief_edition_page(ticker, snapshot_id):
+    """Read-only render of one stored edition at a stable URL: no warmer
+    kicks, no on-demand builds, no pointer writes. An edition beyond
+    retention (or never stored) renders a declared gone-state — never a 500,
+    never a redirect. The AI garnish attaches only to the live brief, so
+    historical editions serve the deterministic content alone, stamped by
+    the historical banner."""
+    ticker = (ticker or '').strip().upper()
+    snapshot_id = (snapshot_id or '').strip()
+    provider = _brief_provider(ticker)
+    out = snapshot_store.snapshot(provider, snapshot_id)
+    current_id = ((snapshot_store.current(provider) or {}).get("meta")
+                  or {}).get("snapshot_id")
+    if out is not None:
+        return render_template(
+            'brief.html', ticker=ticker, warming=False,
+            historical=snapshot_id != current_id, gone=False,
+            brief=out, sections=_brief_view_sections(out),
+            receipts=out.get("meta", {}).get("receipts") or {},
+            garnish=None, history=_brief_history(ticker),
+            current_id=current_id)
+    return render_template(
+        'brief.html', ticker=ticker, warming=False,
+        historical=False, gone=True,
+        brief=None, sections=[], receipts={}, garnish=None,
+        history=_brief_history(ticker), current_id=current_id)
+
+
+@app.route('/api/brief/<ticker>')
+def brief_api(ticker):
+    """JSON twin of /brief/<ticker>: the published payload verbatim (it
+    carries no rendered HTML), or a warming stub before the first publish."""
+    ticker = (ticker or '').strip().upper()
+    out = current_brief(ticker)
+    if out is None:
+        kick_brief_build(ticker)
+        return jsonify({"ticker": ticker, "status": "warming"}), 200
+    return jsonify(out)
+
+
+# --- Front door: universe dashboard at / ------------------------------------
+# Assembled exclusively from published briefs — the same artifacts /brief
+# serves — so the cold-open answer to "what should I know today?" never
+# fetches. warm_progress carries counts only, so the not-yet-published set is
+# recomputed from the same cache-only universe sources the warmer reads.
+
+_DASHBOARD_PROGRESS_TTL_HOURS = 48
+_DASHBOARD_CONSTITUENTS_TTL_HOURS = 24 * 7
+_EARNINGS_FRESH_SESSIONS = 5
+_EARNINGS_SOON_DAYS = 5
+
+
+def _dashboard_missing(key: str) -> str:
+    """The contract's declared missing state, for cells without a value."""
+    return brief_contracts.contract(key)["missing_state"]
+
+
+def _dashboard_universe() -> set[str]:
+    """Tickers the nightly pass covers, read cache-only: radar's watchlist
+    plus the cached S&P 500 constituents. Zero network — a cold constituents
+    cache just shrinks the declared-pending set until the heatmap warmer
+    refills it."""
+    out: set[str] = set()
+    try:
+        out.update(radar.universe_symbols(min_bars=200))
+    except sqlite3.OperationalError:
+        pass
+    try:
+        rows = db.cache_get("sp500", "constituents",
+                            ttl_hours=_DASHBOARD_CONSTITUENTS_TTL_HOURS)
+        out.update(r.get("symbol") for r in (rows or []) if r.get("symbol"))
+    except sqlite3.OperationalError:
+        pass
+    return out
+
+
+def _dashboard_card(ticker: str, out: dict) -> dict:
+    """One published brief -> a dashboard row; every absent cell keeps its
+    declared missing state, mirroring the brief page."""
+    price = (out.get("sections") or {}).get("price") or {}
+    events = (out.get("sections") or {}).get("earnings") or {}
+    meta = out.get("meta") or {}
+    receipts = meta.get("receipts") or {}
+    ret = price.get("session_return")
+    ret_f = float(ret) if isinstance(ret, (int, float)) else None
+    since = events.get("sessions_since_print")
+    soon = events.get("next_print_in_days")
+    if isinstance(since, int) and 0 <= since <= _EARNINGS_FRESH_SESSIONS:
+        earnings_note = f"print {since} session{'s' if since != 1 else ''} ago"
+    elif isinstance(soon, int) and 0 <= soon <= _EARNINGS_SOON_DAYS:
+        earnings_note = f"prints in {soon}d"
+    else:
+        earnings_note = None
+    as_of = receipts.get("prices") or ""
+    return {
+        "ticker": ticker,
+        "href": f"/brief/{ticker}",
+        "depth": meta.get("depth") or brief.DEFAULT_DEPTH,
+        "published": (meta.get("published_at")
+                      or meta.get("built_at") or "")[:16].replace("T", " ")
+                     or None,
+        "session_date": price.get("session_date"),
+        "return_fmt": _fmt_brief_value("session_return", ret),
+        "return_missing": _dashboard_missing("session_return"),
+        "direction": ("up" if ret_f > 0 else "down") if ret_f else "flat",
+        "z_fmt": _fmt_brief_value("z_score", price.get("z_score")),
+        "z_missing": _dashboard_missing("z_score"),
+        "volume_fmt": _fmt_brief_value("volume_ratio",
+                                       price.get("volume_ratio")),
+        "volume_missing": _dashboard_missing("volume_ratio"),
+        "significance_note": (price.get("significance")
+                              or price.get("significance_state")),
+        "earnings_note": earnings_note,
+        "as_of": as_of[:16].replace("T", " ") or None,
+    }
+
+
+def compute_dashboard() -> dict:
+    """Front-door data, published briefs only. Notable deltas are ranked by
+    biggest absolute last-session move, ties broken by ticker ascending —
+    deterministic. Universe tickers the nightly pass covers but has not
+    published yet come back as declared-pending rows, never silently absent.
+    Zero network on render: snapshot_store and cache reads only."""
+    briefs = snapshot_store.current_all("brief:")
+    ranked: list[tuple[float, str, dict]] = []
+    extra: list[dict] = []
+    for ticker in sorted(briefs):
+        card = _dashboard_card(ticker, briefs[ticker])
+        ret = ((briefs[ticker].get("sections") or {}).get("price")
+               or {}).get("session_return")
+        if isinstance(ret, (int, float)) and math.isfinite(ret):
+            ranked.append((-abs(float(ret)), ticker, card))
+        else:
+            extra.append(card)
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    progress = db.cache_get("brief", "warm_progress",
+                            ttl_hours=_DASHBOARD_PROGRESS_TTL_HOURS)
+    pending = [{"ticker": t, "href": f"/brief/{t}"}
+               for t in sorted(_dashboard_universe() - set(briefs))]
+    return {
+        "warming": not briefs and not progress,
+        "cards": [card for _, _, card in ranked] + extra,
+        "pending": pending,
+        "progress": progress if isinstance(progress, dict) else None,
+        "published_count": len(briefs),
+        "generated_at": brief.now_iso()[:16].replace("T", " "),
+    }
+
+
 # User-configurable provider keys. Saved server-side (SQLite) so they apply to the
 # backend Finnhub/FMP/LLM calls. Stored keys act as quota fallbacks behind the
 # built-in dev key — see providers._ordered_keys / _finnhub_get / _fmp_get and the
@@ -4014,6 +4388,108 @@ def _start_radar_warmer():
     threading.Thread(target=_recurring, daemon=True, name="radar-recurring").start()
 
 
+# Nightly-cadence freshness: a brief published within this window is skipped
+# by the universe pass, so a re-warm over a complete universe does no work.
+_BRIEF_FRESH_HOURS = 20
+
+
+def _brief_published_recently(ticker: str, fresh_hours: float) -> bool:
+    current = current_brief(ticker)
+    published = (current or {}).get("meta", {}).get("published_at")
+    if not published:
+        return False
+    # A publication whose every section is declared missing (boot race on a
+    # fresh DB, or a genuinely dataless ticker) must not consume the
+    # freshness window — rebuild it once data arrives.
+    sections = (current or {}).get("sections") or {}
+    if sections and all((sec or {}).get("state") == "missing"
+                        for sec in sections.values()):
+        return False
+    try:
+        age = datetime.utcnow() - datetime.fromisoformat(published)
+    except (TypeError, ValueError):
+        return False
+    return age < timedelta(hours=fresh_hours)
+
+
+def _warm_brief_universe(watchlist=None, sp500=None, background=True,
+                         fresh_hours=_BRIEF_FRESH_HOURS):
+    """Nightly tiered pass over the whole universe: the watchlist (radar's
+    universe, full-depth briefs) plus the S&P 500 (price/earnings deltas;
+    watchlist wins overlaps). Mirrors _warm_radar_cache: background thread,
+    cross-worker lock, never raises. Cache-only — publication reads SQLite,
+    so this pass never fetches; the radar/heatmap warmers keep its inputs
+    fed. A ticker whose sources all fail still publishes with declared
+    missing-states (but never consumes the freshness window), and one
+    ticker's failure never aborts the pass. Empty universes return before
+    claiming the lock. Progress lands in the brief:warm_progress status key
+    after every ticker. background=False runs the worker synchronously
+    (tests)."""
+    def _worker():
+        try:
+            full = sorted(watchlist if watchlist is not None
+                          else radar.universe_symbols(min_bars=200))
+            spx = [c.get("symbol") for c in (sp500 if sp500 is not None
+                                             else heatmap.get_constituents())]
+            tiers = {s: "deltas" for s in spx if s}
+            tiers.update({s: "full" for s in full if s})
+            tiers = dict(sorted(tiers.items()))
+            if not tiers:
+                # Both sources empty: return before claiming, so the cold
+                # front door is not locked out for the 6h TTL.
+                return
+            if not db.try_claim_lock("brief_warmer_lock", ttl_hours=6.0):
+                return
+            print(f"[brief] warming {len(tiers)} tickers "
+                  f"({len(full)} full-depth, {len(tiers) - len(full)} deltas)...")
+            published = skipped = failed = 0
+            for done, (ticker, depth) in enumerate(tiers.items(), start=1):
+                try:
+                    if _brief_published_recently(ticker, fresh_hours):
+                        skipped += 1
+                    elif publish_brief(ticker, depth=depth) is not None:
+                        published += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    failed += 1
+                    print(f"[brief] {ticker} warm failed: {e}")
+                try:
+                    db.cache_set("brief", "warm_progress",
+                                 {"done": done, "total": len(tiers),
+                                  "published": published, "skipped": skipped,
+                                  "failed": failed, "updated": brief.now_iso()})
+                except Exception as e:
+                    print(f"[brief] progress write failed at {ticker}: {e}")
+            print(f"[brief] done ({len(tiers)} tickers, {published} published, "
+                  f"{skipped} fresh-skipped, {failed} failed)")
+        except Exception as e:
+            print(f"[brief] warmer error: {e}")
+
+    if background:
+        threading.Thread(target=_worker, daemon=True, name="brief-warmer").start()
+    else:
+        _worker()
+
+
+def _start_brief_warmer():
+    """Nightly tiered brief pass: warm 2 minutes after boot, then every 24h
+    (the 20h freshness window rebuilds each ticker about once a day).
+    Import-time call like the other warmers; the test suite sets
+    BRIEF_WARM_ON_BOOT=0 to keep pytest offline."""
+    if os.environ.get("BRIEF_WARM_ON_BOOT", "1") != "1":
+        return
+
+    def _recurring():
+        time.sleep(120)
+        _warm_brief_universe()
+        while True:
+            time.sleep(24 * 3600)
+            _warm_brief_universe()
+
+    threading.Thread(target=_recurring, daemon=True, name="brief-recurring").start()
+
+
 @app.route('/api/warm-cache', methods=['POST'])
 def api_warm_cache():
     """Trigger a forced EOD options-chain warm (see .github/workflows/warm-cache.yml).
@@ -4244,6 +4720,7 @@ def api_radar_settings():
 _start_options_cache_warmer()
 _start_heatmap_warmer()
 _start_radar_warmer()
+_start_brief_warmer()
 
 
 if __name__ == '__main__':

@@ -4,13 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`ticker-change` is a single-process Flask equity-research dashboard. Enter a
-ticker and get seven connected views — price table (`/stock`), risk analytics
-(`/analytics`), market positioning (`/positioning`), live microstructure
-(`/live`), strategies/momentum (`/strategies`, with `/momentum` as an alias),
-options terminal (`/options`), and an AI analyst report (`/ai-summary`) — built
-from free-tier data sources (`yfinance`, Finnhub, FMP, SEC EDGAR) that all
-degrade gracefully when unconfigured or rate-limited.
+`ticker-change` is a single-process Flask equity-research dashboard. The
+front door is the daily brief (`/` universe dashboard, `/brief/<ticker>` per
+ticker); the seven connected views are its drill-down evidence pages — price
+table (`/stock`), risk analytics (`/analytics`), market positioning
+(`/positioning`), live microstructure (`/live`), strategies/momentum
+(`/strategies`, with `/momentum` as an alias), options terminal (`/options`),
+and an AI analyst report (`/ai-summary`) — built from free-tier data sources
+(`yfinance`, Finnhub, FMP, SEC EDGAR) that all degrade gracefully when
+unconfigured or rate-limited.
 
 There is no frontend build step — Tailwind is loaded from the CDN and charts
 are native ECharts JSON mounts embedded in Jinja templates; stock candles use
@@ -93,8 +95,18 @@ Supporting modules:
 - `ai.py` — LLM analyst report generation (standard/comprehensive/options
   variants), multi-provider fallback chain (Anthropic → OpenAI → Gemini →
   OpenRouter), results cached in `api_cache` (12h).
-- `glossary.py` — single source of truth for every metric's tooltip text and
-  `/glossary` page entry (injected as a Jinja global).
+- `brief.py` — deterministic daily-brief builder: cache-only context →
+  sections → contract validation (CPU only, no network).
+- `brief_contracts.py` — machine-checked definition/unit/window/source/
+  missing-state for every brief metric; version bump on label/definition
+  change, never silently.
+- `snapshot_store.py` — generic publication store (payload + `current`
+  pointer + two-edition retention in `api_cache`); pointer moves last so a
+  failed publish leaves the last-good snapshot serving.
+- `glossary.py` — single source of truth for evidence-page metric tooltips
+  and `/glossary` page entries (injected as a Jinja global); brief surfaces
+  take definitions from `brief_contracts.py` instead — see the tooltip note
+  below.
 - `s3_cache.py` — optional S3-backed option-chain cache; no-ops to SQLite
   `api_cache` when `S3_CACHE_BUCKET` is unset. `warm_s3_cache.py` is the
   standalone GH-Action script (duplicates the S3 key layout — keep both in
@@ -145,6 +157,13 @@ negatives in accounting-style parens.
 throughout for the `(i)` tooltip that links every stat to its `/glossary`
 entry — reuse it instead of hand-rolling label markup for new metrics.
 
+Tooltip/definition authority is deliberately split by surface: evidence
+pages take tooltips from `glossary.py` via that macro; the brief surfaces
+(`/`, `/brief/*`) take definitions and missing-states from
+`brief_contracts.py`, whose provenance is machine-validated per metric.
+Adding a brief metric means updating the brief contracts, not `glossary.py`
+— and adding an evidence-page metric means `glossary.py`, not the contracts.
+
 ## Known gaps (deliberate, tracked — don't "fix" silently)
 
 - `api_cache` expired rows are never purged; no schema migration mechanism.
@@ -172,3 +191,17 @@ SQLite and `model.pkl` are ephemeral there. API keys are optional everywhere
 and can be set via environment, `.env`, or the `/settings` page (which
 requires `SETTINGS_PASSWORD`, HTTP Basic). See `.env.example` for the full
 list.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as GitHub issues on ne1cc/ticker-change via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage labels are used verbatim (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root (created lazily by `/domain-modeling`). See `docs/agents/domain.md`.

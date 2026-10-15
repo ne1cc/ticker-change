@@ -153,17 +153,21 @@ def _row_for(sym: str) -> dict | None:
 
 
 def build_peer_comparison(
-        ticker: str, cap: int | None = None, min_peers: int = 2) -> dict | None:
+        ticker: str, cap: int | None = None, min_peers: int | None = None) -> dict | None:
     """Cross-sectional peer table with percentile ranks + quadrants.
 
     Reads only api_cache/SQLite — never fetches. None without a peer set or
-    focus fundamentals. Multiple metrics (the inverted cheapness set) treat
-    non-positive values as not-meaningful: flagged via ``{key}_nm`` and
-    excluded from percentile pools; rows carry ``{key}_peer_n`` (valid pool
-    size) and a ``{key}_state`` of "insufficient-peers" (percentile None)
-    when fewer than ``min_peers`` valid values exist.
+    focus fundamentals. min_peers defaults to the radar_min_peers tunable.
+    Multiple metrics (the inverted cheapness set) treat non-positive values as
+    not-meaningful: flagged via ``{key}_nm`` and excluded from percentile
+    pools; rows carry ``{key}_peer_n`` (valid pool size) and a ``{key}_state``
+    of "insufficient-peers" (percentile None) when fewer than ``min_peers``
+    valid values exist.
     """
     ticker = ticker.upper()
+    if min_peers is None:
+        import radar
+        min_peers = int(radar.get_tunable("radar_min_peers"))
     peers_syms = resolve_peers(ticker, cap=cap if cap is not None else 8)
     if not peers_syms:
         return None

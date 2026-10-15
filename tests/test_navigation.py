@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -23,6 +24,11 @@ class TestNavigation(unittest.TestCase):
         )
         fetch_patcher.start()
         self.addCleanup(fetch_patcher.stop)
+        # The dashboard route kicks the nightly brief warmer when cold; keep
+        # the nav checks offline and thread-free.
+        warm_patcher = mock.patch.object(app_module, "_warm_brief_universe")
+        warm_patcher.start()
+        self.addCleanup(warm_patcher.stop)
 
     def tearDown(self):
         db.DB_PATH = self.orig_db_path
@@ -45,6 +51,7 @@ class TestNavigation(unittest.TestCase):
             "/momentum",
             "/strategies",
             "/ai-summary",
+            "/radar",
             "/glossary",
             "/api/docs",
         ]
@@ -154,6 +161,54 @@ class TestNavigation(unittest.TestCase):
                 html,
                 f"Deprecated legacy topbar navigation element still present: {legacy_id}",
             )
+
+    def test_desktop_nav_presents_brief_first_with_demoted_evidence(self):
+        """Hierarchy inversion: the brief surface leads the nav, and the deep
+        pages follow an 'Evidence' grouping, demoted to secondary styling."""
+        resp = self.client.get("/glossary")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+
+        self.assertIn('id="nav-brief" href="/"', html)
+        pos_brief = html.find('id="nav-brief"')
+        pos_evidence_label = html.find(">Evidence</span>")
+        self.assertGreater(pos_evidence_label, pos_brief,
+                           "Evidence grouping must follow the brief surface")
+
+        evidence_ids = [
+            "nav-markets", "nav-options", "nav-analytics",
+            "nav-strategies", "nav-radar",
+        ]
+        for link_id in evidence_ids:
+            self.assertIn(f'id="{link_id}"', html)
+            self.assertGreater(html.find(f'id="{link_id}"'), pos_evidence_label,
+                               f"{link_id} must sit under the Evidence grouping")
+
+        demoted_class = re.search(r'<a id="nav-markets"[^>]*class="([^"]*)"', html)
+        self.assertIsNotNone(demoted_class)
+        self.assertIn("text-xs", demoted_class.group(1))
+        brief_class = re.search(r'<a id="nav-brief"[^>]*class="([^"]*)"', html)
+        self.assertIsNotNone(brief_class)
+        self.assertIn("font-semibold", brief_class.group(1))
+        self.assertNotIn("text-xs", brief_class.group(1))
+
+    def test_mobile_nav_presents_brief_first(self):
+        """The mobile drawer leads with the brief surface; all evidence
+        groups follow it and every destination remains reachable."""
+        resp = self.client.get("/glossary")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+
+        self.assertIn('id="mobile-nav-brief" href="/"', html)
+        pos_brief = html.find('id="mobile-nav-brief"')
+        for m_id in [
+            "mobile-nav-stock", "mobile-nav-live", "mobile-nav-options",
+            "mobile-nav-analytics", "mobile-nav-positioning",
+            "mobile-nav-strategies", "mobile-nav-radar", "mobile-nav-ai-summary",
+        ]:
+            self.assertIn(f'id="{m_id}"', html)
+            self.assertLess(pos_brief, html.find(f'id="{m_id}"'),
+                            f"{m_id} must follow the brief surface in the drawer")
 
     def test_ticker_sub_navbar_links_present(self):
         """Verify that the ticker sub-navbar structure contains all child tool link anchors and search/ticker badges."""
