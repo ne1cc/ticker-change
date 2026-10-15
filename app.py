@@ -3487,6 +3487,24 @@ def current_brief(ticker: str) -> dict | None:
     return snapshot_store.current(_brief_provider((ticker or '').strip().upper()))
 
 
+def _brief_history(ticker: str) -> list[dict]:
+    """Retained editions for one ticker, newest first — light rows for the
+    history strip. The store keeps at most the last two publications."""
+    rows = []
+    for snapshot_id, out in snapshot_store.history(_brief_provider(ticker)):
+        meta = out.get("meta") or {}
+        price = (out.get("sections") or {}).get("price") or {}
+        rows.append({
+            "snapshot_id": snapshot_id,
+            "published": (meta.get("published_at")
+                          or meta.get("built_at") or "")[:16].replace("T", " ")
+                         or None,
+            "session_date": price.get("session_date"),
+            "depth": meta.get("depth") or brief.DEFAULT_DEPTH,
+        })
+    return rows
+
+
 def publish_brief(ticker: str, depth: str = brief.DEFAULT_DEPTH) -> dict | None:
     """Load context (cache-only) -> build -> validate -> store -> move pointer
     (last) -> prune. depth="deltas" publishes the price/earnings sections only.
@@ -3584,12 +3602,46 @@ def brief_page(ticker):
         out = _build_brief_on_demand(ticker)
     if out is not None:
         return render_template('brief.html', ticker=ticker, warming=False,
+                               historical=False, gone=False,
                                brief=out, sections=_brief_view_sections(out),
                                receipts=out.get("meta", {}).get("receipts") or {},
-                               garnish=_brief_ai_garnish(ticker, out))
+                               garnish=_brief_ai_garnish(ticker, out),
+                               history=_brief_history(ticker),
+                               current_id=(out.get("meta") or {}).get("snapshot_id"))
     kick_brief_build(ticker)
     return render_template('brief.html', ticker=ticker, warming=True,
-                           brief=None, sections=[], receipts={}, garnish=None)
+                           historical=False, gone=False,
+                           brief=None, sections=[], receipts={}, garnish=None,
+                           history=_brief_history(ticker), current_id=None)
+
+
+@app.route('/brief/<ticker>/<snapshot_id>')
+def brief_edition_page(ticker, snapshot_id):
+    """Read-only render of one stored edition at a stable URL: no warmer
+    kicks, no on-demand builds, no pointer writes. An edition beyond
+    retention (or never stored) renders a declared gone-state — never a 500,
+    never a redirect. The AI garnish attaches only to the live brief, so
+    historical editions serve the deterministic content alone, stamped by
+    the historical banner."""
+    ticker = (ticker or '').strip().upper()
+    snapshot_id = (snapshot_id or '').strip()
+    provider = _brief_provider(ticker)
+    out = snapshot_store.snapshot(provider, snapshot_id)
+    current_id = ((snapshot_store.current(provider) or {}).get("meta")
+                  or {}).get("snapshot_id")
+    if out is not None:
+        return render_template(
+            'brief.html', ticker=ticker, warming=False,
+            historical=snapshot_id != current_id, gone=False,
+            brief=out, sections=_brief_view_sections(out),
+            receipts=out.get("meta", {}).get("receipts") or {},
+            garnish=None, history=_brief_history(ticker),
+            current_id=current_id)
+    return render_template(
+        'brief.html', ticker=ticker, warming=False,
+        historical=False, gone=True,
+        brief=None, sections=[], receipts={}, garnish=None,
+        history=_brief_history(ticker), current_id=current_id)
 
 
 @app.route('/api/brief/<ticker>')

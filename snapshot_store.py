@@ -81,6 +81,40 @@ def current_all(provider_prefix: str) -> dict[str, dict]:
     return out
 
 
+def snapshot(provider: str, snapshot_id: str):
+    """One stored snapshot payload by id, or None when pruned, expired, or
+    never existed. Same TTL rule as current(). Read-only: no writes, no
+    prunes, no pointer moves."""
+    payload = db.cache_get(provider, f"snapshot:{snapshot_id}", _TTL_HOURS)
+    return payload if isinstance(payload, dict) else None
+
+
+def history(provider: str) -> list[tuple[str, dict]]:
+    """Every retained snapshot payload for one provider, newest first.
+    Same TTL rule as current(), so a row past the window reads as pruned
+    even before deletion. Read-only."""
+    try:
+        with db.get_conn() as conn:
+            rows = conn.execute(
+                "SELECT key, payload, fetched_at FROM api_cache "
+                "WHERE provider = ? AND key LIKE 'snapshot:%' "
+                "ORDER BY fetched_at DESC, rowid DESC", (provider,)).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    cutoff = datetime.utcnow() - timedelta(hours=_TTL_HOURS)
+    out: list[tuple[str, dict]] = []
+    for row in rows:
+        try:
+            if datetime.fromisoformat(row["fetched_at"]) < cutoff:
+                continue
+            payload = json.loads(row["payload"])
+        except (ValueError, TypeError):
+            continue
+        if isinstance(payload, dict):
+            out.append((row["key"][len("snapshot:"):], payload))
+    return out
+
+
 def _prune(provider: str, keep: int = _RETENTION):
     """Keep only the newest `keep` snapshot payloads; 'current' is a separate
     key and never matches the snapshot: prefix."""

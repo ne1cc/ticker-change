@@ -3,7 +3,16 @@
 
 {% block content %}
 <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-  <h1 class="text-2xl font-semibold tracking-tight mb-1">Daily brief — {{ ticker }}</h1>
+  <div class="flex flex-wrap items-center gap-3 mb-1">
+    <h1 class="text-2xl font-semibold tracking-tight">Daily brief — {{ ticker }}</h1>
+    {% if gone %}
+    <span class="rounded border border-zinc-400 dark:border-zinc-600 bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 whitespace-nowrap">Edition gone</span>
+    {% elif historical %}
+    <span class="rounded border border-violet-400 dark:border-violet-700 bg-violet-100 dark:bg-violet-900/40 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-violet-700 dark:text-violet-300 whitespace-nowrap">Historical</span>
+    {% elif brief %}
+    <span class="rounded border border-emerald-500 dark:border-emerald-700 bg-emerald-100 dark:bg-emerald-900/40 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300 whitespace-nowrap">Current</span>
+    {% endif %}
+  </div>
   <p class="text-xs text-zinc-400 mb-6">
     Nightly per-ticker brief over warmed caches — never fetches on load.
     {% if brief and brief.meta %}
@@ -12,6 +21,21 @@
     · contract v{{ brief.meta.contract_version }}
     {% endif %}
   </p>
+
+  {% if gone %}
+  <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-6 mb-6 text-sm text-zinc-500 dark:text-zinc-400">
+    <p class="font-medium text-zinc-700 dark:text-zinc-300 mb-1">This edition is no longer retained.</p>
+    <p>Only the last two publications are kept per ticker — this snapshot id is beyond them, or never existed.
+       <a href="/brief/{{ ticker }}" class="text-amber-600 dark:text-amber-400 font-medium hover:underline whitespace-nowrap">View the current brief →</a></p>
+  </div>
+  {% elif historical %}
+  <div class="rounded-xl border border-violet-300 dark:border-violet-800 bg-violet-50/60 dark:bg-violet-950/20 px-4 py-3 mb-6 text-xs text-zinc-600 dark:text-zinc-300">
+    <span class="font-semibold uppercase tracking-wider">Archived edition</span>
+    {% if brief.meta.published_at %} — preserved as published {{ brief.meta.published_at[:16].replace('T', ' ') }}{% endif %};
+    read-only, exactly as it was served. The AI interpretation attaches only to the live brief.
+    <a href="/brief/{{ ticker }}" class="text-amber-600 dark:text-amber-400 font-medium hover:underline whitespace-nowrap">View the current brief →</a>
+  </div>
+  {% endif %}
 
   {% if warming %}
   <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center text-sm text-zinc-400">
@@ -76,6 +100,23 @@
     </p>
   </section>
   {% endif %}
+  {% endif %}
+
+  {% if history %}
+  <div class="mt-8 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+    <h2 class="text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-2">Past editions</h2>
+    <ul class="text-xs text-zinc-500 dark:text-zinc-400 space-y-1">
+      {% for ed in history %}
+      <li class="flex flex-wrap items-baseline gap-2">
+        <a href="/brief/{{ ticker }}/{{ ed.snapshot_id }}" class="font-mono text-amber-600 dark:text-amber-400 hover:underline">{{ ed.snapshot_id }}</a>
+        <span>session {{ ed.session_date or 'unknown' }}</span>
+        {% if ed.published %}<span>· published {{ ed.published }}</span>{% endif %}
+        <span>· {{ ed.depth }}</span>
+        {% if ed.snapshot_id == current_id %}<span class="rounded border border-emerald-500 dark:border-emerald-700 bg-emerald-100 dark:bg-emerald-900/40 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">Current</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
   {% endif %}
 </div>
 {% endblock %}
