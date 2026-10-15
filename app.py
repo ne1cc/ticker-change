@@ -3544,19 +3544,38 @@ def kick_brief_build(ticker: str, background: bool = True):
         _worker()
 
 
+def _build_brief_on_demand(ticker: str) -> dict | None:
+    """Cold-page fallback: build and publish one ticker's brief synchronously
+    from cached context, deduped against the background kick through the same
+    in-flight guard. None means a build for this ticker is already running or
+    the build failed — the caller serves the warming skeleton."""
+    with _BRIEF_WARM_LOCK:
+        if ticker in _BRIEF_WARM_INFLIGHT:
+            return None
+        _BRIEF_WARM_INFLIGHT.add(ticker)
+    try:
+        return publish_brief(ticker)
+    finally:
+        with _BRIEF_WARM_LOCK:
+            _BRIEF_WARM_INFLIGHT.discard(ticker)
+
+
 @app.route('/brief/<ticker>')
 def brief_page(ticker):
-    """Per-ticker daily brief over the published snapshot; cold renders a
-    warming skeleton and kicks a cache-only background build."""
+    """Per-ticker daily brief over the published snapshot; a cold page builds
+    once on demand from cached context and serves it, falling back to the
+    warming skeleton plus a background kick when the build cannot."""
     ticker = (ticker or '').strip().upper()
     out = current_brief(ticker)
-    if out is None:
-        kick_brief_build(ticker)
-        return render_template('brief.html', ticker=ticker, warming=True,
-                               brief=None, sections=[], receipts={})
-    return render_template('brief.html', ticker=ticker, warming=False,
-                           brief=out, sections=_brief_view_sections(out),
-                           receipts=out.get("meta", {}).get("receipts") or {})
+    if out is None and ticker:
+        out = _build_brief_on_demand(ticker)
+    if out is not None:
+        return render_template('brief.html', ticker=ticker, warming=False,
+                               brief=out, sections=_brief_view_sections(out),
+                               receipts=out.get("meta", {}).get("receipts") or {})
+    kick_brief_build(ticker)
+    return render_template('brief.html', ticker=ticker, warming=True,
+                           brief=None, sections=[], receipts={})
 
 
 @app.route('/api/brief/<ticker>')

@@ -89,7 +89,9 @@ class TestBriefEvidenceLinks(_IsolatedDB):
         self.assertEqual(html.count('href="/stock?ticker=AAA"'), 1)
 
     def test_warming_page_renders_no_evidence_links(self):
-        with patch.object(app_module, "kick_brief_build"):
+        with patch.object(app_module.brief, "load_brief_context",
+                          side_effect=RuntimeError("boom")), \
+             patch.object(app_module, "kick_brief_build"):
             html = self.client.get("/brief/ZZZ").get_data(as_text=True)
         self.assertNotIn('href="/stock?ticker=', html)
         self.assertNotIn('href="/analytics?ticker=', html)

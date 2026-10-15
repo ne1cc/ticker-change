@@ -1,7 +1,9 @@
-"""/brief/<ticker>: published content renders; cold = warming; JSON twin parity.
+"""/brief/<ticker>: published content renders; cold builds on demand and
+falls back to warming on failure; JSON twin parity.
 
 The render path is proven offline by sentinels on every network entry point:
-the page serves the published artifact only.
+the page serves the published artifact (or an on-demand build over the
+cache-only context) and never fetches.
 """
 import json
 import os
@@ -72,12 +74,90 @@ class TestBriefPage(_IsolatedDB, unittest.TestCase):
         self.assertIn("as of", html)              # receipts visible on numbers
         self.assertIn("prices", html)
 
-    def test_cold_snapshot_shows_warming_and_kicks_build(self):
-        with patch.object(app_module, "kick_brief_build") as kick:
+    def test_cold_request_builds_publishes_and_serves(self):
+        _seed("ZZZ")
+        resp = self._client().get("/brief/ZZZ")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("+5.00%", html)
+        self.assertNotIn("warming", html.lower())
+        current = app_module.current_brief("ZZZ")
+        self.assertIsNotNone(current)
+        self.assertEqual(current["meta"]["ticker"], "ZZZ")
+        self.assertEqual(current["meta"]["validation_status"], "ok")
+
+    def test_second_request_serves_published_without_rebuild(self):
+        _seed("ZZZ")
+        client = self._client()
+        with patch.object(app_module.brief, "load_brief_context",
+                          wraps=app_module.brief.load_brief_context) as load:
+            first = client.get("/brief/ZZZ")
+            second = client.get("/brief/ZZZ")
+        self.assertEqual(load.call_count, 1)
+        for resp in (first, second):
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("+5.00%", resp.get_data(as_text=True))
+
+    def test_on_demand_build_touches_no_network(self):
+        with patch("yfinance.Ticker", side_effect=AssertionError("network!")), \
+             patch("requests.get", side_effect=AssertionError("network!"),
+                   create=True), \
+             patch.object(app_module, "get_or_fetch_prices",
+                          side_effect=AssertionError("network!")), \
+             patch.object(app_module.earnings, "get_earnings_history",
+                          side_effect=AssertionError("network!")), \
+             patch.object(app_module, "get_fundamentals",
+                          side_effect=AssertionError("network!")), \
+             patch.object(app_module.providers, "get_short_interest",
+                          side_effect=AssertionError("network!")):
+            resp = self._client().get("/brief/NOPE")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("No cached data (never fetched)", html)
+        self.assertIn("unknown — payload missing", html)
+        self.assertNotIn("warming", html.lower())
+
+    def test_build_failure_falls_back_to_warming_and_kick(self):
+        with patch.object(app_module.brief, "load_brief_context",
+                          side_effect=RuntimeError("boom")), \
+             patch.object(app_module, "kick_brief_build") as kick:
             resp = self._client().get("/brief/ZZZ")
         self.assertEqual(resp.status_code, 200)
         self.assertIn("warming", resp.get_data(as_text=True).lower())
         kick.assert_called_once_with("ZZZ")
+
+    def test_in_flight_build_serves_warming_without_second_build(self):
+        _seed("ZZZ")
+        app_module._BRIEF_WARM_INFLIGHT.add("ZZZ")
+        self.addCleanup(app_module._BRIEF_WARM_INFLIGHT.discard, "ZZZ")
+        with patch.object(app_module, "publish_brief") as pub, \
+             patch.object(app_module, "kick_brief_build") as kick:
+            resp = self._client().get("/brief/ZZZ")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("warming", resp.get_data(as_text=True).lower())
+        pub.assert_not_called()
+        kick.assert_called_once_with("ZZZ")
+
+    def test_on_demand_build_leaves_universe_publications_untouched(self):
+        _seed("AAA")
+        self.assertIsNotNone(app_module.publish_brief("AAA"))
+        pointer_before = app_module.current_brief("AAA")["meta"]["snapshot_id"]
+        with db.get_conn() as conn:
+            rows_before = conn.execute(
+                "SELECT key, payload FROM api_cache WHERE provider='brief:AAA' "
+                "ORDER BY key").fetchall()
+        _seed("BBB")
+        resp = self._client().get("/brief/BBB")
+        self.assertIn("+5.00%", resp.get_data(as_text=True))
+        with db.get_conn() as conn:
+            rows_after = conn.execute(
+                "SELECT key, payload FROM api_cache WHERE provider='brief:AAA' "
+                "ORDER BY key").fetchall()
+        self.assertEqual([tuple(r) for r in rows_before],
+                         [tuple(r) for r in rows_after])
+        self.assertEqual(app_module.current_brief("AAA")["meta"]["snapshot_id"],
+                         pointer_before)
+        self.assertIsNotNone(app_module.current_brief("BBB"))
 
     def test_unknown_ticker_never_404s(self):
         with patch.object(app_module, "kick_brief_build"):
