@@ -1,14 +1,25 @@
 # ticker/change
 
-**An equity research terminal for retail traders and investors.**
+> *ticker-change publishes a nightly, provenance-stamped daily brief per
+> ticker — "what changed today, and does it matter?" — with a source-and-as-of
+> receipt on every number, and the entire existing app demoted to drill-down
+> evidence.*
 
-Enter a ticker, understand the context, sanity-check a trade before you take it.
-ticker/change pulls free market data into seven connected views — prices,
-fundamentals, options positioning, strategy backtests, and risk — so you can
-decide whether a name is worth your attention. It explains what the data
-shows; it does not predict the market or execute trades.
+**A daily brief that shows what changed, whether it matters, and the receipt
+for every number it prints.**
+
+Every number shows its source and as-of time. The brief answers one question
+per ticker per session — *what changed today, and does it matter?* — and links
+each claim to the deep page that proves it. Static profiles are solved by free
+sites; deltas are the product.
 
 - **Live demo:** https://ticker-change.duckdns.org
+
+<!-- PLACEHOLDER: not a real capture yet. Replace docs/img/brief-provenance.png
+     with a screenshot of a rendered /brief/<ticker> page showing the
+     source-and-as-of receipt chips and per-row receipts before merge. -->
+
+![A rendered daily brief with source-and-as-of receipts on every number](docs/img/brief-provenance.png)
 
 ---
 
@@ -16,53 +27,132 @@ shows; it does not predict the market or execute trades.
 
 | | |
 | --- | --- |
-| **Category** | Equity research terminal / pre-trade context cockpit |
-| **Built for** | Retail traders and investors researching their own ideas |
+| **Category** | Provenance-stamped daily brief over an equity-research drill-down app |
+| **Built for** | Engineers and recruiters reading the architecture; retail traders using the briefs |
 | **Data** | Free-tier sources (`yfinance`, Finnhub, FMP, SEC EDGAR) |
 | **Architecture** | Single-process Flask app, SQLite cache, no frontend build step |
 
 **Not:** a broker, a validated alpha engine, financial advice, or a replacement
-for Bloomberg. Buyer Signals and ML outputs are structured summaries — not
-forecasts. See [What we don't claim](#what-we-dont-claim).
+for Bloomberg. The brief is deterministic — no LLM in the numbers. The optional
+AI interpretation is labeled garnish and never load-bearing. See
+[What we don't claim](#what-we-dont-claim).
 
 ---
 
-## How you'll use it
+## How it works
 
-One mode, one app: **Pre-trade** — is this position worth taking? Enter a
-ticker, deep dive, go or pass.
+### Metric contracts
 
-```
-Enter a ticker  →  Seven views  →  Checklist on /analytics
-```
+Every metric the brief can print has a contract: definition, unit, window,
+source, and declared missing state. Contracts cover *all* rendered metrics —
+a number cannot appear without a contract, and a gap cannot appear without a
+label. Contract versions bump explicitly; labels never change silently.
 
-**Workflow:** enter a symbol → work through the views → pre-trade checklist on
-`/analytics`. Your ticker follows you across every view for the length of the
-browser session, and the homepage clears it.
+### Coherent snapshot publication
+
+Briefs are built in a nightly batch and published atomically: payload written
+first, pointer moved last, retention keeps the last two editions. A failed or
+invalid build never replaces the pointer, so readers see the last-good brief —
+never a torn or half-built one. Page views never trigger slow fan-out fetches;
+they read only what is already published (the same is true of the root
+dashboard and its JSON twin).
+
+### Tiered nightly universe
+
+The nightly pass spends depth where it is scarce: the watchlist gets
+full-depth briefs (price, earnings, context), the S&P 500 gets price and
+earnings deltas, and the watchlist wins overlaps. One ticker's failure never
+aborts the pass — it publishes with declared missing-states like anyone else.
+
+### Declared missing-states
+
+Every rendered cell is either a contract-backed value or a declared state:
+`NM`, missing, stale-with-as-of, window-incomplete. A 20-session window that
+isn't complete is never silently shortened; a failed source is never an
+invisible blank. Session math is shared with the radar screens, so weekends
+and holidays never advance "today" artificially.
+
+### On-demand fallback
+
+A ticker outside the nightly universe still answers: `/brief/<ticker>` builds
+once on demand from cached context — with the same provenance and declared
+gaps, not blanks — or renders a warming skeleton while the build runs.
+
+### AI garnish, optional and labeled
+
+The LLM interpretation attaches at render time, never inside the published
+payload or its JSON twin. It is clearly marked AI-generated, cached, and can
+be absent without the page noticing.
+
+### Brief history
+
+The last two editions per ticker stay navigable at stable URLs, so "what we
+said yesterday" is auditable against today's brief. A read-only historical
+edition serves the deterministic content alone; editions beyond retention
+render a declared gone-state, never a 500.
+
+### What everything else is
+
+The rest of the app is drill-down evidence: deep pages keep their routes,
+linked from the brief sections they substantiate.
+
+More detail: [`CLAUDE.md`](CLAUDE.md)
 
 ---
 
-## Three layers
+## Quick start
 
-Everything maps to one of three layers:
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python3 app.py
+# → http://127.0.0.1:5001  (root is the universe dashboard)
+```
 
+Then open a brief: `http://127.0.0.1:5001/brief/AAPL` — or search any ticker
+from the nav. Works immediately with **no configuration** — price data and SEC
+EDGAR panels need no keys. The first boot warms the nightly universe in the
+background; briefs render from published snapshots as each ticker lands.
+
+Production-like:
+
+```bash
+gunicorn app:app --bind 0.0.0.0:5001 --workers 2
 ```
-┌─────────────────────────────────────────┐
-│  DECIDE  — pre-trade checklist          │  built
-├─────────────────────────────────────────┤
-│  UNDERSTAND — GEX, IV, momentum, risk   │  built ← current strength
-├─────────────────────────────────────────┤
-│  OBSERVE — prices, fundamentals, flow   │  built
-└─────────────────────────────────────────┘
+
+**Optional — train the ML model** (used by the analytics drill-down, not the
+brief):
+
+```bash
+python ml.py train AAPL MSFT NVDA SPY ...
 ```
+
+`train` reads only price history already cached in SQLite — run
+`python ml.py backfill --sp500` first for S&P-wide training. Without
+`model.pkl`, the ML section is omitted; predictions older than 30 days are
+suppressed.
+
+### Running tests
+
+```bash
+pip install -r requirements.txt -r requirements-test.txt
+pytest tests/ -v
+```
+
+The suite runs on every push and pull request via
+`.github/workflows/tests.yml`. Brief, dashboard, and snapshot tests prove a
+zero-network build with sentinels on every network entry point; a few tests
+shell out to `node` to parse and execute the inline navigation JavaScript in
+`templates/base.html` and skip cleanly if node is absent.
 
 ---
 
-## Views
+## Drill-down evidence pages
 
-Enter a ticker and navigate seven connected views, grouped into four
-navigation pillars — Markets, Options, Analytics, Strategies. The sub-navbar
-carries your symbol across every page.
+Enter a ticker (or click a dashboard card) and the brief links into these
+connected views, grouped into navigation pillars — Markets, Options,
+Analytics, Strategies, Radar. The sub-navbar carries your symbol across every
+page.
 
 | View | Pillar | Route | Purpose |
 | --- | --- | --- | --- |
@@ -75,6 +165,7 @@ carries your symbol across every page.
 | **Market Positioning** | Analytics | `/positioning` | Valuation, analyst ratings, insider activity, 13F holders |
 | **Strategy Backtests** | Strategies | `/strategies` | Three selectable strategies, leaderboard, screener, single-ticker backtest |
 | **AI Report** | Strategies | `/ai-summary` | LLM desk note synthesising metrics (optional; needs AI key) |
+| **Radar** | Radar | `/radar` | Snapshot-published universe screens: earnings drift, value, squeeze |
 
 The Options pillar also links **Options Chain** straight to `/live?tab=greeks`
 — the chain is a tab of the Live view, not a route of its own.
@@ -83,165 +174,24 @@ Also: [`/glossary`](https://ticker-change.duckdns.org/glossary) (metric referenc
 [`/settings`](https://ticker-change.duckdns.org/settings) (API keys),
 [`/api/docs`](https://ticker-change.duckdns.org/api/docs) (OpenAPI explorer).
 
----
-
-## Features by layer
-
-### Observe — aggregate public data
-
-**`/news` — ticker headlines (optional Marketaux key)**
-- Up to 15 English-language headlines from the last seven days, newest first,
-  with publisher, publication time, and original article links
-- Three-headline preview on `/stock`, loaded independently of prices
-- Supports international listings that Marketaux can resolve; ambiguous listings
-  require a choice, and unsupported listings display a coverage message
-- Shared one-hour cache; saved headlines may be served for up to 24 hours when
-  updates fail, with the original fetch time visible
-
-Set `MARKETAUX_API_KEY` or save a key through the protected `/settings` page
-(the saved Marketaux key takes precedence). No key means a clear unavailable
-state; no simulated news is shown. The free plan returns three articles per
-request, so a full 15-headline refresh takes five requests, plus a lookup for
-an uncached listing. This integration caps all upstream attempts at 90 per UTC
-day across workers and restarts. Cached page views cost no extra requests;
-results are a selection, not a complete archive or a real-time feed.
-
-Use a dedicated key to keep the local budget meaningful. Before enabling news
-on a public deployment, confirm API-specific public-display and temporary-cache
-rights with Marketaux. A free API key alone does not establish those rights.
-No automatic paid upgrade occurs.
-
-**`/stock`**
-- 18-period price change (1D–5D through 5Y + YTD), percentage and net dollar
-- Custom lookback: *N* trading days or calendar days ago
-- ATR (30d), 52-week and all-time ranges
-- Fundamentals mini-panel (P/E, EV/EBITDA, short % float, …)
-- Interactive candlestick + volume chart (TradingView Lightweight Charts)
-
-**`/positioning`**
-- Valuation and fundamentals (Finnhub)
-- Analyst recommendation breakdown
-- Insider sentiment and transactions (Finnhub + SEC EDGAR fallback)
-- Top institutional 13F holders (FMP + SEC fallback)
-
-SEC EDGAR panels work with **no API keys**.
-
-### Understand — compute context
-
-**`/analytics`**
-- Risk stats: vol, max drawdown, beta, VaR (95/99), Sharpe, skew, kurtosis
-- Rolling vol, drawdown, and VaR time series
-- **Dealer Gamma Exposure (GEX)** — modelled from OI + in-house Black-Scholes
-- Options vol smile, cumulative return vs SPY/QQQ
-- Monte Carlo forward paths (3m / 6m / 1y)
-- **Buyer Signals** — transparent multi-factor tally (`signals.py`), not a black box
-- ML Buy/Hold/Sell signal (optional; train with `ml.py`)
-- **Institutional Quantitative Analytics** — microstructure (VPIN toxicity,
-  Corwin-Schultz spread, Amihud illiquidity, squeeze-risk gauge), macro regime
-  and asymmetric bull/bear betas, higher-order Greeks (Vanna, Charm, Vomma),
-  variance risk premium, and SEC Form 8-K material events
-
-**`/live`** — three tabs: L2 microstructure, option Greeks, options AI analyst
-- Streaming trades (Finnhub WebSocket when keyed; simulated fallback)
-- Simulated Level 2 order book with depth chart and liquidity analytics
-- **Options chain**: bid/ask, volume, open interest, IV and full Greeks per
-  strike, calls and puts mirrored around a centred strike column. Pick 20/40/60
-  strikes nearest spot or the whole chain; the header stays pinned while you
-  scroll. Deep-linkable at `/live?tab=greeks`
-- IV rank / percentile, expected move, max pain, put-call ratios
-- Payoff simulator — click any contract to load it
-- Strategy posture suggestions based on IV vs HV
-
-**`/options`** — server-rendered options terminal
-- Strike-by-strike dollar gamma exposure ($M per 1% move)
-- ATM implied-volatility term structure and 3D volatility surface mesh
-- Multi-window realised volatility vs current ATM IV
-- Strike Greek matrix with Vanna and Charm columns
-
-**`/strategies`** — three selectable strategies over one shared engine
-  (`momentum_engine.py`)
-
-| Strategy | Signal |
-| --- | --- |
-| 12-1 Relative Strength | Cross-sectional rank, top-5 monthly rotation |
-| Dual Momentum | Relative rank plus an absolute cash hurdle; failing names sit in cash |
-| SMA Trend Following | 50/200 golden cross, ranked by `(SMA50 - SMA200) / SMA200` |
-
-- Universe leaderboard with rotation backtest vs SPY/QQQ, turnover-scaled costs
-- Cross-sectional screener with momentum and cash-hurdle filters
-- Single-ticker backtest with alpha/beta vs SPY, CSV export on both tables
-
-**`/ai-summary`**
-- LLM analyst note grounded in computed metrics (multi-provider fallback)
-- Raw data tables rendered alongside for verification
-
-Every metric has an `(i)` tooltip linking to [`/glossary`](/glossary).
-
+Every metric on these pages has an `(i)` tooltip linking to `/glossary`.
 **Three display modes** — light, dark, and an Excel mode that re-renders cards
-as spreadsheet-style grids with accounting-style negatives. Stored in
-`localStorage` and mirrored to a cookie so the server can branch structurally.
-
-### Decide — go/no-go support
-
-**`/analytics` (checklist card)**
-- Six pass / warn / fail checks: trend, momentum, IV, earnings, GEX, extension
-- One-line verdict summary
-
-**API:** `GET /api/checklist/<ticker>`
-
----
-
-## Quick start
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python3 app.py
-# → http://127.0.0.1:5001
-```
-
-Production-like:
-
-```bash
-gunicorn app:app --bind 0.0.0.0:5001 --workers 2
-```
-
-Works immediately with **no configuration** — price data and SEC EDGAR panels
-need no keys. Add keys via [`.env.example`](.env.example) or `/settings` to
-unlock Finnhub/FMP panels, live WebSocket, and AI reports.
-
-**Optional — train the ML model:**
-
-```bash
-python ml.py train AAPL MSFT NVDA SPY ...
-```
-
-Without `model.pkl`, the ML section is omitted. Predictions older than 30 days
-are suppressed.
-
-### Running tests
-
-```bash
-pip install -r requirements.txt -r requirements-test.txt
-pytest tests/ -v
-```
-
-122 tests, run on every push and pull request via
-`.github/workflows/tests.yml`. A few of them shell out to `node` to parse and
-execute the inline navigation JavaScript in `templates/base.html`; those skip
-cleanly if node is absent.
+as spreadsheet-style grids with accounting-style negatives.
 
 ---
 
 ## Configuration
 
-All keys optional; every layer degrades gracefully. Settings-page values
-override environment variables.
+All keys optional; every layer degrades gracefully.
 
 **`SETTINGS_PASSWORD`** gates the `/settings` page itself (HTTP Basic
 Auth) — required, since every key saved there is global to the app
 instance, not scoped per visitor. Without it, `/settings` refuses to
 serve rather than falling back to open access.
+
+Key precedence is asymmetric: Finnhub and FMP try the environment variable
+first and fall back to saved settings; AI, SEC, and Marketaux prefer the saved
+setting over the environment variable.
 
 ### Market data
 
@@ -262,7 +212,8 @@ serve rather than falling back to open access.
 | `GEMINI_API_KEY` | Google Gemini |
 | `OPENROUTER_API_KEY` | OpenRouter |
 
-Providers are tried in order; with none configured, AI sections simply don't render.
+Providers are tried in order; with none configured, the AI report and the
+brief's labeled interpretation simply don't render.
 
 ---
 
@@ -272,6 +223,7 @@ JSON twins of every view, plus health and config:
 
 | Endpoint | Returns |
 | --- | --- |
+| `GET /api/brief/<ticker>` | The published daily brief payload verbatim (`warming` stub before first publish) |
 | `GET /api/checklist/<ticker>` | Pre-trade checklist (`?trade_type=long_stock`) |
 | `GET /api/stock/<ticker>` | Price, period changes, chart metadata |
 | `GET /api/news?ticker=...` | Same-origin news feed, listing choices, freshness and availability (`?listing=` accepts a returned candidate ID) |
@@ -292,22 +244,27 @@ Full schema: [`/api/docs`](/api/docs)
 
 ---
 
-## How it works
+## Data flow
 
 ```
-  Browser ──►  Flask (routes, chart data, ML, AI)
+  Browser ──►  Flask (dashboard, briefs, routes, charts, ML, AI)
                   │
-                  ├── yfinance ──► SQLite (daily_prices, api_cache, settings)
-                  ├── Finnhub / FMP / SEC EDGAR
+                  ├── nightly warmers ──► SQLite (daily_prices, api_cache,
+                  │                        settings, published snapshots)
+                  ├── yfinance / Finnhub / FMP / SEC EDGAR (warmers fetch;
+                  │   brief and dashboard read cache only, deep pages
+                  │   refresh on a cache miss)
                   └── S3 (optional option-chain cache)
 ```
 
-- **Caching:** 1h price freshness, 24h provider cache, 45s in-process memo
+- **Caching:** 1h price freshness, 24h provider cache, 45s in-process memo;
+  per-source as-of times read from the same cache-age path the receipts show
 - **Option chains:** S3 first (4h TTL, survives redeploys) when
   `S3_CACHE_BUCKET` is set, then SQLite, then a live fetch, then stale reads of
   either store. With no bucket configured the S3 layer no-ops and SQLite on the
   mounted volume carries the cache on its own
-- **Resilience:** stale-while-error — serves cached data when refresh fails
+- **Resilience:** stale-while-error — serves cached data when refresh fails;
+  invalid builds never replace the published pointer
 - **ML:** triple-barrier labels, walk-forward validation, LightGBM/sklearn
 
 More detail: [`CLAUDE.md`](CLAUDE.md)
@@ -344,10 +301,17 @@ Fly.io mounts a persistent volume at `/data` for `stocks.db`. Also ships with
 
 ---
 
-## Project structure
+## Repo layout
+
+Operational map for contributors and deployers — the mechanisms above live here:
 
 ```
-app.py               Routes, charts, GEX/options pricing, page data assembly
+app.py               Routes, dashboard/brief page orchestration, charts, GEX
+brief.py             Brief builder: context bundle in, contract-validated dict out
+brief_contracts.py   Brief metric contracts (definition, unit, window, source, missing state)
+snapshot_store.py    Shared snapshot publication: payload, pointer (last), retention
+radar.py             Snapshot-published universe screens (drift / value / squeeze)
+radar_contracts.py   Radar row contracts
 db.py                SQLite: daily_prices, api_cache, app_settings, locks
 providers.py         Finnhub / FMP / SEC EDGAR / AI clients (fail gracefully)
 news.py              Marketaux listing resolution, headlines, cache and quota policy
@@ -357,6 +321,7 @@ signals.py           Buyer Signals factor tally
 momentum_engine.py   Shared scoring + backtests for all three strategies
 backtest_engine.py   Signals walk-forward simulation
 event_study.py       Event-study / CAR engine
+earnings.py          Session-aligned earnings event math (shared by radar + brief)
 
 microstructure.py    VPIN, Corwin-Schultz, Amihud, squeeze risk
 macro_engine.py      Macro regime, dual betas, capture ratios
@@ -369,7 +334,7 @@ s3_cache.py          Optional S3 option-chain cache
 warm_s3_cache.py     Cache warmer run by the hourly GitHub Action
 
 ml.py                Offline ML training and inference
-ai.py                LLM analyst reports
+ai.py                LLM analyst reports + labeled brief interpretation
 glossary.py          Metric definitions (tooltips + /glossary)
 api_docs.py          OpenAPI spec behind /api/docs
 warehouse.py         DuckDB warehouse experiment (not wired into the app)
@@ -386,8 +351,10 @@ templates/           Jinja2 + Tailwind CDN + ECharts / Lightweight Charts
 - Replacement for a broker or professional risk system
 
 GEX is modelled from open interest, not observed flow. Buyer Signals is a
-descriptive heuristic tally. ML and AI outputs are educational tools on
-delayed data.
+descriptive heuristic tally. The brief's significance label is a deterministic
+z-score against the ticker's own trailing window — arithmetic, not prophecy.
+ML and AI outputs are educational tools on delayed data, and the AI
+interpretation on a brief is the only generated text on it.
 
 ---
 
@@ -396,6 +363,7 @@ delayed data.
 | Doc | Contents |
 | --- | --- |
 | [`CLAUDE.md`](CLAUDE.md) | Architecture guide for contributors |
+| [`CONTEXT.md`](CONTEXT.md) | Domain glossary and product thesis |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Engineering roadmap and sprint plan |
 | [`docs/ORCHESTRATION.md`](docs/ORCHESTRATION.md) | Planned DuckDB / dbt ELT pipeline — design notes, not built |
 
