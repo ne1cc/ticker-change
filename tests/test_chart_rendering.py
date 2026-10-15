@@ -74,3 +74,22 @@ def test_gex_views_preserve_sign_and_common_symmetric_scale():
     assert all(p[0] >= 0 for p in split[0]['data'])
     assert all(p[0] <= 0 for p in split[1]['data'])
     assert [p[1] for p in split[0]['data']] == [90., 100., 110.]
+
+
+@pytest.mark.parametrize('strategy,threshold,exit_level', [('rsi_reversion', 15, 70), ('buyer_signal', 55, 45)])
+def test_merged_strategy_canvas_keeps_signal_units_and_shared_time_axes(strategy, threshold, exit_level):
+    import app
+    dates = pd.bdate_range('2024-01-01', periods=3)
+    values = pd.Series([100., 110., 99.], index=dates)
+    series = {'dates': dates, 'cum_strat': values * 100, 'cum_hold': values * 100,
+              'close': values, 'sma50': values, 'sma200': values, 'sma5': values,
+              'hold_full_dates': dates, 'cum_hold_full': values * 100,
+              'buy_dates': dates[:1], 'sell_dates': dates[-1:],
+              'roll_dates': dates, 'roll_series': pd.Series([10., 60., 40.], index=dates), 'threshold': threshold}
+    result = app._strategies_ticker_charts('AAA', series, strategy)
+    canvas = payload(result['canvas_chart_html'])
+    assert len(canvas['grid']) == 2
+    assert canvas['dataZoom'][0]['xAxisIndex'] == [0, 1]
+    assert canvas['series'][0]['data'][0][1] == 100.
+    refs = payload(result['roll_chart_html'])['series'][0]['markLine']['data']
+    assert [r['yAxis'] for r in refs] == [threshold, exit_level]

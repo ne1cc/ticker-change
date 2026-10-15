@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -149,13 +150,32 @@ class TestRenderTreemap(TempDBCase):
         self.assertNotIn("plotly", html.lower())
         self.assertIn("AAPL", html)
         self.assertIn("sector::Technology", html)
-        # Change text rides the `text` property (customdata isn't substituted
-        # in treemap texttemplate) and must appear in the embedded figure.
+        # Percentage labels remain available in the inert chart payload.
         self.assertIn("+1.00%", html)
 
     def test_dark_and_light_variants_render(self):
         self.assertIsNotNone(heatmap.render_treemap(self._data(), dark=True))
         self.assertIsNotNone(heatmap.render_treemap(self._data(), dark=False))
+
+    def test_embedded_trace_supplies_tooltip_and_click_data(self):
+        html = heatmap.render_treemap(self._data())
+        option = json.loads(html.split('type="application/json"', 1)[1].split('>', 1)[1].split('</script>', 1)[0])
+        sector = option['series'][0]['data'][0]
+        leaves = {node['symbol']: node for node in sector['children']}
+        self.assertEqual('+1.00%', leaves['AAPL']['change'])
+        self.assertEqual('Apple Inc.', leaves['AAPL']['company'])
+        self.assertEqual(101.0, leaves['AAPL']['price'])
+        self.assertTrue(leaves['AAPL']['leaf'])
+        self.assertEqual('-1.00%', leaves['MSFT']['change'])
+        self.assertEqual('+0.01%', sector['change'])
+
+    def test_sector_tooltip_omits_ticker_and_price(self):
+        html = heatmap.render_treemap(self._data())
+        option = json.loads(html.split('type="application/json"', 1)[1].split('>', 1)[1].split('</script>', 1)[0])
+        sector = option['series'][0]['data'][0]
+        self.assertNotIn('symbol', sector)
+        self.assertNotIn('price', sector)
+        self.assertIn('price', sector['children'][0])
 
 
 class TestRefreshUniverse(TempDBCase):

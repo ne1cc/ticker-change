@@ -250,7 +250,7 @@ def render_treemap(data: dict, dark: bool = False) -> str:
                    'value': [max(t['dollar_volume'], 1), max(-MOVE_SPAN, min(MOVE_SPAN, t['change_pct']))],
                    'change': f"{t['change_pct']:+.2f}%", 'company': t['name'], 'price': t['price']}
                   for t in members]
-        sectors.append({'id': 'sector::' + sector, 'name': sector, 'value': [total, max(-MOVE_SPAN, min(MOVE_SPAN, change))], 'children': leaves})
+        sectors.append({'id': 'sector::' + sector, 'name': sector, 'change': f'{change:+.2f}%', 'value': [total, max(-MOVE_SPAN, min(MOVE_SPAN, change))], 'children': leaves})
     option = {'series': [{'type': 'treemap', 'name': 'S&P 500', 'data': sectors,
                          'roam': False, 'nodeClick': False, 'leafDepth': 2,
                          'breadcrumb': {'show': False}, 'visualDimension': 1,

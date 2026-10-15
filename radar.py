@@ -151,15 +151,21 @@ def load_context() -> dict:
     return ctx
 
 
+# Benchmarks the warmer keeps a year of bars for (drift excess/CAR math);
+# they carry no earnings/fundamentals/SI, so they are not screen candidates.
+BENCHMARK_SYMBOLS = frozenset(radar_contracts.SECTOR_ETFS) | {"SPY"}
+
+
 def universe_symbols(min_bars: int = 253) -> list[str]:
-    """Symbols with enough cached price history to score."""
+    """Equity symbols with enough cached price history to score."""
     try:
         with db.get_conn() as conn:
             rows = conn.execute(
                 "SELECT symbol FROM daily_prices GROUP BY symbol HAVING COUNT(*) >= ?",
                 (min_bars,),
             ).fetchall()
-        return sorted(r["symbol"] for r in rows)
+        return sorted(r["symbol"] for r in rows
+                      if r["symbol"] not in BENCHMARK_SYMBOLS)
     except Exception:
         return []
 

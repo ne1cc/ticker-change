@@ -93,3 +93,21 @@ class TestSettingsRoute(unittest.TestCase):
         client = app_module.app.test_client()
         self.assertEqual(client.post(
             "/api/radar/settings", json={"nope": 1}).status_code, 400)
+
+    def test_post_triggers_background_rescan(self):
+        # Tunables are read at snapshot build time, so a save must republish
+        # or the page keeps showing rows filtered by the old value.
+        import threading
+        with db.get_conn() as conn:
+            conn.execute("DELETE FROM api_cache WHERE provider = 'internal' "
+                         "AND key = 'radar_republish_lock'")
+        client = app_module.app.test_client()
+        with patch.object(radar, "load_context", return_value={}), \
+             patch.object(radar, "publish_snapshot") as publish:
+            resp = client.post("/api/radar/settings",
+                               json={"radar_liquidity_floor_usd": 1_000_000})
+            for t in threading.enumerate():
+                if t.name == "radar-republish":
+                    t.join(timeout=5)
+        self.assertEqual(resp.status_code, 200)
+        publish.assert_called_once()

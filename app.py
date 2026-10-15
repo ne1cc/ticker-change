@@ -29,7 +29,6 @@ import event_study
 import sec_8k
 import earnings
 import radar
-import radar_contracts
 import peers
 import microstructure
 import macro_engine
@@ -2483,20 +2482,42 @@ def _universe_rank_scores(price_batch, symbols, strategy_id) -> dict:
     drops out. The ticker tab's rank has always been computed against each
     symbol's own trailing bars, and stays that way.
     """
-    is_sma = _strategy_family(strategy_id) == "sma"
+    fam = _strategy_family(strategy_id)
     scores = {}
     for sym in symbols:
         sym_df = price_batch.get(sym)
         if sym_df is None:
             continue
         close = sym_df["close"]
-        series = (momentum_engine.sma_spread(close) if is_sma
-                  else momentum_engine.rolling_score(close))
-        if not len(series):
+        if not len(close):
             continue
-        value = series.iloc[-1]
-        if pd.notna(value):
-            scores[sym] = float(value)
+        if fam == "sma":
+            series = momentum_engine.sma_spread(close)
+            if len(series):
+                val = series.iloc[-1]
+                if pd.notna(val):
+                    scores[sym] = float(val)
+        elif fam == "rsi":
+            sma200 = close.rolling(200).mean()
+            r2 = momentum_engine.calc_rsi(close, 2)
+            c = close.iloc[-1]
+            s = sma200.iloc[-1]
+            r = r2.iloc[-1]
+            val = (100.0 - r) if (pd.notna(c) and pd.notna(s) and c > s) else -r
+            if pd.notna(val):
+                scores[sym] = float(val)
+        elif fam == "composite":
+            series = momentum_engine.composite_score_series(close)
+            if len(series):
+                val = series.iloc[-1]
+                if pd.notna(val):
+                    scores[sym] = float(val)
+        else:
+            series = momentum_engine.rolling_score(close)
+            if len(series):
+                val = series.iloc[-1]
+                if pd.notna(val):
+                    scores[sym] = float(val)
     return scores
 
 
@@ -2523,7 +2544,7 @@ def _cached_universe_scores(strategy_id, symbols, price_df):
     `score_universe` over ~500 symbols dominates /strategies load time on a
     small shared CPU; scores only change when cached closes do. Returns
     (scores, spreads) — scores as {sym: MomentumScore}, spreads as {sym: float}
-    (sma family only, else {}). Stampede-protected: lock losers wait briefly
+    (sma/rsi/composite family only, else {}). Stampede-protected: lock losers wait briefly
     for the winner's payload, then compute anyway (slow beats failing).
     """
     key = f"scores:{strategy_id}"
@@ -2531,8 +2552,14 @@ def _cached_universe_scores(strategy_id, symbols, price_df):
     def _compute():
         hurdle = momentum_engine.absolute_hurdle(strategy_id)
         scores = momentum_engine.score_universe(price_df, symbols, hurdle=hurdle)
-        spreads = (momentum_engine.sma_score_universe(price_df, symbols)
-                   if _strategy_family(strategy_id) == "sma" else {})
+        fam = _strategy_family(strategy_id)
+        spreads = {}
+        if fam == "sma":
+            spreads = momentum_engine.sma_score_universe(price_df, symbols)
+        elif fam == "rsi":
+            spreads = momentum_engine.rsi_score_universe(price_df, symbols)
+        elif fam == "composite":
+            spreads = momentum_engine.composite_score_universe(price_df, symbols)
         payload = {
             "scores": {sym: {"symbol": s.symbol, "mom_12_1": s.mom_12_1,
                              "mom_6m": s.mom_6m, "mom_3m": s.mom_3m,
@@ -2572,12 +2599,9 @@ def _strategies_universe_data(symbols, price_df, strategy_id, period):
         return None
 
     scores, spreads = _cached_universe_scores(strategy_id, symbols, price_df)
+    fam = _strategy_family(strategy_id)
 
-    if _strategy_family(strategy_id) == "sma":
-        # SMA spread is the primary score and sort key; `score_universe` is
-        # still consulted purely to populate the volatility column so the
-        # table keeps one shape across strategies.
-        spreads = momentum_engine.sma_score_universe(price_df, symbols)
+    if fam == "sma":
         ranked = sorted(spreads.items(), key=lambda kv: kv[1], reverse=True)
         leaderboard = []
         for idx, (sym, spread) in enumerate(ranked):
@@ -2589,6 +2613,32 @@ def _strategies_universe_data(symbols, price_df, strategy_id, period):
                 "vol": round(vol * 100, 1),
                 "risk_adj": round(spread / vol, 2) if vol > 0 else 0.0,
                 "passes_absolute": spread > 0,
+                "rank": idx + 1,
+            })
+    elif fam == "rsi":
+        ranked = sorted(spreads.items(), key=lambda kv: kv[1], reverse=True)
+        leaderboard = []
+        for idx, (sym, spread) in enumerate(ranked):
+            vol = scores[sym].ann_vol_1y if sym in scores else 0.0
+            leaderboard.append({
+                "symbol": sym,
+                "score": round(spread, 1),
+                "vol": round(vol * 100, 1),
+                "risk_adj": round(spread / (vol * 100), 2) if vol > 0 else 0.0,
+                "passes_absolute": spread > 0,
+                "rank": idx + 1,
+            })
+    elif fam == "composite":
+        ranked = sorted(spreads.items(), key=lambda kv: kv[1], reverse=True)
+        leaderboard = []
+        for idx, (sym, c_score) in enumerate(ranked):
+            vol = scores[sym].ann_vol_1y if sym in scores else 0.0
+            leaderboard.append({
+                "symbol": sym,
+                "score": round(c_score, 1),
+                "vol": round(vol * 100, 1),
+                "risk_adj": round(c_score / (vol * 100), 2) if vol > 0 else 0.0,
+                "passes_absolute": c_score >= 50.0,
                 "rank": idx + 1,
             })
     else:
@@ -2625,15 +2675,11 @@ def _strategies_universe_data(symbols, price_df, strategy_id, period):
             if has_qqq:
                 qqq_series = qqq_series[mask]
 
-    # Stats (geometric CAGR + standard Sharpe/Sortino) plus the
-    # benchmark-relative alpha/beta/information ratio that actually tell you
-    # whether the strategy added value versus just owning the index.
     strat_stats = _perf_stats(strat_series)
     spy_stats = _perf_stats(spy_series)
     qqq_stats = _perf_stats(qqq_series)
     rel_spy = _relative_stats(strat_series, spy_series)
 
-    # Data-driven verdict — describe what actually happened, don't assert a win.
     excess_spy = round(strat_stats["total_return"] - spy_stats["total_return"], 1)
     beat_spy = strat_stats["total_return"] > spy_stats["total_return"]
     beat_qqq = strat_stats["total_return"] > qqq_stats["total_return"]
@@ -2680,20 +2726,13 @@ def _strategies_universe_chart(dates, strat_series, spy_series, qqq_series, stra
 # --------------------------------------------------------------------------
 
 def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, period):
-    """Single-ticker long/cash trend backtest plus its universe rank.
-
-    `df` is the searched ticker's own price frame (caller has already
-    rejected short histories); `price_batch` is the batched read for the
-    whole universe, used only for the rank display.
-
-    Returns None when `df` is too short to score (mirrors
-    `_strategies_universe_data` / `_strategies_screener_data`) so callers
-    that bypass the route's own length guard don't hit an AttributeError or
-    IndexError further down.
-    """
+    """Single-ticker long/cash trend or mean-reversion backtest plus its universe rank."""
     close = df['close']
     daily_rets = close.pct_change(fill_method=None)
-    is_sma = _strategy_family(strategy_id) == "sma"
+    fam = _strategy_family(strategy_id)
+    is_sma = fam == "sma"
+    is_rsi = fam == "rsi"
+    is_composite = fam == "composite"
     hurdle = momentum_engine.absolute_hurdle(strategy_id)
 
     score = momentum_engine.score_series(close, symbol=symbol)
@@ -2710,6 +2749,12 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
     if is_sma:
         signal_series = momentum_engine.sma_spread(close)
         threshold = 0
+    elif is_rsi:
+        signal_series = momentum_engine.calc_rsi(close, 2)
+        threshold = 15.0
+    elif is_composite:
+        signal_series = momentum_engine.composite_score_series(close)
+        threshold = 55.0
     else:
         signal_series = momentum_engine.rolling_score(close)
         threshold = 0 if hurdle is None else hurdle
@@ -2734,14 +2779,10 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
     strat_stats = _perf_stats(strat_series)
     hold_stats = _perf_stats(hold_series)
 
-    # Fraction of the backtest the trend signal was actually invested.
     pct_invested = round(float(trade_signals.mean()) * 100, 1) if len(trade_signals) else 0.0
-
     cum_strat = (1 + strat_series).cumprod() * 10000
     cum_hold = (1 + hold_series).cumprod() * 10000
 
-    # Full-length Buy & Hold: spans the entire available ticker history
-    # (the strategy needs 252 days of warm-up, but Buy & Hold can start from day 1)
     hold_full_dates = df.index
     hold_full_rets = daily_rets.fillna(0.0)
     if start_cutoff is not None:
@@ -2757,6 +2798,7 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
     # Individual round-trip trade returns, charged entry + exit cost.
     cost_bps = momentum_engine.DEFAULT_COST_BPS / 1e4
     trade_records = []
+    trade_history = []
     in_trade = False
     entry_idx = 0
     backtest_start_idx = df.index.get_loc(backtest_dates[0])
@@ -2767,9 +2809,24 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
             entry_idx = idx
         elif sig == 0 and in_trade:
             in_trade = False
-            trade_records.append(close.iloc[backtest_start_idx + idx] / close.iloc[backtest_start_idx + entry_idx] - 1 - cost_bps * 2)
+            e_price = float(close.iloc[backtest_start_idx + entry_idx])
+            x_price = float(close.iloc[backtest_start_idx + idx])
+            t_ret = (x_price / e_price - 1 - cost_bps * 2)
+            trade_records.append(t_ret)
+            trade_history.append({
+                "entry_date": backtest_dates[entry_idx].strftime('%Y-%m-%d'),
+                "exit_date": backtest_dates[idx].strftime('%Y-%m-%d'),
+                "entry_price": round(e_price, 2),
+                "exit_price": round(x_price, 2),
+                "return_pct": round(t_ret * 100, 2),
+                "duration_days": int((backtest_dates[idx] - backtest_dates[entry_idx]).days),
+                "is_win": t_ret > 0,
+            })
     if in_trade:
-        trade_records.append(close.iloc[-1] / close.iloc[backtest_start_idx + entry_idx] - 1 - cost_bps)
+        e_price = float(close.iloc[backtest_start_idx + entry_idx])
+        curr_price = float(close.iloc[-1])
+        t_ret = (curr_price / e_price - 1 - cost_bps)
+        trade_records.append(t_ret)
 
     trade_count = len(trade_records)
     wins = [r for r in trade_records if r > 0]
@@ -2777,26 +2834,91 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
     win_rate = round(len(wins) / trade_count * 100, 1) if trade_count > 0 else 0.0
     profit_factor = round(sum(wins) / abs(sum(losses)), 2) if losses and sum(losses) != 0.0 else (99.0 if wins else 0.0)
 
-    # Rolling signal series for the score chart, on the same period window.
-    roll_series = signal_series.iloc[warmup:] * 100
+    # Current position & tactical cockpit details
+    curr_sig = trade_signals.iloc[-1] if len(trade_signals) else 0.0
+    in_position = bool(curr_sig > 0)
+    position_days = 0
+    for i in range(len(trade_signals) - 1, -1, -1):
+        if trade_signals.iloc[i] == curr_sig:
+            position_days += 1
+        else:
+            break
+
+    entry_price = None
+    entry_date_str = None
+    unrealized_pct = None
+    if in_position and len(trade_signals):
+        e_idx = max(0, len(trade_signals) - position_days)
+        entry_date_str = backtest_dates[e_idx].strftime('%Y-%m-%d')
+        entry_price = round(float(close.loc[backtest_dates[e_idx]]), 2)
+        unrealized_pct = round(((float(close.iloc[-1]) / entry_price) - 1) * 100, 2)
+
+    # Rolling signal series for the score chart
     roll_dates = df.index[warmup:]
+    roll_series = signal_series.iloc[warmup:]
+    if fam in ("sma", "momentum"):
+        roll_series = roll_series * 100
     if start_cutoff is not None:
         mask_roll = roll_dates >= start_cutoff
         if mask_roll.any():
             roll_dates = roll_dates[mask_roll]
             roll_series = roll_series[mask_roll]
 
-    current = signal_series.iloc[-1]
-    bullish = bool(pd.notna(current) and current > threshold)
+    # Engine status details
+    p_last = float(close.iloc[-1])
     if is_sma:
-        trend_state = "GOLDEN CROSS (Long)" if bullish else "DEATH CROSS (Flat/Cash)"
+        sp_now = float(momentum_engine.sma_spread(close).iloc[-1]) * 100
+        engine_metric_label = "50/200 SMA Spread"
+        engine_metric_val = f"{sp_now:+.2f}%"
+        engine_metric_status = "Golden Cross Active (Long)" if sp_now > 0 else "Death Cross Active (Cash)"
+        trend_state = "GOLDEN CROSS (Long)" if in_position else "DEATH CROSS (Cash)"
+    elif is_rsi:
+        r2_now = float(momentum_engine.calc_rsi(close, 2).iloc[-1])
+        s200_now = float(close.rolling(200).mean().iloc[-1])
+        engine_metric_label = "Connors RSI(2)"
+        engine_metric_val = f"{r2_now:.1f}"
+        engine_metric_status = (
+            f"Oversold Entry (<15) · 200 SMA: ${s200_now:.2f}"
+            if in_position else f"Neutral Pullback Zone · 200 SMA: ${s200_now:.2f}"
+        )
+        trend_state = "OVERSOLD PULLBACK (Long)" if in_position else "WAITING FOR DIP (Cash)"
+    elif is_composite:
+        c_now = float(momentum_engine.composite_score_series(close).iloc[-1])
+        engine_metric_label = "Composite Confluence"
+        engine_metric_val = f"{c_now:.0f} / 100"
+        engine_metric_status = (
+            "Bullish Confluence Active (≥55)" if in_position else "Defensive Regimes (<45)"
+        )
+        trend_state = "CONFLUENCE BUY (Long)" if in_position else "DEFENSIVE CASH (Flat)"
     else:
-        trend_state = "BULLISH (Long)" if bullish else "BEARISH (Flat/Cash)"
-    trend_color = "text-emerald-500" if bullish else "text-rose-500"
+        m_now = score.mom_12_1 * 100
+        engine_metric_label = "12-1 Momentum"
+        engine_metric_val = f"{m_now:+.2f}%"
+        engine_metric_status = (
+            f"Risk-Adj: {score.risk_adj} · Vol: {score.ann_vol_1y * 100:.1f}%"
+        )
+        trend_state = "BULLISH (Long)" if in_position else "BEARISH (Flat/Cash)"
+
+    trend_color = "text-emerald-500" if in_position else "text-amber-500"
+
+    # Compute SPY benchmark stats for comparison
+    spy_df = price_batch.get("SPY")
+    if spy_df is not None and len(spy_df):
+        spy_close = spy_df["close"]
+        spy_sub = spy_close.pct_change(fill_method=None).reindex(backtest_dates).fillna(0.0)
+        rel_spy = momentum_engine.relative_stats(strat_series, spy_sub)
+    else:
+        rel_spy = {"alpha": 0.0, "beta": 1.0, "info_ratio": 0.0, "corr": 1.0}
+
+    # Moving averages for the chart
+    sma50 = close.rolling(50).mean().reindex(backtest_dates)
+    sma200 = close.rolling(200).mean().reindex(backtest_dates)
+    sma5 = close.rolling(5).mean().reindex(backtest_dates)
+    close_sub = close.reindex(backtest_dates)
 
     return {
         "symbol": symbol,
-        "latest_price": float(close.iloc[-1]),
+        "latest_price": p_last,
         "mom_12_1": round(score.mom_12_1 * 100, 2),
         "mom_6m": round(score.mom_6m * 100, 2),
         "mom_3m": round(score.mom_3m * 100, 2),
@@ -2805,14 +2927,26 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
         "total_rank_count": len(rank_scores),
         "trend_state": trend_state,
         "trend_color": trend_color,
+        "in_position": in_position,
+        "position_days": position_days,
+        "entry_date": entry_date_str,
+        "entry_price": entry_price,
+        "unrealized_pct": unrealized_pct,
+        "engine_metric_label": engine_metric_label,
+        "engine_metric_val": engine_metric_val,
+        "engine_metric_status": engine_metric_status,
         "strat_stats": strat_stats,
         "hold_stats": hold_stats,
         "trade_count": trade_count,
+        "wins_count": len(wins),
+        "losses_count": len(losses),
         "win_rate": win_rate,
         "profit_factor": profit_factor,
         "risk_adj_mom": score.risk_adj,
         "ann_vol_1y": round(score.ann_vol_1y * 100, 1),
         "pct_invested": pct_invested,
+        "rel_spy": rel_spy,
+        "trade_history": trade_history[-10:],
         "start_date": backtest_dates[0].strftime('%Y-%m-%d'),
         "end_date": backtest_dates[-1].strftime('%Y-%m-%d'),
         "_series": {
@@ -2826,31 +2960,69 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
             "roll_dates": roll_dates,
             "roll_series": roll_series,
             "threshold": threshold,
+            "close": close_sub,
+            "sma50": sma50,
+            "sma200": sma200,
+            "sma5": sma5,
+            "trade_signals": trade_signals,
         },
     }
 
 
 def _strategies_ticker_charts(symbol, series, strategy_id) -> dict:
+    """Native synchronized price/equity/drawdown canvas and indicator diagnostic."""
     dates = series['dates']
-    cum_strat, cum_hold = series['cum_strat'], series['cum_hold']
-    performance = [charts.line('Trend-Following (Long/Cash)', dates, cum_strat),
+    cum_strat, cum_hold, close = series['cum_strat'], series['cum_hold'], series['close']
+    fam = _strategy_family(strategy_id)
+    strat_label = momentum_engine.STRATEGIES.get(strategy_id, {}).get('label', strategy_id)
+    performance = [charts.line(strat_label, dates, cum_strat),
                    charts.line(f'Buy & Hold {symbol}', series['hold_full_dates'], series['cum_hold_full'], '#64748b', dash=True)]
-    for key, label, color, rotate in [('buy_dates', 'Buy Entry', '#10b981', 0), ('sell_dates', 'Sell Exit', '#ef4444', 180)]:
+    price = [charts.line(f'{symbol} Price', dates, close, '#38bdf8')]
+    for key, label, color in ([('sma200', '200-day SMA (Regime)', '#a855f7'), ('sma5', '5-day SMA (Exit)', '#34d399')] if fam == 'rsi' else
+                              [('sma50', '50-day SMA', '#fbbf24'), ('sma200', '200-day SMA', '#a855f7')]):
+        price.append(charts.line(label, dates, series[key], color, width=1.3))
+    for key, label, color, rotate in [('buy_dates', 'Buy Entry', '#10b981', 0), ('sell_dates', 'Exit to Cash', '#ef4444', 180)]:
         if not series[key].empty:
-            performance.append({'name': label, 'type': 'scatter', 'symbol': 'triangle', 'symbolRotate': rotate, 'symbolSize': 10,
-                                'itemStyle': {'color': color}, 'data': charts.pairs(series[key], cum_strat.loc[series[key]])})
+            marker = {'name': label, 'type': 'scatter', 'symbol': 'triangle', 'symbolRotate': rotate, 'symbolSize': 10, 'itemStyle': {'color': color}}
+            performance.append({**marker, 'data': charts.pairs(series[key], cum_strat.loc[series[key]])})
+            price.append({**marker, 'data': charts.pairs(series[key], close.reindex(series[key]))})
     dd_strat = (cum_strat - cum_strat.cummax()) / cum_strat.cummax() * 100
     dd_hold = (cum_hold - cum_hold.cummax()) / cum_hold.cummax() * 100
-    drawdown = [charts.line('Trend-Following DD', dates, dd_strat, area='rgba(251,191,36,.1)'),
-                charts.line(f'{symbol} DD', dates, dd_hold, '#ef4444', area='rgba(239,68,68,.15)', dash=True)]
-    is_sma = _strategy_family(strategy_id) == 'sma'
-    score_name = 'SMA 50/200 Spread %' if is_sma else '12-1 Momentum %'
-    threshold_text = ('Golden Cross Threshold (Trend Switch)' if is_sma else
-                      'Zero Threshold (Trend Switch)' if series['threshold'] == 0 else 'Absolute Hurdle (Trend Switch)')
+    drawdown = [charts.line('Strategy Drawdown (%)', dates, dd_strat, area='rgba(251,191,36,.1)'),
+                charts.line(f'{symbol} Drawdown (%)', dates, dd_hold, '#ef4444', dash=True)]
+    canvas_series = price + [charts.line('Strategy ($10k)', dates, cum_strat, xAxisIndex=1, yAxisIndex=1),
+                             charts.line(f'Buy & Hold {symbol} ($10k)', dates, cum_hold, '#94a3b8', dash=True, xAxisIndex=1, yAxisIndex=1)]
+    canvas_series += [{**line, 'xAxisIndex': 1, 'yAxisIndex': 2} for line in drawdown]
+    canvas = {'series': canvas_series,
+              'grid': [{'left': 55, 'right': 65, 'top': 60, 'height': '43%', 'containLabel': True},
+                       {'left': 55, 'right': 65, 'top': '61%', 'height': '27%', 'containLabel': True}],
+              'xAxis': [{'type': 'time', 'gridIndex': 0}, {'type': 'time', 'gridIndex': 1}],
+              'yAxis': [{'type': 'value', 'name': f'{symbol} Price ($)', 'scale': True, 'gridIndex': 0},
+                        {'type': 'value', 'name': 'Portfolio ($10k)', 'scale': True, 'gridIndex': 1},
+                        {'type': 'value', 'name': 'Drawdown (%)', 'min': -100, 'max': 5, 'position': 'right', 'gridIndex': 1, 'splitLine': {'show': False}}],
+              'axisPointer': {'link': [{'xAxisIndex': 'all'}]},
+              'dataZoom': [{'type': 'inside', 'xAxisIndex': [0, 1], 'filterMode': 'none'},
+                           {'type': 'slider', 'xAxisIndex': [0, 1], 'height': 15, 'bottom': 10}]}
+    if fam == 'sma':
+        score_name, threshold_text = 'SMA 50/200 Spread %', 'Golden Cross Line (0%)'
+    elif fam == 'rsi':
+        score_name, threshold_text = 'Connors RSI(2)', 'Oversold Entry (15)'
+    elif fam == 'composite':
+        score_name, threshold_text = 'Composite Score', 'Bullish Entry (55)'
+    else:
+        score_name = '12-1 Momentum %'
+        threshold_text = 'Zero Threshold (Trend Switch)' if series['threshold'] == 0 else 'Absolute Hurdle (Trend Switch)'
+    threshold = series['threshold'] * (100 if fam in ('sma', 'momentum') else 1)
+    refs = [charts.reference('y', threshold, threshold_text, '#ef4444')]
+    if fam == 'rsi':
+        refs.append(charts.reference('y', 70, 'Overbought Exit (70)', '#10b981'))
+    elif fam == 'composite':
+        refs.append(charts.reference('y', 45, 'Defensive Exit (45)', '#ef4444'))
     rolling = [charts.line(score_name, series['roll_dates'], series['roll_series'], '#818cf8')]
-    return {'perf_chart_html': charts.render_chart(charts.cartesian(performance, yname='Portfolio Value ($)'), height=350),
+    return {'canvas_chart_html': charts.render_chart(canvas, height=620),
+            'perf_chart_html': charts.render_chart(charts.cartesian(performance, yname='Portfolio Value ($)'), height=350),
             'dd_chart_html': charts.render_chart(charts.cartesian(drawdown, yname='Drawdown (%)'), height=250),
-            'roll_chart_html': charts.render_chart(charts.cartesian(rolling, yname=score_name, refs=[charts.reference('y', series['threshold'] * 100, threshold_text, '#ef4444')]), height=280)}
+            'roll_chart_html': charts.render_chart(charts.cartesian(rolling, yname=score_name, refs=refs), height=280)}
 
 
 # --------------------------------------------------------------------------
@@ -2865,7 +3037,10 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
     if len(price_df) < momentum_engine.MOMENTUM_LOOKBACK + momentum_engine.MOMENTUM_EXCLUDE:
         return None
 
-    is_sma = _strategy_family(strategy_id) == "sma"
+    fam = _strategy_family(strategy_id)
+    is_sma = fam == "sma"
+    is_rsi = fam == "rsi"
+    is_composite = fam == "composite"
     scores, spreads = _cached_universe_scores(strategy_id, symbols, price_df)
 
     results = []
@@ -2876,7 +3051,6 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
 
         score_pct = score.mom_12_1 * 100
         vol_pct = score.ann_vol_1y * 100
-        # Filtered on the unrounded ratio, displayed (and sorted) rounded.
         risk_adj = score.mom_12_1 / score.ann_vol_1y if score.ann_vol_1y > 0 else 0.0
 
         if score_pct < filters["min_mom"]:
@@ -2886,20 +3060,32 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
         if risk_adj < filters["min_risk_adj"]:
             continue
 
-        trend = "BULLISH" if score_pct > 0 else "BEARISH"
-        if filters["trend_filter"] == 'bullish' and trend != 'BULLISH':
-            continue
-        if filters["trend_filter"] == 'bearish' and trend != 'BEARISH':
-            continue
-
         if is_sma:
-            # Only symbols the SMA filter can actually score are eligible.
             spread = spreads.get(sym)
             if spread is None:
                 continue
             passes_absolute = spread > 0
+            trend = "BULLISH" if spread > 0 else "BEARISH"
+        elif is_rsi:
+            spread = spreads.get(sym)
+            if spread is None:
+                continue
+            passes_absolute = spread > 0
+            trend = "BULLISH" if spread > 0 else "BEARISH"
+        elif is_composite:
+            spread = spreads.get(sym)
+            if spread is None:
+                continue
+            passes_absolute = spread >= 50.0
+            trend = "BULLISH" if spread >= 50.0 else "BEARISH"
         else:
             passes_absolute = bool(score.passes_absolute)
+            trend = "BULLISH" if score_pct > 0 else "BEARISH"
+
+        if filters["trend_filter"] == 'bullish' and trend != 'BULLISH':
+            continue
+        if filters["trend_filter"] == 'bearish' and trend != 'BEARISH':
+            continue
 
         if filters["abs_only"] and not passes_absolute:
             continue
@@ -2915,6 +3101,8 @@ def _strategies_screener_data(symbols, price_df, filters, strategy_id):
         }
         if is_sma:
             row["sma_spread"] = round(spread * 100, 2)
+        elif is_rsi or is_composite:
+            row["strategy_score"] = round(spread, 1)
         results.append(row)
 
     results = sorted(results, key=lambda r: r["risk_adj"], reverse=True)
@@ -3115,8 +3303,48 @@ def radar_page():
     payload = snap if warmed_count else None
     warming = snap is None or warmed_count == 0
     tunables = {key: radar.get_tunable(key) for key in radar.TUNABLES}
+    updated_pt = None
+    excluded_summary = []
+    if payload:
+        try:
+            from zoneinfo import ZoneInfo
+            dt = datetime.fromisoformat(meta.get("published_at") or "").replace(
+                tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("America/Los_Angeles"))
+            updated_pt = f"{dt:%b} {dt.day}, {dt.hour % 12 or 12}:{dt:%M %p %Z}"
+        except ValueError:
+            updated_pt = None
+        section = payload.get(tab) or {}
+        counts = {}
+        for entry in section.get("excluded") or []:
+            counts[entry["reason"]] = counts.get(entry["reason"], 0) + 1
+        # Drift/squeeze only see symbols that have an earnings/SI payload;
+        # the rest of the universe never reaches their exclusion ledgers.
+        if tab in _RADAR_UNCOVERED_REASON:
+            uncovered = (int(meta.get("universe_count") or 0)
+                         - len(section.get("rows") or []) - sum(counts.values()))
+            if uncovered > 0:
+                counts[_RADAR_UNCOVERED_REASON[tab]] = uncovered
+        excluded_summary = [(n, _RADAR_EXCLUDED_LABELS.get(r, r))
+                            for r, n in sorted(counts.items(),
+                                               key=lambda kv: -kv[1])]
     return render_template('radar.html', tab=tab, payload=payload,
-                           warming=warming, tunables=tunables)
+                           warming=warming, tunables=tunables,
+                           updated_pt=updated_pt,
+                           excluded_summary=excluded_summary)
+
+
+_RADAR_UNCOVERED_REASON = {"drift": "no-earnings", "squeeze": "assumed-si"}
+_RADAR_EXCLUDED_LABELS = {
+    "no-earnings": "no earnings data",
+    "bad-date": "unreadable earnings date",
+    "no-prices": "no price history",
+    "no-aligned-session": "print not yet traded",
+    "no-fundamentals": "no fundamentals data",
+    "insufficient-history": "too little price history",
+    "below-value-cap": "outside the top 50",
+    "assumed-si": "no short-interest data",
+    "below-floor": "below liquidity floor",
+}
 
 
 # User-configurable provider keys. Saved server-side (SQLite) so they apply to the
@@ -3653,18 +3881,21 @@ def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True)
         try:
             if not db.try_claim_lock("radar_warmer_lock", ttl_hours=6.0):
                 return
+            # The heatmap warmer keeps only ~10 sessions per S&P 500 name, so
+            # backfill a year (batched, no per-ticker calls) before the
+            # 200-bar universe cut. Sector ETF + SPY closes feed the drift
+            # excess-vs-sector and CAR math.
+            backfill = list(radar.BENCHMARK_SYMBOLS)
+            if not symbols:
+                backfill += [c["symbol"] for c in heatmap.get_constituents()]
+            try:
+                heatmap.refresh_universe(sorted(set(backfill)), period="1y")
+            except Exception as e:
+                print(f"[radar] price backfill failed: {e}")
             syms = symbols or radar.universe_symbols(min_bars=200)
             if not syms:
                 return
             print(f"[radar] warming {len(syms)} tickers ...")
-            # Sector ETF closes feed the snapshot's excess-vs-sector math; the
-            # heatmap batch path stores their daily bars without per-ticker
-            # calls. 1y so t0+10-bar windows resolve for months, not days.
-            try:
-                heatmap.refresh_universe(radar_contracts.SECTOR_ETFS,
-                                         period="1y")
-            except Exception as e:
-                print(f"[radar] sector ETF price refresh failed: {e}")
             done = 0
             for sym in syms:
                 for key, fn in (("earnings", earnings.get_earnings_history),
@@ -3926,6 +4157,12 @@ def api_radar_settings():
         return jsonify({"error": str(e)}), 400
     for key, val in stored.items():
         radar.set_tunable(key, val)
+    # Tunables apply at snapshot build time; rebuild from cache (no network).
+    # The 1-minute lock keeps repeated saves from stacking rebuilds.
+    if db.try_claim_lock("radar_republish_lock", ttl_hours=1 / 60):
+        threading.Thread(
+            target=lambda: radar.publish_snapshot(radar.load_context()),
+            daemon=True, name="radar-republish").start()
     return jsonify(stored), 200
 
 

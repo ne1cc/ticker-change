@@ -36,6 +36,7 @@ import numpy as np  # noqa: E402
 
 class TestCachedUniverseScores(unittest.TestCase):
     def setUp(self):
+        db.DB_PATH = _DB_PATH
         with db.get_conn() as conn:
             conn.execute("DELETE FROM api_cache WHERE provider = 'strategies'")
             conn.execute("DELETE FROM api_cache WHERE provider = 'internal' "

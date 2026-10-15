@@ -212,7 +212,7 @@
   </head>
   <body class="bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 min-h-screen antialiased transition-colors duration-200">
     <nav class="bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="{% block nav_container_class %}max-w-7xl mx-auto px-4 sm:px-6 lg:px-8{% endblock %}">
         <div class="flex justify-between h-16">
           <div class="flex min-w-0 items-center gap-6">
             <a id="brand-link" href="/" class="inline-flex items-center gap-2.5 group">
@@ -329,7 +329,7 @@
 
     <!-- Ticker Sub-Navbar -->
     <div id="ticker-sub-nav" class="hidden bg-zinc-100 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 py-2.5">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-3 sm:gap-4">
+      <div class="{% block subnav_container_class %}max-w-7xl mx-auto px-4 sm:px-6 lg:px-8{% endblock %} flex flex-wrap items-center justify-between gap-3 sm:gap-4">
         <div class="flex min-w-0 items-center gap-3.5">
           <!-- Active Ticker Pill -->
           <div class="flex items-center gap-2 px-3 py-1 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-600 dark:text-amber-400 font-bold text-sm uppercase tracking-wider font-mono">
@@ -369,7 +369,7 @@
       </div>
     </div>
 
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-8">
+    <main class="{% block main_class %}max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-8{% endblock %}">
       {% block content %}{% endblock %}
     </main>
 

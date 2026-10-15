@@ -80,7 +80,7 @@
         itemStyle:{borderColor:p.bg},
         levels:series.levels.map(level => ({...level,itemStyle:{...level.itemStyle,borderColor:p.bg}}))
       }));
-      result.tooltip.formatter = params => params.data.leaf ? `${params.data.company} (${params.data.symbol})\n$${params.data.price.toFixed(2)} · ${params.data.change}` : params.name;
+      result.tooltip.formatter = params => params.data.leaf ? `${params.data.company} (${params.data.symbol})\n$${params.data.price.toFixed(2)} · ${params.data.change}` : params.name + '\n' + (params.data.change || '');
     }
     if (option.series?.some(s => s.type === 'surface')) {
       result.grid3D = { ...option.grid3D, axisPointer: { lineStyle: { color: p.text } } };

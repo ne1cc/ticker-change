@@ -2,58 +2,8 @@
 {% from "_macros.html" import metric %}
 {% block title %}Radar — ticker/change{% endblock %}
 
-{% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-  <h1 class="text-2xl font-semibold tracking-tight mb-1">Radar</h1>
-  <p class="text-xs text-zinc-400 mb-6">
-    Universe screens over warmed caches — never fetches on load.
-    {% if payload and payload.meta and payload.meta.published_at %}
-    Published {{ payload.meta.published_at[:16].replace('T', ' ') }} · universe {{ payload.meta.warmed_count }}/{{ payload.meta.universe_count }}
-    {% endif %}
-  </p>
-
-  <!-- Tabs (URL-param pattern, matches /strategies) -->
-  <div class="responsive-tabs border-b border-zinc-200 dark:border-zinc-800 flex gap-4 mb-6">
-    {% for t, label in [('drift', 'Earnings Drift'), ('value', 'Relative Value'), ('squeeze', 'Squeeze')] %}
-    <a href="/radar?tab={{ t }}"
-       class="pb-3 text-sm font-semibold border-b-2 transition-colors duration-200 {% if tab == t %}border-amber-500 text-zinc-900 dark:text-zinc-100{% else %}border-transparent text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100{% endif %}">
-      {{ label }}
-    </a>
-    {% endfor %}
-  </div>
-
-  {% if tab == 'value' %}
-  <form class="flex items-center gap-2 mb-4 text-xs text-zinc-400 radar-tunables"
-        data-tunable="radar_peer_cap">
-    <label for="tunable-peer-cap">Peer cap</label>
-    <input id="tunable-peer-cap" type="number" min="3" max="20"
-           value="{{ tunables['radar_peer_cap'] }}"
-           class="w-16 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-900 dark:text-zinc-100">
-    <span class="hidden text-emerald-500 radar-saved">saved</span>
-  </form>
-  {% endif %}
-  {% if tab == 'squeeze' %}
-  <form class="flex items-center gap-2 mb-4 text-xs text-zinc-400 radar-tunables"
-        data-tunable="radar_liquidity_floor_usd">
-    <label for="tunable-floor">Liquidity floor ($/day)</label>
-    <input id="tunable-floor" type="number" min="100000" max="100000000" step="100000"
-           value="{{ tunables['radar_liquidity_floor_usd'] | int }}"
-           class="w-28 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-900 dark:text-zinc-100">
-    <span class="hidden text-emerald-500 radar-saved">saved</span>
-  </form>
-  {% endif %}
-
-  {% if warming %}
-  <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center text-sm text-zinc-400">
-    Warming — the background warmer fills these screens. Check back shortly.
-  </div>
-  {% elif not payload[tab].rows %}
-  <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center text-sm text-zinc-400">
-    Universe scanned — nothing qualifies right now.
-  </div>
-  {% else %}
-  <div class="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-    {% if tab == 'drift' %}
+{% macro drift_table(rows) %}
+  <div class="overflow-x-auto">
     <table class="w-full text-sm">
       <thead>
         <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
@@ -67,7 +17,7 @@
         </tr>
       </thead>
       <tbody class="font-mono">
-        {% for r in payload[tab].rows %}
+        {% for r in rows %}
         <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
           <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
           <td class="py-1.5 pr-4">{{ r.print_date }}</td>
@@ -82,6 +32,83 @@
         {% endfor %}
       </tbody>
     </table>
+  </div>
+{% endmacro %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <h1 class="text-2xl font-semibold tracking-tight mb-1">Radar</h1>
+  <p class="text-xs text-zinc-400 mb-6">
+    Screens the S&amp;P 500 for three setups. Click a ticker for its full analytics.
+    {% if payload %}
+    <br>Scanning {{ payload.meta.universe_count }} stocks ({{ payload.meta.warmed_count }} with data){% if updated_pt %} · Updated {{ updated_pt }}{% endif %} · refreshes every 12h
+    {% endif %}
+  </p>
+
+  <!-- Tabs (URL-param pattern, matches /strategies) -->
+  <div class="responsive-tabs border-b border-zinc-200 dark:border-zinc-800 flex gap-4 mb-6">
+    {% for t, label in [('drift', 'Earnings Drift'), ('value', 'Relative Value'), ('squeeze', 'Squeeze')] %}
+    <a href="/radar?tab={{ t }}"
+       class="pb-3 text-sm font-semibold border-b-2 transition-colors duration-200 {% if tab == t %}border-amber-500 text-zinc-900 dark:text-zinc-100{% else %}border-transparent text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100{% endif %}">
+      {{ label }}
+    </a>
+    {% endfor %}
+  </div>
+
+  <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-4 max-w-3xl">
+    {% if tab == 'drift' %}
+    Stocks that just reported earnings. Prices tend to keep drifting in the direction of the surprise for about 20 trading sessions after the print. Stocks still inside that window are listed first, with the most sessions left at the top.
+    {% elif tab == 'value' %}
+    The 50 most attractive stocks relative to their sector. The value score (0–100, higher is better) blends cheapness (forward P/E and price/sales, 50%), growth (25%) and 12-1 momentum (25%), each ranked against sector peers.
+    {% else %}
+    Heavily shorted stocks that could be forced higher if shorts rush to cover. The score (0–100) rises with short interest as a % of float and with days to cover. Only stocks that trade at least the daily dollar volume below are shown.
+    {% endif %}
+  </p>
+
+  {% if tab == 'squeeze' %}
+  <form class="flex items-center gap-2 mb-4 text-xs text-zinc-400 radar-tunables"
+        data-tunable="radar_liquidity_floor_usd">
+    <label for="tunable-floor">Min daily $ volume</label>
+    <input id="tunable-floor" type="number" min="100000" max="100000000" step="100000"
+           value="{{ tunables['radar_liquidity_floor_usd'] | int }}"
+           class="w-28 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-900 dark:text-zinc-100">
+    <span class="hidden text-emerald-500 radar-saved">saved · rescanning, refreshing shortly</span>
+  </form>
+  {% endif %}
+
+  {% if tab == 'drift' and payload and payload.drift.upcoming %}
+  <div class="flex flex-wrap items-center gap-2 mb-4 text-xs">
+    <span class="text-zinc-400">Reporting in the next 7 days:</span>
+    {% for u in payload.drift.upcoming %}
+    <a href="/analytics?ticker={{ u.symbol }}" class="rounded border border-zinc-200 dark:border-zinc-700 px-2 py-0.5 font-mono hover:text-amber-500">
+      {{ u.symbol }} <span class="text-zinc-400">{{ 'today' if u.days_until == 0 else 'in %dd' | format(u.days_until) }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if warming %}
+  <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center text-sm text-zinc-400">
+    Warming — the background warmer fills these screens. Check back shortly.
+  </div>
+  {% elif not payload[tab].rows %}
+  <div class="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center text-sm text-zinc-400">
+    Nothing qualifies right now.
+  </div>
+  {% else %}
+  <div class="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+    {% if tab == 'drift' %}
+    {% set open_rows = payload.drift.rows | selectattr('sessions_to_20d') | list %}
+    {% set closed_rows = payload.drift.rows | rejectattr('sessions_to_20d') | list %}
+    {% if open_rows %}{{ drift_table(open_rows) }}{% else %}
+    <p class="text-sm text-zinc-400">No stock is inside its 20-session drift window right now.</p>
+    {% endif %}
+    {% if closed_rows %}
+    <details class="mt-4">
+      <summary class="cursor-pointer text-xs text-zinc-400">Window closed — {{ closed_rows | length }} older prints</summary>
+      <div class="mt-2">{{ drift_table(closed_rows) }}</div>
+    </details>
+    {% endif %}
     {% elif tab == 'value' %}
     <table class="w-full text-sm">
       <thead>
@@ -97,8 +124,8 @@
         {% for r in payload[tab].rows %}
         <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
           <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
-          <td class="py-1.5 pr-4 font-sans text-xs">{{ r.industry }}</td>
-          <td class="py-1.5 pr-4 text-right">{{ r.value_score }}</td>
+          <td class="py-1.5 pr-4 font-sans text-xs">{{ r.industry or '—' }}</td>
+          <td class="py-1.5 pr-4 text-right">{% if r.value_score is not none %}{{ r.value_score }}{% else %}<span class="text-zinc-400" title="Fewer than {{ tunables['radar_min_peers'] }} sector peers with data to rank against">—</span>{% endif %}</td>
           <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (r.mom_12_1 or 0) > 0 else 'text-red-500' }}">{{ '%+.1f%%' | format((r.mom_12_1 or 0) * 100) if r.mom_12_1 is not none else '—' }}</td>
           <td class="py-1.5 pr-4 text-right">{{ '%.1f' | format(r.fwd_pe) if r.fwd_pe is not none else '—' }}</td>
         </tr>
@@ -133,10 +160,16 @@
     {% endif %}
   </div>
   {% endif %}
+  {% if excluded_summary %}
+  <p class="mt-3 text-xs text-zinc-400">
+    Not shown: {% for n, label in excluded_summary %}{{ n }} {{ label }}{{ ', ' if not loop.last }}{% endfor %}.
+  </p>
+  {% endif %}
 </div>
 
 <script>
-  // Persist inline tunables to /api/radar/settings, then reload from cache.
+  // Persist inline tunables to /api/radar/settings (which kicks off a
+  // background rescan), then reload once the new snapshot has had time to land.
   document.querySelectorAll('.radar-tunables input').forEach(function (input) {
     input.addEventListener('change', function () {
       var form = input.closest('.radar-tunables');
@@ -149,7 +182,7 @@
         if (resp.ok) {
           var badge = form.querySelector('.radar-saved');
           badge.classList.remove('hidden');
-          setTimeout(function () { window.location.reload(); }, 400);
+          setTimeout(function () { window.location.reload(); }, 5000);
         }
       }).catch(function () {});
     });
