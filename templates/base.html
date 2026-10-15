@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Stock Price Tracker{% endblock %}</title>
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
-    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
     <script>
       tailwind.config = {
         darkMode: 'class',
@@ -290,6 +289,7 @@
             <div class="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 px-2 mb-1">Markets</div>
             <div class="grid grid-cols-2 gap-1.5">
               <a id="mobile-nav-stock" href="/stock" class="mobile-nav-link">Price Table</a>
+              <a id="mobile-nav-news" href="/news" class="mobile-nav-link">News</a>
               <a id="mobile-nav-live" href="/live" class="mobile-nav-link">Live Microstructure</a>
               <a id="mobile-nav-heatmap" href="/heatmap" class="mobile-nav-link">Heatmap</a>
             </div>
@@ -341,6 +341,7 @@
         <!-- Links to specific views for this ticker -->
         <div id="sub-nav-links-container" class="mobile-horizontal-scroll order-3 w-full lg:order-none lg:w-auto flex items-center gap-1 sm:gap-2">
           <a id="sub-link-stock" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Price Table</a>
+          <a id="sub-link-news" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">News</a>
           <a id="sub-link-live" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Live Microstructure</a>
           <a id="sub-link-heatmap" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Heatmap</a>
           <a id="sub-link-analytics" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Risk Analytics</a>
@@ -452,7 +453,7 @@
       // Navigation state, active indicators, and ticker persistence
       (function () {
         const PILLARS = {
-          markets:    { id: 'nav-markets', defaultRoute: '/stock', children: ['stock', 'live', 'heatmap'] },
+          markets:    { id: 'nav-markets', defaultRoute: '/stock', children: ['stock', 'news', 'live', 'heatmap'] },
           options:    { id: 'nav-options', defaultRoute: '/options', children: [] },
           analytics:  { id: 'nav-analytics', defaultRoute: '/analytics', children: ['analytics', 'positioning'] },
           strategies: { id: 'nav-strategies', defaultRoute: '/strategies', children: ['strategies', 'ai-summary'] },
@@ -462,6 +463,7 @@
         const ROUTE_MAP = {
           '/':            { pillar: 'markets', sub: 'stock' },
           '/stock':       { pillar: 'markets', sub: 'stock' },
+          '/news':        { pillar: 'markets', sub: 'news' },
           '/live':        { pillar: 'markets', sub: 'live' },
           '/heatmap':     { pillar: 'markets', sub: 'heatmap' },
           '/options':     { pillar: 'options', sub: 'options' },
@@ -582,6 +584,7 @@
         // Child routes mapping for mobile nav links and sub-nav pills
         const childRoutes = {
           stock:       '/stock',
+          news:        '/news',
           live:        '/live',
           heatmap:     '/heatmap',
           options:     '/options',
@@ -647,7 +650,7 @@
           path = path.slice(0, -1);
         }
 
-        const coreRoutes = ['/stock', '/live', '/heatmap', '/options', '/analytics', '/positioning', '/strategies', '/momentum', '/ai-summary'];
+        const coreRoutes = ['/stock', '/news', '/live', '/heatmap', '/options', '/analytics', '/positioning', '/strategies', '/momentum', '/ai-summary'];
         let target = '/stock';
         if (coreRoutes.includes(path)) {
           target = path;
@@ -675,6 +678,9 @@
         executeTickerSearch(val);
       }
     </script>
+    {% if request.endpoint in ['analytics_page', 'positioning_page', 'strategies_page', 'options_page', 'live_page', 'heatmap_page'] %}
+    <script src="{{ url_for('static', filename='charts.js') }}"></script>
+    {% endif %}
     {% block scripts %}{% endblock %}
   </body>
 </html>

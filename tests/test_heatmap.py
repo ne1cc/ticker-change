@@ -142,10 +142,11 @@ class TestRenderTreemap(TempDBCase):
             "advancers": 1, "decliners": 1, "unchanged": 0, "as_of": "2026-09-02",
         }
 
-    def test_renders_embedded_plotly_div(self):
+    def test_renders_native_treemap_data(self):
         html = heatmap.render_treemap(self._data())
         self.assertIn('id="heatmap-treemap"', html)
-        self.assertIn("plotly", html.lower())
+        self.assertIn('"type":"treemap"', html)
+        self.assertNotIn("plotly", html.lower())
         self.assertIn("AAPL", html)
         self.assertIn("sector::Technology", html)
         # Change text rides the `text` property (customdata isn't substituted

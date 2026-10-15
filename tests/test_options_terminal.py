@@ -278,12 +278,14 @@ class TestOptionsTerminalFlaskRoutes:
             assert 'vol' in data
             assert 'cones' in data
 
-    def test_workspace_charts_enable_plotly_modebar(self):
-        """Zoom/Reset requires the modebar; every newPlot on this page must
-        keep it enabled (regression: charts were zoomable but un-restorable)."""
+    def test_workspace_charts_have_reset_and_native_renderer(self):
         from pathlib import Path
-        template = Path(__file__).resolve().parents[1] / "templates" / "options.html"
-        assert "displayModeBar: false" not in template.read_text()
+        root = Path(__file__).resolve().parents[1]
+        template = (root / 'templates/options.html').read_text()
+        assert 'Plotly' not in template
+        assert "TerminalCharts.mount('greeks-chart'" in template
+        assert "TerminalCharts.mount('payoff-chart'" in template
+        assert "['Reset'" in (root / 'static/charts.js').read_text()
 
     def test_get_full_option_chain_df_handles_nan_values(self):
         from app import get_full_option_chain_df

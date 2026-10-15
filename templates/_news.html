@@ -1,0 +1,35 @@
+<section aria-label="Recent headlines" class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden">
+  <div class="px-4 sm:px-5 py-3 border-b border-zinc-200 dark:border-zinc-800 flex flex-wrap justify-between gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+    <span class="font-semibold uppercase tracking-wider">{{ 'Saved headlines' if feed.stale else 'Recent headlines' }}{% if feed.partial %} · Partial update{% endif %}</span>
+    {% if feed.fetched_at %}<span>Last updated <time datetime="{{ feed.fetched_at }}">{{ feed.fetched_at }}</time> (UTC)</span>{% endif %}
+  </div>
+  {% if feed.message %}<p role="status" class="px-4 sm:px-5 py-4 text-sm text-zinc-600 dark:text-zinc-400">{{ feed.message }}</p>{% endif %}
+  {% if feed.articles %}
+    {% if excel_mode %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm text-left border-collapse">
+        <thead class="bg-zinc-50 dark:bg-zinc-950 text-xs text-zinc-500"><tr><th scope="col" class="p-3 border-b border-r border-zinc-200 dark:border-zinc-800">Published (UTC)</th><th scope="col" class="p-3 border-b border-r border-zinc-200 dark:border-zinc-800">Source</th><th scope="col" class="p-3 border-b border-zinc-200 dark:border-zinc-800">Headline</th></tr></thead>
+        <tbody>{% for article in feed.articles %}
+          <tr class="border-b border-zinc-200 dark:border-zinc-800 last:border-b-0">
+            <td class="p-3 align-top font-mono text-xs border-r border-zinc-200 dark:border-zinc-800"><time datetime="{{ article.published_at }}">{{ article.published_at|replace('T', ' ')|replace('Z', '') }}</time></td>
+            <td class="p-3 align-top text-xs break-all border-r border-zinc-200 dark:border-zinc-800">{{ article.source }}</td>
+            <td class="p-3 align-top"><a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="font-medium hover:text-amber-600 hover:underline break-words">{{ article.title }}</a></td>
+          </tr>
+        {% endfor %}</tbody>
+      </table>
+    </div>
+    {% else %}
+    <ol class="divide-y divide-zinc-200 dark:divide-zinc-800">
+      {% for article in feed.articles %}
+      <li class="p-4 sm:p-5">
+        <div class="flex flex-wrap gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400 mb-2">
+          <span class="font-semibold break-all">{{ article.source }}</span>
+          <time datetime="{{ article.published_at }}" class="font-mono">{{ article.published_at|replace('T', ' ')|replace('Z', '') }} UTC</time>
+        </div>
+        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="text-base sm:text-lg font-semibold text-zinc-900 dark:text-zinc-100 leading-snug hover:text-amber-600 dark:hover:text-amber-400 hover:underline break-words">{{ article.title }}</a>
+      </li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+  {% endif %}
+</section>

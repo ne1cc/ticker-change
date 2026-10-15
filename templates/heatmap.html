@@ -3,7 +3,6 @@
 {% block title %}S&P 500 Heatmap{% endblock %}
 
 {% block head_extra %}
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 {% endblock %}
 
 {% block content %}
@@ -99,18 +98,5 @@
     });
   })();
 
-  // Tile click → deep-link into the ticker page. Sector rows carry an empty
-  // customdata[1], so only leaf tiles navigate.
-  (function () {
-    const el = document.getElementById('heatmap-treemap');
-    if (!el || !el.on) return;
-    el.on('plotly_click', function (ev) {
-      const point = ev && ev.points && ev.points[0];
-      const symbol = point && point.customdata && point.customdata[1];
-      if (symbol) {
-        window.location.href = '/stock?ticker=' + encodeURIComponent(symbol);
-      }
-    });
-  })();
 </script>
 {% endblock %}
