@@ -15,6 +15,7 @@ import threading
 import math
 import os
 import hmac
+import sqlite3
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from db import init_db, is_fresh, get_prices, store_prices
@@ -516,7 +517,12 @@ def get_stock_data(ticker):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    """Front door: universe dashboard assembled from published briefs; the
+    cold state renders a warming skeleton and kicks the universe warmer."""
+    data = compute_dashboard()
+    if data["warming"]:
+        _warm_brief_universe()
+    return render_template('dashboard.html', **data)
 
 
 @app.route('/health')
@@ -672,7 +678,7 @@ def stock_page():
         data['custom_result'] = custom_result
         data['fundamentals'] = get_fundamentals(ticker)
         return render_template('stock.html', data=data)
-    return render_template('index.html')
+    return redirect(url_for('index'))
 
 def get_fundamentals(ticker: str) -> dict | None:
     """Fetch key valuation multiples, short interest, consensus forecasts, and upcoming events from yfinance.
@@ -3563,6 +3569,115 @@ def brief_api(ticker):
         kick_brief_build(ticker)
         return jsonify({"ticker": ticker, "status": "warming"}), 200
     return jsonify(out)
+
+
+# --- Front door: universe dashboard at / ------------------------------------
+# Assembled exclusively from published briefs — the same artifacts /brief
+# serves — so the cold-open answer to "what should I know today?" never
+# fetches. warm_progress carries counts only, so the not-yet-published set is
+# recomputed from the same cache-only universe sources the warmer reads.
+
+_DASHBOARD_PROGRESS_TTL_HOURS = 48
+_DASHBOARD_CONSTITUENTS_TTL_HOURS = 24 * 7
+_EARNINGS_FRESH_SESSIONS = 5
+_EARNINGS_SOON_DAYS = 5
+
+
+def _dashboard_missing(key: str) -> str:
+    """The contract's declared missing state, for cells without a value."""
+    return brief_contracts.contract(key)["missing_state"]
+
+
+def _dashboard_universe() -> set[str]:
+    """Tickers the nightly pass covers, read cache-only: radar's watchlist
+    plus the cached S&P 500 constituents. Zero network — a cold constituents
+    cache just shrinks the declared-pending set until the heatmap warmer
+    refills it."""
+    out: set[str] = set()
+    try:
+        out.update(radar.universe_symbols(min_bars=200))
+    except sqlite3.OperationalError:
+        pass
+    try:
+        rows = db.cache_get("sp500", "constituents",
+                            ttl_hours=_DASHBOARD_CONSTITUENTS_TTL_HOURS)
+        out.update(r.get("symbol") for r in (rows or []) if r.get("symbol"))
+    except sqlite3.OperationalError:
+        pass
+    return out
+
+
+def _dashboard_card(ticker: str, out: dict) -> dict:
+    """One published brief -> a dashboard row; every absent cell keeps its
+    declared missing state, mirroring the brief page."""
+    price = (out.get("sections") or {}).get("price") or {}
+    events = (out.get("sections") or {}).get("earnings") or {}
+    meta = out.get("meta") or {}
+    receipts = meta.get("receipts") or {}
+    ret = price.get("session_return")
+    ret_f = float(ret) if isinstance(ret, (int, float)) else None
+    since = events.get("sessions_since_print")
+    soon = events.get("next_print_in_days")
+    if isinstance(since, int) and 0 <= since <= _EARNINGS_FRESH_SESSIONS:
+        earnings_note = f"print {since} session{'s' if since != 1 else ''} ago"
+    elif isinstance(soon, int) and 0 <= soon <= _EARNINGS_SOON_DAYS:
+        earnings_note = f"prints in {soon}d"
+    else:
+        earnings_note = None
+    as_of = receipts.get("prices") or ""
+    return {
+        "ticker": ticker,
+        "href": f"/brief/{ticker}",
+        "depth": meta.get("depth") or brief.DEFAULT_DEPTH,
+        "published": (meta.get("published_at")
+                      or meta.get("built_at") or "")[:16].replace("T", " ")
+                     or None,
+        "session_date": price.get("session_date"),
+        "return_fmt": _fmt_brief_value("session_return", ret),
+        "return_missing": _dashboard_missing("session_return"),
+        "direction": ("up" if ret_f > 0 else "down") if ret_f else "flat",
+        "z_fmt": _fmt_brief_value("z_score", price.get("z_score")),
+        "z_missing": _dashboard_missing("z_score"),
+        "volume_fmt": _fmt_brief_value("volume_ratio",
+                                       price.get("volume_ratio")),
+        "volume_missing": _dashboard_missing("volume_ratio"),
+        "significance_note": (price.get("significance")
+                              or price.get("significance_state")),
+        "earnings_note": earnings_note,
+        "as_of": as_of[:16].replace("T", " ") or None,
+    }
+
+
+def compute_dashboard() -> dict:
+    """Front-door data, published briefs only. Notable deltas are ranked by
+    biggest absolute last-session move, ties broken by ticker ascending —
+    deterministic. Universe tickers the nightly pass covers but has not
+    published yet come back as declared-pending rows, never silently absent.
+    Zero network on render: snapshot_store and cache reads only."""
+    briefs = snapshot_store.current_all("brief:")
+    ranked: list[tuple[float, str, dict]] = []
+    extra: list[dict] = []
+    for ticker in sorted(briefs):
+        card = _dashboard_card(ticker, briefs[ticker])
+        ret = ((briefs[ticker].get("sections") or {}).get("price")
+               or {}).get("session_return")
+        if isinstance(ret, (int, float)) and math.isfinite(ret):
+            ranked.append((-abs(float(ret)), ticker, card))
+        else:
+            extra.append(card)
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    progress = db.cache_get("brief", "warm_progress",
+                            ttl_hours=_DASHBOARD_PROGRESS_TTL_HOURS)
+    pending = [{"ticker": t, "href": f"/brief/{t}"}
+               for t in sorted(_dashboard_universe() - set(briefs))]
+    return {
+        "warming": not briefs and not progress,
+        "cards": [card for _, _, card in ranked] + extra,
+        "pending": pending,
+        "progress": progress if isinstance(progress, dict) else None,
+        "published_count": len(briefs),
+        "generated_at": brief.now_iso()[:16].replace("T", " "),
+    }
 
 
 # User-configurable provider keys. Saved server-side (SQLite) so they apply to the

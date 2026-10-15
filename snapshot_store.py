@@ -9,8 +9,10 @@ only publication itself lives here.
 from __future__ import annotations
 
 import itertools
+import json
+import sqlite3
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import db
 
@@ -42,6 +44,41 @@ def current(provider: str):
     payload = db.cache_get(
         provider, f"snapshot:{pointer['snapshot_id']}", _TTL_HOURS)
     return payload if isinstance(payload, dict) else None
+
+
+def current_all(provider_prefix: str) -> dict[str, dict]:
+    """Scan twin of current(): every live published payload whose provider
+    starts with the prefix, keyed by the provider suffix. Same TTL rule as
+    current(); one query for pointers and payloads, joined in memory."""
+    try:
+        with db.get_conn() as conn:
+            rows = conn.execute(
+                "SELECT provider, key, payload, fetched_at FROM api_cache "
+                "WHERE provider LIKE ? AND (key = 'current' OR key LIKE 'snapshot:%')",
+                (provider_prefix + "%",)).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    cutoff = datetime.utcnow() - timedelta(hours=_TTL_HOURS)
+    pointers: dict[str, str] = {}
+    payloads: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        try:
+            if datetime.fromisoformat(row["fetched_at"]) < cutoff:
+                continue
+            payload = json.loads(row["payload"])
+        except (ValueError, TypeError):
+            continue
+        if row["key"] == "current":
+            if isinstance(payload, dict) and payload.get("snapshot_id"):
+                pointers[row["provider"]] = payload["snapshot_id"]
+        elif isinstance(payload, dict):
+            payloads[(row["provider"], row["key"])] = payload
+    out: dict[str, dict] = {}
+    for provider, snapshot_id in pointers.items():
+        payload = payloads.get((provider, f"snapshot:{snapshot_id}"))
+        if payload is not None:
+            out[provider[len(provider_prefix):]] = payload
+    return out
 
 
 def _prune(provider: str, keep: int = _RETENTION):

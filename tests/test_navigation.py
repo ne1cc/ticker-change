@@ -23,6 +23,11 @@ class TestNavigation(unittest.TestCase):
         )
         fetch_patcher.start()
         self.addCleanup(fetch_patcher.stop)
+        # The dashboard route kicks the nightly brief warmer when cold; keep
+        # the nav checks offline and thread-free.
+        warm_patcher = mock.patch.object(app_module, "_warm_brief_universe")
+        warm_patcher.start()
+        self.addCleanup(warm_patcher.stop)
 
     def tearDown(self):
         db.DB_PATH = self.orig_db_path
