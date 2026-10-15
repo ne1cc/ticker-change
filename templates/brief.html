@@ -26,9 +26,19 @@
     {% endfor %}
   </div>
 
+  {% set evidence_links = {
+       'price': ('/stock', 'Price table'),
+       'earnings': ('/analytics', 'Event study'),
+       'context': ('/stock', 'Fundamentals'),
+     } %}
   {% for sec in sections %}
   <section class="mb-6 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-    <h2 class="text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">{{ sec.title }}</h2>
+    <div class="flex items-baseline justify-between gap-3 mb-1">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">{{ sec.title }}</h2>
+      {% if sec.name in evidence_links %}
+      <a href="{{ evidence_links[sec.name][0] }}?ticker={{ ticker }}" class="text-xs font-medium text-amber-600 dark:text-amber-400 hover:underline whitespace-nowrap">{{ evidence_links[sec.name][1] }} →</a>
+      {% endif %}
+    </div>
     {% if sec.state == 'missing' %}
     <div class="rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700 px-3 py-2 my-2 text-xs italic text-zinc-400">
       {% if sec.as_of %}No data as of {{ sec.as_of[:16].replace('T', ' ') }}{% else %}No cached data (never fetched){% endif %}
