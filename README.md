@@ -15,11 +15,7 @@ sites; deltas are the product.
 
 - **Live demo:** https://ticker-change.duckdns.org
 
-<!-- PLACEHOLDER: not a real capture yet. Replace docs/img/brief-provenance.png
-     with a screenshot of a rendered /brief/<ticker> page showing the
-     source-and-as-of receipt chips and per-row receipts before merge. -->
-
-![A rendered daily brief with source-and-as-of receipts on every number](docs/img/brief-provenance.png)
+![A rendered daily brief with source-and-as-of receipts on every number](assets/brief-provenance.png)
 
 ---
 
