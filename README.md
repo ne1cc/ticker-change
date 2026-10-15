@@ -8,7 +8,7 @@ fundamentals, options positioning, strategy backtests, and risk — so you can
 decide whether a name is worth your attention. It explains what the data
 shows; it does not predict the market or execute trades.
 
-- **Live demo:** https://ticker-change.fly.dev
+- **Live demo:** https://ticker-change.duckdns.org
 
 ---
 
@@ -78,9 +78,9 @@ carries your symbol across every page.
 The Options pillar also links **Options Chain** straight to `/live?tab=greeks`
 — the chain is a tab of the Live view, not a route of its own.
 
-Also: [`/glossary`](https://ticker-change.fly.dev/glossary) (metric reference),
-[`/settings`](https://ticker-change.fly.dev/settings) (API keys),
-[`/api/docs`](https://ticker-change.fly.dev/api/docs) (OpenAPI explorer).
+Also: [`/glossary`](https://ticker-change.duckdns.org/glossary) (metric reference),
+[`/settings`](https://ticker-change.duckdns.org/settings) (API keys),
+[`/api/docs`](https://ticker-change.duckdns.org/api/docs) (OpenAPI explorer).
 
 ---
 
@@ -291,7 +291,10 @@ More detail: [`CLAUDE.md`](CLAUDE.md)
 
 ## Deploy
 
-**Live:** https://ticker-change.fly.dev
+**Live:** https://ticker-change.duckdns.org
+
+The live demo runs on AWS Lightsail with Nginx, HTTPS, and a persistent SQLite
+database. The existing Fly.io configuration remains available for that platform:
 
 ```bash
 fly deploy --ha=false   # single instance — SQLite has no multi-writer story
@@ -361,6 +364,6 @@ delayed data.
 ## Tech stack
 
 Flask · yfinance · pandas · numpy · Plotly · LightGBM/sklearn · Tailwind (CDN) ·
-Jinja2 · Gunicorn · Fly.io
+Jinja2 · Gunicorn · AWS Lightsail
 
 Do not commit secrets — use environment variables or `/settings`.
