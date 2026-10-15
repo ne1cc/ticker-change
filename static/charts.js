@@ -40,7 +40,7 @@
   }
   function themed(option) {
     const p = palette();
-    const axis = a => ({ ...a, nameLocation: 'middle', nameGap: a.position === 'top' ? 28 : 35,
+    const axis = a => ({ ...a, nameLocation: 'middle', nameGap: a.nameGap ?? (a.position === 'top' ? 28 : 35),
       nameTextStyle: { color: p.text, fontSize: 10 }, axisLabel: { color: p.text, fontSize: 10, hideOverlap: true, ...a.axisLabel },
       axisLine: { lineStyle: { color: p.grid } }, splitLine: { lineStyle: { color: p.grid }, ...a.splitLine } });
     const result = { animation: false, backgroundColor: 'transparent',

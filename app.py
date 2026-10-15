@@ -2998,7 +2998,7 @@ def _strategies_ticker_charts(symbol, series, strategy_id) -> dict:
                        {'left': 55, 'right': 65, 'top': '61%', 'height': '27%', 'containLabel': True}],
               'xAxis': [{'type': 'time', 'gridIndex': 0}, {'type': 'time', 'gridIndex': 1}],
               'yAxis': [{'type': 'value', 'name': f'{symbol} Price ($)', 'scale': True, 'gridIndex': 0},
-                        {'type': 'value', 'name': 'Portfolio ($10k)', 'scale': True, 'gridIndex': 1},
+                        {'type': 'value', 'name': 'Portfolio ($10k)', 'nameGap': 55, 'scale': True, 'gridIndex': 1},
                         {'type': 'value', 'name': 'Drawdown (%)', 'min': -100, 'max': 5, 'position': 'right', 'gridIndex': 1, 'splitLine': {'show': False}}],
               'axisPointer': {'link': [{'xAxisIndex': 'all'}]},
               'dataZoom': [{'type': 'inside', 'xAxisIndex': [0, 1], 'filterMode': 'none'},
