@@ -725,9 +725,9 @@
             <td class="py-3 px-3 text-right">{{ data.strat_stats.sortino }}</td>
             <td class="py-3 px-3 text-right text-rose-500 font-bold">{{ data.strat_stats.max_dd }}%</td>
             <td class="py-3 px-3 text-right">{{ data.strat_stats.calmar }}</td>
-            <td class="py-3 px-3 text-right">{{ data.rel_spy.beta }}</td>
-            <td class="py-3 px-3 text-right font-semibold {% if data.rel_spy.alpha >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
-              {{ '+' if data.rel_spy.alpha >= 0 }}{{ data.rel_spy.alpha }}%
+            <td class="py-3 px-3 text-right">{{ data.rel_spy.beta if data.rel_spy.beta is not none else 'N/A' }}</td>
+            <td class="py-3 px-3 text-right font-semibold {% if data.rel_spy.alpha is not none %}{% if data.rel_spy.alpha >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}{% endif %}">
+              {% if data.rel_spy.alpha is not none %}{{ '+' if data.rel_spy.alpha >= 0 }}{{ data.rel_spy.alpha }}%{% else %}N/A{% endif %}
             </td>
           </tr>
           <tr class="text-zinc-500 dark:text-zinc-400">
@@ -744,8 +744,8 @@
             <td class="py-3 px-3 text-right">{{ data.hold_stats.sortino }}</td>
             <td class="py-3 px-3 text-right text-rose-500">{{ data.hold_stats.max_dd }}%</td>
             <td class="py-3 px-3 text-right">{{ data.hold_stats.calmar }}</td>
-            <td class="py-3 px-3 text-right">1.00</td>
-            <td class="py-3 px-3 text-right">0.00%</td>
+            <td class="py-3 px-3 text-right">{{ data.hold_rel_spy.beta if data.hold_rel_spy.beta is not none else 'N/A' }}</td>
+            <td class="py-3 px-3 text-right">{% if data.hold_rel_spy.alpha is not none %}{{ '+' if data.hold_rel_spy.alpha >= 0 }}{{ data.hold_rel_spy.alpha }}%{% else %}N/A{% endif %}</td>
           </tr>
         </tbody>
       </table>

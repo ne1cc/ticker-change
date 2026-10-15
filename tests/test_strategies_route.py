@@ -325,6 +325,98 @@ class TestStrategiesRoute(unittest.TestCase):
         self.assertTrue(any(passes), "expected at least one symbol to clear the absolute hurdle")
         self.assertFalse(all(passes), "expected at least one symbol to fail the absolute hurdle")
 
+    @staticmethod
+    def _scorecard_comparisons(response):
+        html = response.get_data(as_text=True)
+        table = html.split('Tale of the Tape: Backtest Scorecard', 1)[1]
+        body = re.search(r'<tbody[^>]*>(.*?)</tbody>', table, re.S)[1]
+        return [
+            [re.sub(r'<[^>]+>', '', cell).strip() for cell in
+             re.findall(r'<td[^>]*>(.*?)</td>', row, re.S)][-2:]
+            for row in re.findall(r'<tr[^>]*>(.*?)</tr>', body, re.S)
+        ]
+
+    def test_ticker_scorecard_calculates_both_rows_against_spy(self):
+        # Dropping SPY from the route batch or hardcoding the hold row must fail.
+        batch = db.get_prices_batch(['HHHH', 'SPY'])
+        close = batch['HHHH']['close']
+        result = momentum_engine.backtest_timeseries(close, 'relative_strength')
+        spy = batch['SPY']['close'].pct_change(fill_method=None)
+        hold = close.pct_change(fill_method=None)
+        for period in ('all', '3m'):
+            with self.subTest(period=period):
+                dates = result.dates
+                if period == '3m':
+                    dates = dates[dates >= close.index[-1] - pd.DateOffset(months=3)]
+                expected = []
+                for returns in (result.strategy_returns, hold):
+                    paired = pd.concat([returns.reindex(dates), spy.reindex(dates)], axis=1).dropna()
+                    stock, market = paired.iloc[:, 0], paired.iloc[:, 1]
+                    beta = np.polyfit(market, stock, 1)[0]
+                    annual = (1 + paired).prod() ** (252 / len(paired)) - 1
+                    alpha = annual.iloc[0] - (0.04 + beta * (annual.iloc[1] - 0.04))
+                    expected.append((round(beta, 2), round(alpha * 100, 1)))
+                response = self.client.get(
+                    f'/strategies?tab=ticker&symbol=HHHH&strategy=relative_strength&period={period}'
+                )
+                self.assertEqual(response.status_code, 200)
+                actual = self._scorecard_comparisons(response)
+                self.assertEqual(len(actual), 2)
+                for cells, (beta, alpha) in zip(actual, expected):
+                    self.assertEqual(float(cells[0]), beta)
+                    self.assertEqual(float(cells[1].rstrip('%')), alpha)
+
+    def test_buy_hold_spy_scorecard_has_identity_comparison(self):
+        response = self.client.get('/strategies?tab=ticker&symbol=SPY')
+        hold = self._scorecard_comparisons(response)[1]
+        self.assertEqual(float(hold[0]), 1.0)
+        self.assertEqual(float(hold[1].rstrip('%')), 0.0)
+
+    def test_ticker_scorecard_marks_missing_spy_unavailable(self):
+        with db.get_conn() as conn:
+            conn.execute("DELETE FROM daily_prices WHERE symbol = 'SPY'")
+        response = self.client.get('/strategies?tab=ticker&symbol=HHHH')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._scorecard_comparisons(response), [['N/A', 'N/A']] * 2)
+
+    def test_ticker_scorecard_fetches_spy_on_cache_miss(self):
+        spy = db.get_prices_batch(['SPY'])['SPY'].rename(columns=str.title)
+        with db.get_conn() as conn:
+            conn.execute("DELETE FROM daily_prices WHERE symbol = 'SPY'")
+        with mock.patch.object(app_module, '_fetch_yfinance_with_retry',
+                               side_effect=lambda symbol, period: spy if symbol == 'SPY' else None):
+            response = self.client.get('/strategies?tab=ticker&symbol=HHHH')
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('N/A', self._scorecard_comparisons(response)[1])
+        self.assertFalse(db.get_prices_batch(['SPY'])['SPY'].empty)
+
+    def test_ticker_comparisons_use_only_observed_spy_returns(self):
+        batch = db.get_prices_batch(['HHHH', 'SPY'])
+        close = batch['HHHH']['close']
+        dates = momentum_engine.backtest_timeseries(close).dates
+        for mode in ('partial', 'insufficient', 'constant'):
+            with self.subTest(mode=mode):
+                spy = batch['SPY'].copy()
+                if mode == 'partial':
+                    spy = spy.loc[dates[-30]:]
+                elif mode == 'insufficient':
+                    spy = spy.tail(5)  # Four observed daily returns.
+                else:
+                    spy['close'] = 100.0
+                data = _strategies_ticker_data(
+                    'HHHH', batch['HHHH'], {**batch, 'SPY': spy}, ['HHHH'],
+                    'relative_strength', 'all'
+                )
+                if mode == 'partial':
+                    observed = spy['close'].pct_change(fill_method=None).dropna()
+                    beta = np.polyfit(observed, close.pct_change(fill_method=None).reindex(observed.index), 1)[0]
+                    self.assertEqual(data['hold_rel_spy']['beta'], round(beta, 2))
+                else:
+                    self.assertIsNone(data['rel_spy']['beta'])
+                    self.assertIsNone(data['rel_spy']['alpha'])
+                    self.assertIsNone(data['hold_rel_spy']['beta'])
+                    self.assertIsNone(data['hold_rel_spy']['alpha'])
+
     # -- F6 regressions: _strategies_ticker_data honors the None contract --
 
     def test_ticker_data_returns_none_below_scoring_minimum(self):

@@ -2936,13 +2936,18 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
     trend_color = "text-emerald-500" if in_position else "text-amber-500"
 
     # Compute SPY benchmark stats for comparison
+    rel_spy = {"alpha": None, "beta": None, "info_ratio": None, "corr": None}
+    hold_rel_spy = rel_spy.copy()
     spy_df = price_batch.get("SPY")
     if spy_df is not None and len(spy_df):
-        spy_close = spy_df["close"]
-        spy_sub = spy_close.pct_change(fill_method=None).reindex(backtest_dates).fillna(0.0)
-        rel_spy = momentum_engine.relative_stats(strat_series, spy_sub)
-    else:
-        rel_spy = {"alpha": 0.0, "beta": 1.0, "info_ratio": 0.0, "corr": 1.0}
+        paired = pd.DataFrame({
+            "strat": strat_series,
+            "hold": hold_series,
+            "spy": spy_df["close"].pct_change(fill_method=None),
+        }).reindex(backtest_dates).dropna()
+        if len(paired) >= 5 and paired["spy"].var() > 0:
+            rel_spy = momentum_engine.relative_stats(paired["strat"], paired["spy"])
+            hold_rel_spy = momentum_engine.relative_stats(paired["hold"], paired["spy"])
 
     # Moving averages for the chart
     sma50 = close.rolling(50).mean().reindex(backtest_dates)
@@ -2980,6 +2985,7 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
         "ann_vol_1y": round(score.ann_vol_1y * 100, 1),
         "pct_invested": pct_invested,
         "rel_spy": rel_spy,
+        "hold_rel_spy": hold_rel_spy,
         "trade_history": trade_history[-10:],
         "start_date": backtest_dates[0].strftime('%Y-%m-%d'),
         "end_date": backtest_dates[-1].strftime('%Y-%m-%d'),
@@ -3229,7 +3235,11 @@ def strategies_page():
         # ticker back for the rank — a SPY scan should be ranked against the
         # universe + itself, not pinned to the unranked floor value.
         rank_symbols = symbols if symbol in symbols else symbols + [symbol]
-        price_batch = db.get_prices_batch(rank_symbols)
+        price_batch = db.get_prices_batch(list(dict.fromkeys(rank_symbols + ["SPY"])))
+        if "SPY" not in price_batch:
+            spy_df = get_or_fetch_prices("SPY", period="5y")
+            if spy_df is not None and not spy_df.empty:
+                price_batch["SPY"] = spy_df
         data = _strategies_ticker_data(symbol, df, price_batch, rank_symbols, strategy_id, period)
         if data is None:
             return render_template(
