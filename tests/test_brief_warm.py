@@ -140,6 +140,38 @@ class TestSourceFailure(_IsolatedDB):
         self.assertEqual(progress["published"], 1)
 
 
+class TestFreshnessGate(_IsolatedDB):
+    def test_all_missing_brief_does_not_consume_freshness(self):
+        app_module._warm_brief_universe(watchlist=["COLD"], sp500=[],
+                                        background=False)
+        first = app_module.current_brief("COLD")
+        self.assertTrue(all(sec["state"] == "missing"
+                            for sec in first["sections"].values()))
+        self._clear_warmer_lock()
+        app_module._warm_brief_universe(watchlist=["COLD"], sp500=[],
+                                        background=False)
+        second = app_module.current_brief("COLD")
+        self.assertNotEqual(first["meta"]["snapshot_id"],
+                            second["meta"]["snapshot_id"])
+        progress = db.cache_get("brief", "warm_progress", 24)
+        self.assertEqual((progress["published"], progress["skipped"]), (1, 0))
+
+
+class TestLockGuard(_IsolatedDB):
+    def test_empty_universes_do_not_claim_the_lock(self):
+        _seed("AAA")
+        app_module._warm_brief_universe(watchlist=[], sp500=[],
+                                        background=False)
+        with db.get_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM api_cache WHERE provider='internal' "
+                "AND key='brief_warmer_lock'").fetchone()
+        self.assertIsNone(row)
+        app_module._warm_brief_universe(watchlist=["AAA"], sp500=[],
+                                        background=False)
+        self.assertIsNotNone(app_module.current_brief("AAA"))
+
+
 class TestProgress(_IsolatedDB):
     def test_progress_observable_during_and_after_the_pass(self):
         for t in ("AAA", "BBB", "CCC"):
@@ -163,6 +195,23 @@ class TestProgress(_IsolatedDB):
         self.assertEqual(final["done"], 3)
         self.assertEqual(final["total"], 3)
         self.assertEqual(final["published"], 3)
+
+    def test_progress_write_failure_does_not_abort_the_pass(self):
+        _seed("AAA")
+        _seed("BBB")
+        real_cache_set = db.cache_set
+
+        def flaky_cache_set(provider, key, payload):
+            if provider == "brief" and key == "warm_progress":
+                raise RuntimeError("sqlite disk hiccup")
+            return real_cache_set(provider, key, payload)
+
+        with patch.object(app_module.db, "cache_set",
+                          side_effect=flaky_cache_set):
+            app_module._warm_brief_universe(watchlist=["AAA", "BBB"],
+                                            sp500=[], background=False)
+        self.assertIsNotNone(app_module.current_brief("AAA"))
+        self.assertIsNotNone(app_module.current_brief("BBB"))
 
 
 class TestIdempotence(_IsolatedDB):

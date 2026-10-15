@@ -4398,6 +4398,13 @@ def _brief_published_recently(ticker: str, fresh_hours: float) -> bool:
     published = (current or {}).get("meta", {}).get("published_at")
     if not published:
         return False
+    # A publication whose every section is declared missing (boot race on a
+    # fresh DB, or a genuinely dataless ticker) must not consume the
+    # freshness window — rebuild it once data arrives.
+    sections = (current or {}).get("sections") or {}
+    if sections and all((sec or {}).get("state") == "missing"
+                        for sec in sections.values()):
+        return False
     try:
         age = datetime.utcnow() - datetime.fromisoformat(published)
     except (TypeError, ValueError):
@@ -4413,13 +4420,13 @@ def _warm_brief_universe(watchlist=None, sp500=None, background=True,
     cross-worker lock, never raises. Cache-only — publication reads SQLite,
     so this pass never fetches; the radar/heatmap warmers keep its inputs
     fed. A ticker whose sources all fail still publishes with declared
-    missing-states, and one ticker's failure never aborts the pass. Progress
-    lands in the brief:warm_progress status key after every ticker.
-    background=False runs the worker synchronously (tests)."""
+    missing-states (but never consumes the freshness window), and one
+    ticker's failure never aborts the pass. Empty universes return before
+    claiming the lock. Progress lands in the brief:warm_progress status key
+    after every ticker. background=False runs the worker synchronously
+    (tests)."""
     def _worker():
         try:
-            if not db.try_claim_lock("brief_warmer_lock", ttl_hours=6.0):
-                return
             full = sorted(watchlist if watchlist is not None
                           else radar.universe_symbols(min_bars=200))
             spx = [c.get("symbol") for c in (sp500 if sp500 is not None
@@ -4428,6 +4435,10 @@ def _warm_brief_universe(watchlist=None, sp500=None, background=True,
             tiers.update({s: "full" for s in full if s})
             tiers = dict(sorted(tiers.items()))
             if not tiers:
+                # Both sources empty: return before claiming, so the cold
+                # front door is not locked out for the 6h TTL.
+                return
+            if not db.try_claim_lock("brief_warmer_lock", ttl_hours=6.0):
                 return
             print(f"[brief] warming {len(tiers)} tickers "
                   f"({len(full)} full-depth, {len(tiers) - len(full)} deltas)...")
@@ -4443,10 +4454,13 @@ def _warm_brief_universe(watchlist=None, sp500=None, background=True,
                 except Exception as e:
                     failed += 1
                     print(f"[brief] {ticker} warm failed: {e}")
-                db.cache_set("brief", "warm_progress",
-                             {"done": done, "total": len(tiers),
-                              "published": published, "skipped": skipped,
-                              "failed": failed, "updated": brief.now_iso()})
+                try:
+                    db.cache_set("brief", "warm_progress",
+                                 {"done": done, "total": len(tiers),
+                                  "published": published, "skipped": skipped,
+                                  "failed": failed, "updated": brief.now_iso()})
+                except Exception as e:
+                    print(f"[brief] progress write failed at {ticker}: {e}")
             print(f"[brief] done ({len(tiers)} tickers, {published} published, "
                   f"{skipped} fresh-skipped, {failed} failed)")
         except Exception as e:

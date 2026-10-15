@@ -73,19 +73,6 @@ button {
   -webkit-overflow-scrolling: touch;
 }
 
-
-/* Tailwind's preflight sets svg { display: block }, which lands after Plotly's
-   injected stylesheet and stacks mode-bar icons into a vertical grid over the
-   chart data. Restore the horizontal icon strip Plotly expects. */
-.js-plotly-plot .modebar .modebar-btn {
-  display: inline-block;
-}
-
-.js-plotly-plot .modebar .modebar-btn svg {
-  display: inline-block;
-  vertical-align: middle;
-}
-
 @media (max-width: 767px) {
   .responsive-tabs {
     margin-inline: -1rem;
