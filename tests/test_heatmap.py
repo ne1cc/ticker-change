@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -155,6 +156,17 @@ class TestRenderTreemap(TempDBCase):
     def test_dark_and_light_variants_render(self):
         self.assertIsNotNone(heatmap.render_treemap(self._data(), dark=True))
         self.assertIsNotNone(heatmap.render_treemap(self._data(), dark=False))
+
+    def test_embedded_trace_supplies_tooltip_and_click_data(self):
+        html = heatmap.render_treemap(self._data())
+        chart_data = html.split('Plotly.newPlot(', 1)[1].split(',', 1)[1]
+        traces, _ = json.JSONDecoder().raw_decode(chart_data.lstrip())
+        trace = traces[0]
+        self.assertIn("customdata", trace)
+        by_id = dict(zip(trace["ids"], trace["customdata"]))
+        self.assertEqual(["+1.00%", "AAPL", "Apple Inc.", 101.0], by_id["AAPL"])
+        self.assertEqual(["-1.00%", "MSFT", "Microsoft Corp.", 198.0], by_id["MSFT"])
+        self.assertEqual(["+0.01%", "", "Technology", ""], by_id["sector::Technology"])
 
 
 class TestRefreshUniverse(TempDBCase):
