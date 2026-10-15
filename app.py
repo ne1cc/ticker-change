@@ -3440,10 +3440,16 @@ def _fmt_brief_value(key: str, value):
 
 def _brief_view_sections(out: dict) -> list[dict]:
     """Contract-driven display rows per section: term, receipt-bearing value,
-    and the declared missing state — no cell renders blank without a label."""
+    and the declared missing state — no cell renders blank without a label.
+    Only the sections the brief's declared depth names are rendered, so a
+    deltas brief never grows a phantom context section."""
     sections = []
     receipts = (out.get("meta") or {}).get("receipts") or {}
+    depth = (out.get("meta") or {}).get("depth") or brief.DEFAULT_DEPTH
+    required = brief.DEPTH_SECTIONS.get(depth, brief.DEPTH_SECTIONS[brief.DEFAULT_DEPTH])
     for name, keys in brief_contracts.METRIC_KEYS_BY_SECTION.items():
+        if name not in required:
+            continue
         sec = (out.get("sections") or {}).get(name) or {}
         rows = []
         for key in keys:
@@ -3475,17 +3481,17 @@ def current_brief(ticker: str) -> dict | None:
     return snapshot_store.current(_brief_provider((ticker or '').strip().upper()))
 
 
-def publish_brief(ticker: str) -> dict | None:
+def publish_brief(ticker: str, depth: str = brief.DEFAULT_DEPTH) -> dict | None:
     """Load context (cache-only) -> build -> validate -> store -> move pointer
-    (last) -> prune. On any failure the pointer stays untouched and the
-    last-good brief serves."""
+    (last) -> prune. depth="deltas" publishes the price/earnings sections only.
+    On any failure the pointer stays untouched and the last-good brief serves."""
     ticker = (ticker or '').strip().upper()
     if not ticker:
         return None
     started = brief.now_iso()
     try:
         ctx = brief.load_brief_context(ticker)
-        out = brief.build_brief(ticker, ctx)
+        out = brief.build_brief(ticker, ctx, depth=depth)
         ok, problems = brief.validate_brief(out)
         if not ok:
             print(f"[brief] validation failed for {ticker}: {problems}")
@@ -4182,6 +4188,94 @@ def _start_radar_warmer():
     threading.Thread(target=_recurring, daemon=True, name="radar-recurring").start()
 
 
+# Nightly-cadence freshness: a brief published within this window is skipped
+# by the universe pass, so a re-warm over a complete universe does no work.
+_BRIEF_FRESH_HOURS = 20
+
+
+def _brief_published_recently(ticker: str, fresh_hours: float) -> bool:
+    current = current_brief(ticker)
+    published = (current or {}).get("meta", {}).get("published_at")
+    if not published:
+        return False
+    try:
+        age = datetime.utcnow() - datetime.fromisoformat(published)
+    except (TypeError, ValueError):
+        return False
+    return age < timedelta(hours=fresh_hours)
+
+
+def _warm_brief_universe(watchlist=None, sp500=None, background=True,
+                         fresh_hours=_BRIEF_FRESH_HOURS):
+    """Nightly tiered pass over the whole universe: the watchlist (radar's
+    universe, full-depth briefs) plus the S&P 500 (price/earnings deltas;
+    watchlist wins overlaps). Mirrors _warm_radar_cache: background thread,
+    cross-worker lock, never raises. Cache-only — publication reads SQLite,
+    so this pass never fetches; the radar/heatmap warmers keep its inputs
+    fed. A ticker whose sources all fail still publishes with declared
+    missing-states, and one ticker's failure never aborts the pass. Progress
+    lands in the brief:warm_progress status key after every ticker.
+    background=False runs the worker synchronously (tests)."""
+    def _worker():
+        try:
+            if not db.try_claim_lock("brief_warmer_lock", ttl_hours=6.0):
+                return
+            full = sorted(watchlist if watchlist is not None
+                          else radar.universe_symbols(min_bars=200))
+            spx = [c.get("symbol") for c in (sp500 if sp500 is not None
+                                             else heatmap.get_constituents())]
+            tiers = {s: "deltas" for s in spx if s}
+            tiers.update({s: "full" for s in full if s})
+            tiers = dict(sorted(tiers.items()))
+            if not tiers:
+                return
+            print(f"[brief] warming {len(tiers)} tickers "
+                  f"({len(full)} full-depth, {len(tiers) - len(full)} deltas)...")
+            published = skipped = failed = 0
+            for done, (ticker, depth) in enumerate(tiers.items(), start=1):
+                try:
+                    if _brief_published_recently(ticker, fresh_hours):
+                        skipped += 1
+                    elif publish_brief(ticker, depth=depth) is not None:
+                        published += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    failed += 1
+                    print(f"[brief] {ticker} warm failed: {e}")
+                db.cache_set("brief", "warm_progress",
+                             {"done": done, "total": len(tiers),
+                              "published": published, "skipped": skipped,
+                              "failed": failed, "updated": brief.now_iso()})
+            print(f"[brief] done ({len(tiers)} tickers, {published} published, "
+                  f"{skipped} fresh-skipped, {failed} failed)")
+        except Exception as e:
+            print(f"[brief] warmer error: {e}")
+
+    if background:
+        threading.Thread(target=_worker, daemon=True, name="brief-warmer").start()
+    else:
+        _worker()
+
+
+def _start_brief_warmer():
+    """Nightly tiered brief pass: warm 2 minutes after boot, then every 24h
+    (the 20h freshness window rebuilds each ticker about once a day).
+    Import-time call like the other warmers; the test suite sets
+    BRIEF_WARM_ON_BOOT=0 to keep pytest offline."""
+    if os.environ.get("BRIEF_WARM_ON_BOOT", "1") != "1":
+        return
+
+    def _recurring():
+        time.sleep(120)
+        _warm_brief_universe()
+        while True:
+            time.sleep(24 * 3600)
+            _warm_brief_universe()
+
+    threading.Thread(target=_recurring, daemon=True, name="brief-recurring").start()
+
+
 @app.route('/api/warm-cache', methods=['POST'])
 def api_warm_cache():
     """Trigger a forced EOD options-chain warm (see .github/workflows/warm-cache.yml).
@@ -4412,6 +4506,7 @@ def api_radar_settings():
 _start_options_cache_warmer()
 _start_heatmap_warmer()
 _start_radar_warmer()
+_start_brief_warmer()
 
 
 if __name__ == '__main__':

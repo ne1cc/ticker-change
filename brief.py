@@ -28,6 +28,10 @@ SOURCE_TTLS = {"prices": db.FRESHNESS_HOURS,
                "fundamentals": peers.FUNDAMENTALS_TTL_HOURS,
                "short": 24}
 
+DEFAULT_DEPTH = "full"
+DEPTH_SECTIONS = {"full": ("price", "earnings", "context"),
+                  "deltas": ("price", "earnings")}
+
 SIGNIFICANCE_Z = {"notable": 2.0, "elevated": 1.0}
 
 NM_ESTIMATE_FLOOR = 0.05
@@ -204,21 +208,25 @@ def _reconciled_receipts(context: dict) -> dict:
     return receipts
 
 
-def build_brief(ticker: str, context: dict) -> dict:
-    """Contract-validated brief from a loaded context. CPU only, no network."""
+def build_brief(ticker: str, context: dict, depth: str = DEFAULT_DEPTH) -> dict:
+    """Contract-validated brief from a loaded context. CPU only, no network.
+    depth="deltas" carries the price/earnings delta sections only (the S&P 500
+    tier); the default is the full three-section brief."""
+    if depth not in DEPTH_SECTIONS:
+        raise ValueError(f"unknown brief depth: {depth}")
+    builders = {"price": _price_section, "earnings": _earnings_section,
+                "context": _context_section}
     brief = {
         "meta": {
             "ticker": (ticker or "").upper(),
             "built_at": context.get("built_at") or now_iso(),
             "receipts": _reconciled_receipts(context),
             "contract_version": brief_contracts.BRIEF_CONTRACT_VERSION,
+            "depth": depth,
             "validation_status": "pending",
         },
-        "sections": {
-            "price": _price_section(context),
-            "earnings": _earnings_section(context),
-            "context": _context_section(context),
-        },
+        "sections": {name: builders[name](context)
+                     for name in DEPTH_SECTIONS[depth]},
     }
     validate_brief(brief)
     return brief
@@ -240,8 +248,12 @@ def validate_brief(brief: dict) -> tuple[bool, list[str]]:
     problems: list[str] = []
     try:
         problems.extend(brief_contracts.incomplete_contracts())
+        depth = (brief.get("meta") or {}).get("depth") or DEFAULT_DEPTH
+        required = DEPTH_SECTIONS.get(depth, DEPTH_SECTIONS[DEFAULT_DEPTH])
         sections = brief.get("sections") or {}
         for name, keys in brief_contracts.METRIC_KEYS_BY_SECTION.items():
+            if name not in required:
+                continue
             section = sections.get(name)
             if not isinstance(section, dict):
                 problems.append(f"{name}: missing section")

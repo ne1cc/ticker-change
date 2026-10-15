@@ -10,3 +10,4 @@ import os
 
 os.environ["HEATMAP_WARM_ON_BOOT"] = "0"
 os.environ["RADAR_WARM_ON_BOOT"] = "0"
+os.environ["BRIEF_WARM_ON_BOOT"] = "0"

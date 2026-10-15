@@ -243,6 +243,37 @@ class TestReceipts(_IsolatedDB, unittest.TestCase):
         self.assertTrue(ok, problems)
 
 
+class TestDepths(_IsolatedDB, unittest.TestCase):
+    def test_deltas_depth_carries_price_and_earnings_only(self):
+        _seed()
+        out = brief.build_brief("AAA", brief.load_brief_context("AAA"),
+                                depth="deltas")
+        self.assertEqual(out["meta"]["depth"], "deltas")
+        self.assertEqual(set(out["sections"]), {"price", "earnings"})
+        ok, problems = brief.validate_brief(out)
+        self.assertTrue(ok, problems)
+
+    def test_default_depth_is_the_full_three_sections(self):
+        _seed()
+        out = brief.build_brief("AAA", brief.load_brief_context("AAA"))
+        self.assertEqual(out["meta"]["depth"], "full")
+        self.assertEqual(set(out["sections"]),
+                         {"price", "earnings", "context"})
+        ok, _ = brief.validate_brief(out)
+        self.assertTrue(ok)
+
+    def test_legacy_brief_without_depth_still_validates_as_full(self):
+        _seed()
+        out = brief.build_brief("AAA", brief.load_brief_context("AAA"))
+        del out["meta"]["depth"]
+        ok, _ = brief.validate_brief(out)
+        self.assertTrue(ok)
+
+    def test_unknown_depth_is_rejected(self):
+        with self.assertRaises(ValueError):
+            brief.build_brief("AAA", {}, depth="bogus")
+
+
 class TestNoNetwork(_IsolatedDB, unittest.TestCase):
     def test_build_touches_no_network_and_reads_no_cache(self):
         _seed()
