@@ -319,7 +319,21 @@ More detail: [`CLAUDE.md`](CLAUDE.md)
 **Live:** https://ticker-change.duckdns.org
 
 The live demo runs on AWS Lightsail with Nginx, HTTPS, and a persistent SQLite
-database. The existing Fly.io configuration remains available for that platform:
+database. The host deploys itself: a systemd timer runs
+[`deploy/lightsail/deploy.sh`](deploy/lightsail/deploy.sh) every 5 minutes,
+which builds the newest `main` commit whose Tests workflow passed and swaps the
+container only once it answers `/health` (otherwise the previous container is
+restored). After changing anything in `deploy/lightsail/`, reinstall it on the
+host:
+
+```bash
+sudo install -m 0755 deploy.sh /usr/local/bin/ticker-change-deploy
+sudo install -m 0644 ticker-change-deploy.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now ticker-change-deploy.timer
+journalctl -u ticker-change-deploy   # deploy history
+```
+
+The existing Fly.io configuration remains available for that platform:
 
 ```bash
 fly deploy --ha=false   # single instance — SQLite has no multi-writer story

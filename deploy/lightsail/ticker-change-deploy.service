@@ -1,0 +1,8 @@
+[Unit]
+Description=Deploy the latest tested ticker-change main commit
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ticker-change-deploy
