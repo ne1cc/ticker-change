@@ -26,6 +26,7 @@ import microstructure  # noqa: E402
 import momentum_engine  # noqa: E402
 import peers  # noqa: E402
 import radar_contracts  # noqa: E402
+import snapshot_store  # noqa: E402
 
 TUNABLES: dict[str, dict] = {
     "radar_peer_cap": {"default": 8, "min": 3, "max": 20, "type": int},
@@ -551,8 +552,8 @@ def _squeeze_rows(ctx: dict) -> tuple[list[dict], list[dict]]:
 
 
 def _snapshot_id(context: dict) -> str:
-    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M")
-    return f"{stamp}-{len(context.get('symbols') or [])}"
+    """Delegates to the shared store: sortable, collision-free per session."""
+    return snapshot_store.new_snapshot_id()
 
 
 def _warmed_count(context: dict) -> int:
@@ -646,10 +647,8 @@ def publish_snapshot(context: dict) -> dict | None:
         snap["meta"]["build_started_at"] = started
         snap["meta"]["build_completed_at"] = now_iso()
         snap["meta"]["published_at"] = started
-        snap_id = snap["meta"]["snapshot_id"]
-        db.cache_set(SNAPSHOT_PROVIDER, f"snapshot:{snap_id}", snap)
-        db.cache_set(SNAPSHOT_PROVIDER, "current", {"snapshot_id": snap_id})
-        _prune_snapshots(keep=2)
+        snapshot_store.publish(
+            SNAPSHOT_PROVIDER, snap["meta"]["snapshot_id"], snap)
         return snap
     except Exception as e:
         print(f"[radar] publish failed (pointer untouched): {e}")
@@ -658,22 +657,4 @@ def publish_snapshot(context: dict) -> dict | None:
 
 def current_snapshot() -> dict | None:
     """The published snapshot payload, or None when absent/invalid."""
-    pointer = db.cache_get(SNAPSHOT_PROVIDER, "current", 24 * 7)
-    if not isinstance(pointer, dict) or not pointer.get("snapshot_id"):
-        return None
-    payload = db.cache_get(SNAPSHOT_PROVIDER,
-                           f"snapshot:{pointer['snapshot_id']}", 24 * 7)
-    return payload if isinstance(payload, dict) else None
-
-
-def _prune_snapshots(keep: int = 2):
-    """Keep only the newest `keep` snapshot payloads; 'current' is a separate
-    key and never matches the snapshot: prefix."""
-    with db.get_conn() as conn:
-        stored = conn.execute(
-            "SELECT key FROM api_cache WHERE provider = ? AND key LIKE 'snapshot:%' "
-            "ORDER BY fetched_at DESC, rowid DESC", (SNAPSHOT_PROVIDER,)).fetchall()
-        for row in stored[keep:]:
-            conn.execute(
-                "DELETE FROM api_cache WHERE provider = ? AND key = ?",
-                (SNAPSHOT_PROVIDER, row["key"]))
+    return snapshot_store.current(SNAPSHOT_PROVIDER)

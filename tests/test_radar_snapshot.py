@@ -97,6 +97,30 @@ class TestPublish(unittest.TestCase):
             self.assertIsNone(db.cache_get("radar_snapshot",
                                            f"snapshot:{gone}", 24 * 7))
 
+    def test_same_minute_publishes_get_distinct_ids(self):
+        _seed_universe()
+        ctx = radar.load_context()
+        id_a, id_b = radar._snapshot_id(ctx), radar._snapshot_id(ctx)
+        self.assertNotEqual(id_a, id_b)        # same minute, equal universe
+        self.assertLess(id_a, id_b)            # ids sort chronologically
+        first = radar.publish_snapshot(ctx)
+        second = radar.publish_snapshot(ctx)
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertNotEqual(first["meta"]["snapshot_id"],
+                            second["meta"]["snapshot_id"])
+        self.assertEqual(radar.current_snapshot()["meta"]["snapshot_id"],
+                         second["meta"]["snapshot_id"])
+        with db.get_conn() as conn:
+            rows = conn.execute(
+                "SELECT key FROM api_cache WHERE provider='radar_snapshot' "
+                "AND key LIKE 'snapshot:%'").fetchall()
+        self.assertEqual(len(rows), 2)                  # retention reconciled
+        for snap in (first, second):                    # neither clobbered
+            self.assertIsNotNone(db.cache_get(
+                "radar_snapshot",
+                f"snapshot:{snap['meta']['snapshot_id']}", 24 * 7))
+
     def test_nm_values_never_rank_as_bargains(self):
         _seed_universe()
         snap = radar.build_snapshot(radar.load_context())
