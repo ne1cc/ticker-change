@@ -172,3 +172,17 @@ SQLite and `model.pkl` are ephemeral there. API keys are optional everywhere
 and can be set via environment, `.env`, or the `/settings` page (which
 requires `SETTINGS_PASSWORD`, HTTP Basic). See `.env.example` for the full
 list.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as GitHub issues on ne1cc/ticker-change via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage labels are used verbatim (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root (created lazily by `/domain-modeling`). See `docs/agents/domain.md`.
