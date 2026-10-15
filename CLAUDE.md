@@ -13,7 +13,8 @@ from free-tier data sources (`yfinance`, Finnhub, FMP, SEC EDGAR) that all
 degrade gracefully when unconfigured or rate-limited.
 
 There is no frontend build step — Tailwind is loaded from the CDN and charts
-are server-rendered Plotly HTML embedded directly in Jinja templates.
+are native ECharts JSON mounts embedded in Jinja templates; stock candles use
+TradingView Lightweight Charts.
 
 ## Commands
 
@@ -56,7 +57,7 @@ multi-writer story here.
 
 ### Core: `app.py` (~4,230 lines) plus ~15 satellite modules
 
-Routes, page data-assembly functions, chart generation (Plotly), GEX/dealer
+Routes, page data-assembly functions, chart data assembly (ECharts), GEX/dealer
 positioning math, and page orchestration live in `app.py`. Each page route has
 a `get_*`/`compute_*` builder that assembles a data dict passed straight to
 the Jinja template; three pages (`/stock`, `/analytics`, `/positioning`)

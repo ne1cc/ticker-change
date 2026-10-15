@@ -968,8 +968,6 @@
   </div>
 </div>
 
-<!-- Plotly CDN for Terminal Charts -->
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <script>
   const terminalData = {{ data | tojson }};
   const ticker = "{{ ticker }}";
@@ -999,12 +997,12 @@
     if (tabName === 'chain') {
       // Load the chain on first visit; on later visits just resize the
       // charts that were rendered while the tab was hidden (display:none
-      // gives Plotly a 0-width container, so it needs to be re-measured).
+      // gives the chart a zero-width container, so it needs to be re-measured).
       if (!optionsData) {
         loadExpirationDates().then(() => loadOptionsGreeks());
       } else {
-        Plotly.Plots.resize('greeks-chart');
-        Plotly.Plots.resize('payoff-chart');
+        TerminalCharts.resize('greeks-chart');
+        TerminalCharts.resize('payoff-chart');
       }
     } else if (tabName === 'ai') {
       loadOptionsAnalysis();
@@ -1049,160 +1047,49 @@
   });
 
   function renderGexPlot() {
-    if (!terminalData || !terminalData.gex || !terminalData.gex.strikes || terminalData.gex.strikes.length === 0) return;
-    const g = terminalData.gex;
-    const spot = terminalData.spot_price;
-
-    const traceCall = {
-      x: g.call_gex_series,
-      y: g.strikes,
-      name: 'Call GEX',
-      type: 'bar',
-      orientation: 'h',
-      marker: { color: 'rgba(16, 185, 129, 0.7)' },
-    };
-
-    const tracePut = {
-      x: g.put_gex_series,
-      y: g.strikes,
-      name: 'Put GEX',
-      type: 'bar',
-      orientation: 'h',
-      marker: { color: 'rgba(244, 63, 94, 0.7)' },
-    };
-
-    const traceNet = {
-      x: g.net_gex_series,
-      y: g.strikes,
-      name: 'Net GEX',
-      type: 'scatter',
-      mode: 'lines+markers',
-      line: { color: '#f59e0b', width: 2 },
-      marker: { size: 4 },
-    };
-
-    const shapes = [
-      // Spot Price Line
-      {
-        type: 'line',
-        x0: 0, x1: 1, xref: 'paper',
-        y0: spot, y1: spot,
-        line: { color: '#eab308', width: 2, dash: 'dot' }
-      }
-    ];
-
-    if (g.gamma_flip) {
-      shapes.push({
-        type: 'line',
-        x0: 0, x1: 1, xref: 'paper',
-        y0: g.gamma_flip, y1: g.gamma_flip,
-        line: { color: '#a855f7', width: 2, dash: 'dash' }
-      });
-    }
-
-    const layout = {
-      barmode: 'relative',
-      margin: { l: 60, r: 40, t: 20, b: 40 },
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(0,0,0,0)',
-      xaxis: { title: 'Gamma Exposure ($M per 1% move)', gridcolor: 'rgba(150,150,150,0.1)' },
-      yaxis: { title: 'Strike Price ($)', gridcolor: 'rgba(150,150,150,0.1)' },
-      shapes: shapes,
-      legend: { orientation: 'h', y: 1.05 },
-      font: { family: 'monospace', size: 11, color: '#a1a1aa' }
-    };
-
-    Plotly.newPlot('gex-plot-container', [traceCall, tracePut, traceNet], layout, { responsive: true, displayModeBar: true });
+    const g = terminalData?.gex;
+    if (!g?.strikes?.length) return;
+    const c = TerminalCharts;
+    const series = [c.bar('Call GEX', g.call_gex_series, g.strikes, '#10b981'), c.bar('Put GEX', g.put_gex_series, g.strikes, '#f43f5e'), c.line('Net GEX', g.net_gex_series, g.strikes)];
+    const limit = Math.max(...g.call_gex_series.map(Math.abs), ...g.put_gex_series.map(Math.abs), ...g.net_gex_series.map(Math.abs), 1) * 1.12;
+    const refs = [c.ref('y', terminalData.spot_price, 'Spot')];
+    if (g.gamma_flip != null) refs.push(c.ref('y', g.gamma_flip, 'Zero-Gamma', '#a855f7'));
+    series[0].markLine = {symbol:'none', data:refs};
+    const option = c.cartesian(series, 'Gamma exposure ($M per 1% move)', 'Strike ($)');
+    option.xAxis.min = -limit; option.xAxis.max = limit; option.terminalHorizontalBars = true;
+    TerminalCharts.mount('gex-plot-container', option);
   }
 
   function renderTermPlot() {
-    if (!terminalData || !terminalData.vol || !terminalData.vol.dtes || terminalData.vol.dtes.length === 0) return;
-    const v = terminalData.vol;
-
-    const trace = {
-      x: v.dtes,
-      y: v.atm_ivs,
-      mode: 'lines+markers',
-      line: { color: '#f59e0b', width: 2.5 },
-      marker: { size: 6, color: '#d97706' },
-      text: v.expirations,
-      hovertemplate: 'Exp: %{text}<br>DTE: %{x}d<br>ATM IV: %{y:.1f}%<extra></extra>'
-    };
-
-    const layout = {
-      margin: { l: 50, r: 20, t: 20, b: 40 },
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(0,0,0,0)',
-      xaxis: { title: 'Days to Expiration (DTE)', gridcolor: 'rgba(150,150,150,0.1)' },
-      yaxis: { title: 'ATM Implied Volatility (%)', gridcolor: 'rgba(150,150,150,0.1)' },
-      font: { family: 'monospace', size: 11, color: '#a1a1aa' }
-    };
-
-    Plotly.newPlot('term-plot-container', [trace], layout, { responsive: true, displayModeBar: true });
+    const v = terminalData?.vol;
+    if (!v?.dtes?.length) return;
+    const line = TerminalCharts.line('ATM IV', v.dtes, v.atm_ivs);
+    line.showSymbol = true;
+    line.data = v.dtes.map((dte,i) => ({value:[dte,v.atm_ivs[i]], name:v.expirations[i]}));
+    TerminalCharts.mount('term-plot-container', TerminalCharts.cartesian([line], 'Days to expiration', 'Implied volatility (%)'));
   }
 
   function renderSurfacePlot() {
-    if (!terminalData || !terminalData.vol || !terminalData.vol.surface_grid) return;
-    const grid = terminalData.vol.surface_grid;
-
-    const data = [{
-      z: grid.iv_matrix,
-      x: grid.moneyness,
-      y: grid.dtes,
-      type: 'surface',
-      colorscale: 'Viridis',
-      showscale: false
-    }];
-
-    const layout = {
-      margin: { l: 10, r: 10, t: 10, b: 10 },
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      scene: {
-        xaxis: { title: 'Moneyness', gridcolor: 'rgba(150,150,150,0.1)' },
-        yaxis: { title: 'DTE', gridcolor: 'rgba(150,150,150,0.1)' },
-        zaxis: { title: 'IV (%)', gridcolor: 'rgba(150,150,150,0.1)' },
-      },
-      font: { family: 'monospace', size: 10, color: '#a1a1aa' }
-    };
-
-    Plotly.newPlot('surface-plot-container', data, layout, { responsive: true, displayModeBar: true });
+    const grid = terminalData?.vol?.surface_grid;
+    if (!grid) return;
+    TerminalCharts.mount('surface-plot-container', {
+      xAxis3D:{type:'value',name:'Moneyness',min:'dataMin',max:'dataMax'}, yAxis3D:{type:'value',name:'DTE',min:'dataMin',max:'dataMax'}, zAxis3D:{type:'value',name:'IV (%)',min:'dataMin',max:'dataMax'},
+      grid3D:{viewControl:{projection:'perspective'}},
+      visualMap:{show:false,dimension:2,min:0,max:Math.max(1,...TerminalCharts.surfaceData(grid).map(p=>p[2])),inRange:{color:['#440154','#3b528b','#21918c','#5ec962','#fde725']}},
+      series:[{name:'IV (%)',type:'surface',wireframe:{show:false},data:TerminalCharts.surfaceData(grid)}]
+    });
   }
 
   function renderConesPlot() {
-    if (!terminalData || !terminalData.cones) return;
-    const c = terminalData.cones;
-
-    const windows = ['10D', '20D', '30D', '60D', '90D'];
-    const hvs = [c.hv10, c.hv20, c.hv30, c.hv60, c.hv90];
-
-    const traceHV = {
-      x: windows,
-      y: hvs,
-      name: 'Close-to-Close HV',
-      type: 'bar',
-      marker: { color: 'rgba(120, 113, 108, 0.6)' }
-    };
-
-    const traceIV = {
-      x: windows,
-      y: [c.current_iv, c.current_iv, c.current_iv, c.current_iv, c.current_iv],
-      name: 'Current ATM IV',
-      type: 'scatter',
-      mode: 'lines',
-      line: { color: '#f59e0b', width: 2, dash: 'dash' }
-    };
-
-    const layout = {
-      margin: { l: 50, r: 20, t: 20, b: 40 },
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(0,0,0,0)',
-      xaxis: { title: 'Lookback Window', gridcolor: 'rgba(150,150,150,0.1)' },
-      yaxis: { title: 'Annualized Volatility (%)', gridcolor: 'rgba(150,150,150,0.1)' },
-      legend: { orientation: 'h', y: 1.1 },
-      font: { family: 'monospace', size: 11, color: '#a1a1aa' }
-    };
-
-    Plotly.newPlot('cones-plot-container', [traceHV, traceIV], layout, { responsive: true, displayModeBar: true });
+    const c = terminalData?.cones;
+    if (!c) return;
+    const windows = ['10D','20D','30D','60D','90D'];
+    const option = TerminalCharts.cartesian([
+      {name:'Close-to-Close HV',type:'bar',data:[c.hv10,c.hv20,c.hv30,c.hv60,c.hv90],itemStyle:{color:'#78716c'}},
+      {name:'Current ATM IV',type:'line',data:windows.map(()=>c.current_iv),lineStyle:{color:'#f59e0b',type:'dashed'},itemStyle:{color:'#f59e0b'},showSymbol:false}
+    ], 'Lookback window', 'Annualized volatility (%)', 'category');
+    option.xAxis.data = windows;
+    TerminalCharts.mount('cones-plot-container',option);
   }
   // --- LIVE OPTION CHAIN (ported from /live's former Option Greeks tab) ---
 
@@ -1468,177 +1355,34 @@
   }
 
   function renderGreeksChart() {
-    if (!optionsData || !optionsData.options.length) return;
-
-    const strikes = optionsData.options.map(o => o.strike);
-    const isDark = document.documentElement.classList.contains('dark');
-    const spot = optionsData.spot_price;
-    const t_years = Math.max(1e-5, (optionsData.days_to_expiration || 30) / 365.0);
-    const rf_rate = parseFloat(document.getElementById('rf-rate-input') ? document.getElementById('rf-rate-input').value : '0.045') || 0.045;
-
-    let traces = [];
-    let extraShapes = [];
-    let extraAnnotations = [];
-
+    if (!optionsData?.options?.length) return;
+    const c = TerminalCharts, rows = optionsData.options, strikes = rows.map(o=>o.strike), spot = optionsData.spot_price;
+    const t_years = Math.max(1e-5,(optionsData.days_to_expiration || 30)/365);
+    const rf_rate = parseFloat(document.getElementById('rf-rate-input')?.value || '0.045') || .045;
+    const option = c.cartesian([], 'Strike ($)', '');
+    const refs = [c.ref('x',spot,'Spot')];
+    const values = key => rows.map(o=>typeof o[key] === 'number' ? o[key] : null);
     if (currentGreeksChart === 'delta') {
-      const cDeltas = optionsData.options.map(o => o.call_delta === 'N/A' ? null : o.call_delta);
-      const pDeltas = optionsData.options.map(o => o.put_delta === 'N/A' ? null : o.put_delta);
-      traces = [
-        {
-          x: strikes,
-          y: cDeltas,
-          name: 'Call Delta',
-          type: 'scatter',
-          mode: 'lines+markers',
-          line: { color: '#10b981', width: 2 },
-          marker: { size: 4 }
-        },
-        {
-          x: strikes,
-          y: pDeltas,
-          name: 'Put Delta',
-          type: 'scatter',
-          mode: 'lines+markers',
-          line: { color: '#f43f5e', width: 2 },
-          marker: { size: 4 }
-        }
-      ];
+      option.series = [c.line('Call Delta',strikes,values('call_delta'),'#10b981'), c.line('Put Delta',strikes,values('put_delta'),'#f43f5e')];
+      option.yAxis.name = 'Delta';
     } else if (currentGreeksChart === 'gamma') {
-      const gammas = optionsData.options.map(o => o.call_gamma === 'N/A' ? null : o.call_gamma);
-      traces = [
-        {
-          x: strikes,
-          y: gammas,
-          name: 'Gamma',
-          type: 'scatter',
-          mode: 'lines+markers',
-          fill: 'tozeroy',
-          fillcolor: 'rgba(99, 102, 241, 0.1)',
-          line: { color: '#6366f1', width: 2 },
-          marker: { size: 4 }
-        }
-      ];
+      option.series = [c.line('Gamma',strikes,values('call_gamma'),'#6366f1',{areaStyle:{opacity:.1}})];
+      option.yAxis.name = 'Gamma';
     } else if (currentGreeksChart === 'iv') {
-      const cIvs = optionsData.options.map(o => o.call_iv);
-      const pIvs = optionsData.options.map(o => o.put_iv);
-      traces = [
-        {
-          x: strikes,
-          y: cIvs,
-          name: 'Call IV',
-          type: 'scatter',
-          mode: 'lines+markers',
-          line: { color: '#fbbf24', width: 2 },
-          marker: { size: 4 }
-        },
-        {
-          x: strikes,
-          y: pIvs,
-          name: 'Put IV',
-          type: 'scatter',
-          mode: 'lines+markers',
-          line: { color: '#a78bfa', width: 2 },
-          marker: { size: 4 }
-        }
-      ];
-    } else if (currentGreeksChart === 'vanna') {
-      // This chart quotes vanna per 1% vol move (bsVanna is per unit/100%),
-      // which is the scale this tab has always displayed -- unlike the
-      // chain table's raw per-unit value.
-      const vannas = optionsData.options.map(o => {
-        const iv = Math.max(o.call_iv, o.put_iv) / 100.0;
-        return bsVanna(spot, o.strike, iv, t_years, rf_rate) / 100.0;
-      });
-      traces = [
-        {
-          x: strikes,
-          y: vannas,
-          name: 'Vanna (dDelta / dVol)',
-          type: 'scatter',
-          mode: 'lines+markers',
-          line: { color: '#06b6d4', width: 2 },
-          marker: { size: 4 },
-          fill: 'tozeroy',
-          fillcolor: 'rgba(6, 182, 212, 0.1)'
-        }
-      ];
-    } else if (currentGreeksChart === 'charm') {
-      const charms = optionsData.options.map(o => {
-        const iv = Math.max(o.call_iv, o.put_iv) / 100.0;
-        return bsCharm(spot, o.strike, iv, t_years, rf_rate);
-      });
-      traces = [
-        {
-          x: strikes,
-          y: charms,
-          name: 'Charm (dDelta / dTime)',
-          type: 'scatter',
-          mode: 'lines+markers',
-          line: { color: '#8b5cf6', width: 2 },
-          marker: { size: 4 },
-          fill: 'tozeroy',
-          fillcolor: 'rgba(139, 92, 246, 0.1)'
-        }
-      ];
-    } else if (currentGreeksChart === 'vomma') {
-      const vommas = optionsData.options.map(o => {
-        const iv = Math.max(o.call_iv, o.put_iv) / 100.0;
-        return bsVomma(spot, o.strike, iv, t_years, rf_rate);
-      });
-      traces = [
-        {
-          x: strikes,
-          y: vommas,
-          name: 'Vomma (dVega / dVol)',
-          type: 'scatter',
-          mode: 'lines+markers',
-          line: { color: '#ec4899', width: 2 },
-          marker: { size: 4 },
-          fill: 'tozeroy',
-          fillcolor: 'rgba(236, 72, 153, 0.1)'
-        }
-      ];
+      option.series = [c.line('Call IV',strikes,values('call_iv')),c.line('Put IV',strikes,values('put_iv'),'#a78bfa')];
+      option.yAxis.name = 'IV (%)';
+    } else if (['vanna','charm','vomma'].includes(currentGreeksChart)) {
+      const calc = {vanna:bsVanna,charm:bsCharm,vomma:bsVomma}[currentGreeksChart];
+      const data = rows.map(o=>calc(spot,o.strike,Math.max(o.call_iv,o.put_iv)/100,t_years,rf_rate)/(currentGreeksChart === 'vanna' ? 100 : 1));
+      option.series = [c.line(currentGreeksChart,strikes,data,'#8b5cf6',{areaStyle:{opacity:.1}})];
+      option.yAxis.name = currentGreeksChart === 'vanna' ? 'Vanna per 1% vol move' : currentGreeksChart;
     } else if (currentGreeksChart === 'gex') {
-      // Dealer Gamma Exposure per strike, computed from the already-fetched
-      // chain: Γ × OI × 100 × Spot² × 0.01, signed long-calls(+)/short-puts(−),
-      // scaled to $M of gamma per 1% move. No extra network calls.
-      const callGex = optionsData.options.map(o =>
-        (o.call_gamma === 'N/A' ? 0 : o.call_gamma) * (o.call_oi || 0) * 100 * spot * spot * 0.01 / 1e6);
-      const putGex = optionsData.options.map(o =>
-        -(o.put_gamma === 'N/A' ? 0 : o.put_gamma) * (o.put_oi || 0) * 100 * spot * spot * 0.01 / 1e6);
-      const netGex = callGex.map((c, i) => c + putGex[i]);
-      const netColors = netGex.map(v => v >= 0 ? '#10b981' : '#f43f5e');
-
-      traces = [
-        {
-          x: strikes,
-          y: netGex,
-          name: 'Net GEX',
-          type: 'bar',
-          marker: { color: netColors },
-          opacity: 0.85,
-          visible: true
-        },
-        {
-          x: strikes,
-          y: callGex,
-          name: 'Call GEX',
-          type: 'bar',
-          marker: { color: '#10b981' },
-          opacity: 0.45,
-          visible: 'legendonly'
-        },
-        {
-          x: strikes,
-          y: putGex,
-          name: 'Put GEX',
-          type: 'bar',
-          marker: { color: '#f43f5e' },
-          opacity: 0.45,
-          visible: 'legendonly'
-        }
-      ];
-
+      const callGex = rows.map(o=>(o.call_gamma === 'N/A' ? 0:o.call_gamma)*(o.call_oi || 0)*100*spot*spot*.01/1e6);
+      const putGex = rows.map(o=>-(o.put_gamma === 'N/A' ? 0:o.put_gamma)*(o.put_oi || 0)*100*spot*spot*.01/1e6);
+      const netGex = callGex.map((v,i)=>v+putGex[i]);
+      option.series = [c.bar('Net GEX',strikes,netGex,netGex.map(v=>v>=0?'#10b981':'#f43f5e')),c.bar('Call GEX',strikes,callGex,'#10b981'),c.bar('Put GEX',strikes,putGex,'#f43f5e')];
+      option.legend = {selected:{'Call GEX':false,'Put GEX':false}};
+      option.yAxis.name = 'GEX ($M / 1% move)';
       // Call wall (max +GEX) and put wall (most −GEX) — structural res/support.
       let callWall = null, putWall = null, maxC = 0, minP = 0;
       callGex.forEach((v, i) => { if (v > maxC) { maxC = v; callWall = strikes[i]; } });
@@ -1703,114 +1447,22 @@
         }
       }
 
-      const levels = [
-        [callWall, '#10b981', 'Call wall'],
-        [putWall, '#f43f5e', 'Put wall'],
-        [flip, '#6366f1', 'γ-flip']
-      ];
-      levels.forEach(([x, color, label]) => {
-        if (x == null) return;
-        extraShapes.push({
-          type: 'line', x0: x, x1: x, y0: 0, y1: 1, yref: 'paper',
-          line: { color, width: 1.25, dash: 'dot' }
-        });
-        extraAnnotations.push({
-          x, y: 0.92, yref: 'paper',
-          text: `${label} $${x.toFixed(0)}`, showarrow: false,
-          font: { size: 8, color }
-        });
-      });
+      [[callWall,'Call wall','#10b981'],[putWall,'Put wall','#f43f5e'],[flip,'γ-flip','#6366f1']].forEach(([v,label,color])=>{if(v!=null)refs.push(c.ref('x',v,label,color));});
     } else if (currentGreeksChart === 'voloi') {
-      // Open Interest (bars) + Volume (markers) by strike.
-      // OI shows positioning; volume shows today's activity.
-      const callOI = optionsData.options.map(o => o.call_oi || 0);
-      const putOI = optionsData.options.map(o => o.put_oi || 0);
-      const callVol = optionsData.options.map(o => o.call_volume || 0);
-      const putVol = optionsData.options.map(o => o.put_volume || 0);
-      traces = [
-        { x: strikes, y: callOI, name: 'Call OI', type: 'bar', marker: { color: 'rgba(16,185,129,0.6)' } },
-        { x: strikes, y: putOI, name: 'Put OI', type: 'bar', marker: { color: 'rgba(244,63,94,0.6)' } },
-        { x: strikes, y: callVol, name: 'Call Vol', type: 'scatter', mode: 'markers',
-          marker: { color: '#10b981', size: 5, symbol: 'triangle-up' },
-          yaxis: 'y2' },
-        { x: strikes, y: putVol, name: 'Put Vol', type: 'scatter', mode: 'markers',
-          marker: { color: '#f43f5e', size: 5, symbol: 'triangle-down' },
-          yaxis: 'y2' },
-      ];
-
-      // Highlight max OI strikes as call/put walls
-      let maxCallOI = 0, maxPutOI = 0, callWallOI = null, putWallOI = null;
-      callOI.forEach((v, i) => { if (v > maxCallOI) { maxCallOI = v; callWallOI = strikes[i]; } });
-      putOI.forEach((v, i) => { if (v > maxPutOI) { maxPutOI = v; putWallOI = strikes[i]; } });
-      [[callWallOI, '#10b981', 'Call wall'], [putWallOI, '#f43f5e', 'Put wall']].forEach(([x, color, label]) => {
-        if (x == null) return;
-        extraShapes.push({ type: 'line', x0: x, x1: x, y0: 0, y1: 1, yref: 'paper',
-          line: { color, width: 1.25, dash: 'dot' } });
-        extraAnnotations.push({ x, y: 0.92, yref: 'paper', text: `${label} $${x.toFixed(0)}`,
-          showarrow: false, font: { size: 8, color } });
-      });
+      option.series = [c.bar('Call OI',strikes,values('call_oi'),'#10b981'),c.bar('Put OI',strikes,values('put_oi'),'#f43f5e'),
+        {name:'Call Vol',type:'scatter',data:c.points(strikes,values('call_volume')),yAxisIndex:1,itemStyle:{color:'#10b981'},symbolSize:5},
+        {name:'Put Vol',type:'scatter',data:c.points(strikes,values('put_volume')),yAxisIndex:1,itemStyle:{color:'#f43f5e'},symbolSize:5}];
+      option.yAxis = [{type:'value',name:'Open interest'},{type:'value',name:'Volume',position:'right',splitLine:{show:false}}];
+      const wall = key => rows.reduce((best,o)=> (o[key]||0) > (best[key]||0) ? o:best,rows[0]).strike;
+      refs.push(c.ref('x',wall('call_oi'),'Call wall','#10b981'),c.ref('x',wall('put_oi'),'Put wall','#f43f5e'));
     } else if (currentGreeksChart === 'pctchg') {
-      // Daily P/L % by strike — green for positive change, red for negative.
-      // Uses yfinance percentChange (today's option price vs prior close).
-      const callPct = optionsData.options.map(o => o.call_pct_change || 0);
-      const putPct = optionsData.options.map(o => o.put_pct_change || 0);
-      // Color each bar individually: green for positive, red for negative
-      const callColors = callPct.map(v => v > 0.1 ? '#10b981' : v < -0.1 ? '#f43f5e' : '#a1a1aa');
-      const putColors = putPct.map(v => v > 0.1 ? '#10b981' : v < -0.1 ? '#f43f5e' : '#a1a1aa');
-      traces = [
-        { x: strikes, y: callPct, name: 'Call Chg%', type: 'bar',
-          marker: { color: callColors }, xaxis: 'x', yaxis: 'y' },
-        { x: strikes, y: putPct, name: 'Put Chg%', type: 'bar',
-          marker: { color: putColors }, xaxis: 'x2', yaxis: 'y2' },
-      ];
+      const colors = list=>list.map(v=>v>.1?'#10b981':v<-.1?'#f43f5e':'#a1a1aa');
+      const calls=values('call_pct_change'),puts=values('put_pct_change');
+      option.series = [c.bar('Call Chg%',strikes,calls,colors(calls)),c.bar('Put Chg%',strikes,puts,colors(puts),{yAxisIndex:1})];
+      option.yAxis = [{type:'value',name:'Call change (%)'},{type:'value',name:'Put change (%)',position:'right',splitLine:{show:false}}];
     }
-
-    const layout = {
-      barmode: 'relative',
-      xaxis: {
-        tickfont: { size: 9, color: isDark ? '#ffffff' : '#71717a' },
-        gridcolor: isDark ? '#27272a' : '#f4f4f5',
-        zeroline: false
-      },
-      yaxis: {
-        tickfont: { size: 9, color: isDark ? '#ffffff' : '#71717a' },
-        gridcolor: isDark ? '#27272a' : '#f4f4f5',
-        zeroline: false,
-        title: currentGreeksChart === 'pctchg' ? 'Call Chg %' : ''
-      },
-      yaxis2: {
-        overlaying: 'y',
-        side: 'right',
-        showgrid: false,
-        zeroline: false,
-        tickfont: { size: 8, color: isDark ? '#a1a1aa' : '#a1a1aa' },
-        title: currentGreeksChart === 'voloi' ? 'Volume' : currentGreeksChart === 'pctchg' ? 'Put Chg %' : ''
-      },
-      shapes: [{
-        type: 'line',
-        x0: spot,
-        x1: spot,
-        y0: 0,
-        y1: 1.1,
-        yref: 'paper',
-        line: { color: '#fbbf24', width: 1.5, dash: 'dash' }
-      }, ...extraShapes],
-      annotations: [{
-        x: spot,
-        y: 1.05,
-        yref: 'paper',
-        text: 'Spot',
-        showarrow: false,
-        font: { size: 9, color: '#fbbf24', weight: 'bold' }
-      }, ...extraAnnotations],
-      margin: { l: 40, r: 15, t: 20, b: 30 },
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(0,0,0,0)',
-      legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, x: 0, font: { size: 9, color: isDark ? '#ffffff' : '#71717a' } },
-      hovermode: 'x unified'
-    };
-
-    Plotly.newPlot('greeks-chart', traces, layout, { displayModeBar: true, responsive: true });
+    if (option.series.length) option.series[0].markLine={symbol:'none',data:refs};
+    TerminalCharts.mount('greeks-chart',option);
   }
 
   function initPayoffSimulator() {
@@ -1846,7 +1498,6 @@
     if (isNaN(strike) || isNaN(premium) || !optionsData) return;
 
     const spot = optionsData.spot_price;
-    const isDark = document.documentElement.classList.contains('dark');
 
     const prices = [];
     const minVal = Math.min(strike, spot) * 0.8;
@@ -1909,63 +1560,9 @@
     lossEl.innerText = maxLoss;
     lossEl.className = (maxLoss.includes('-') || maxLoss === 'Unlimited') ? 'font-mono text-xs font-bold text-rose-500' : 'font-mono text-xs font-bold text-emerald-500';
 
-    const traceLine = {
-      x: prices,
-      y: pnlValues,
-      type: 'scatter',
-      mode: 'lines',
-      name: 'P&L ($)',
-      line: { color: '#6366f1', width: 2.5 }
-    };
-
-    const layout = {
-      xaxis: {
-        tickfont: { size: 9, color: isDark ? '#ffffff' : '#71717a' },
-        gridcolor: isDark ? '#27272a' : '#f4f4f5',
-        zeroline: false
-      },
-      yaxis: {
-        tickfont: { size: 9, color: isDark ? '#ffffff' : '#71717a' },
-        gridcolor: isDark ? '#27272a' : '#f4f4f5',
-        zeroline: false
-      },
-      shapes: [
-        {
-          type: 'line',
-          x0: minVal,
-          x1: maxVal,
-          y0: 0,
-          y1: 0,
-          line: { color: isDark ? '#3f3f46' : '#d4d4d8', width: 1.5 }
-        },
-        {
-          type: 'line',
-          x0: spot,
-          x1: spot,
-          y0: 0,
-          y1: 1,
-          yref: 'paper',
-          line: { color: '#fbbf24', width: 1.5, dash: 'dot' }
-        }
-      ],
-      annotations: [
-        {
-          x: spot,
-          y: 0.95,
-          yref: 'paper',
-          text: 'Spot',
-          showarrow: false,
-          font: { size: 9, color: '#fbbf24', weight: 'bold' }
-        }
-      ],
-      margin: { l: 45, r: 15, t: 10, b: 35 },
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(0,0,0,0)',
-      showlegend: false,
-      hovermode: 'x unified'
-    };
-
-    Plotly.newPlot('payoff-chart', [traceLine], layout, { displayModeBar: true, responsive: true });
+    const series = [TerminalCharts.line('P&L ($)',prices,pnlValues,'#6366f1')];
+    series[0].markLine={symbol:'none',data:[TerminalCharts.ref('y',0,'Break-even','#71717a'),TerminalCharts.ref('x',spot,'Spot'),TerminalCharts.ref('x',breakeven,'Break-even price','#10b981')]};
+    TerminalCharts.mount('payoff-chart',TerminalCharts.cartesian(series,'Underlying price ($)','P&L ($)'));
   }
 
   // Options greeks poll — refreshes the chain every 60s while the chain tab

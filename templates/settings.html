@@ -70,6 +70,15 @@
         class="w-full px-3 py-2 text-sm font-mono bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 resize-y">{{ current.fmp_api_key }}</textarea>
     </div>
 
+    <!-- Marketaux -->
+    <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm">
+      <label for="marketaux_api_key" class="text-sm font-bold text-zinc-900 dark:text-zinc-50">Marketaux API key</label>
+      <span class="ml-2 text-xs text-zinc-500">{{ 'configured' if status.marketaux else 'not configured' }}</span>
+      <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1 mb-3">Powers ticker news. A saved key overrides MARKETAUX_API_KEY. <a href="https://www.marketaux.com/" target="_blank" rel="noopener noreferrer" class="text-amber-600 hover:underline">Get an API key</a>.</p>
+      <input id="marketaux_api_key" name="marketaux_api_key" type="password" value="{{ current.marketaux_api_key }}" autocomplete="new-password"
+             class="w-full px-3 py-2 text-sm font-mono bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500">
+    </div>
+
     <!-- SEC User-Agent -->
     <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm">
       <label for="sec_user_agent" class="text-sm font-bold text-zinc-900 dark:text-zinc-50">SEC EDGAR Contact (User-Agent)</label>

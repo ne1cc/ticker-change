@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{{ ticker ~ ' · ' if ticker }}News - Ticker-Change{% endblock %}
+{% block content %}
+<div class="max-w-5xl mx-auto space-y-6">
+  <header class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">Markets / News</p>
+      <h1 class="mt-2 text-2xl sm:text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">{{ ticker ~ ' news' if ticker else 'Ticker news' }}</h1>
+      <p class="mt-2 text-sm text-zinc-500 dark:text-zinc-400">English-language headlines from the last seven days.</p>
+    </div>
+    <form action="/news" method="get" class="flex gap-2 w-full sm:w-auto">
+      <label for="news-ticker" class="sr-only">Ticker symbol</label>
+      <input id="news-ticker" name="ticker" value="{{ ticker }}" placeholder="AAPL or VOD.L" required maxlength="32" autocomplete="off" spellcheck="false"
+             class="min-w-0 flex-1 sm:w-44 px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-mono uppercase focus:ring-1 focus:ring-amber-500 focus:outline-none">
+      <button class="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 text-sm font-semibold">Find news</button>
+    </form>
+  </header>
+  {% if feed %}
+    {% if feed.listing %}
+    <div class="text-sm text-zinc-600 dark:text-zinc-400 flex flex-wrap gap-x-3 gap-y-1">
+      <span class="font-semibold text-zinc-900 dark:text-zinc-100">{{ feed.listing.name }}</span>
+      <span class="font-mono">{{ feed.listing.symbol }}{% if feed.listing.exchange %} · {{ feed.listing.exchange }}{% endif %}{% if feed.listing.country %} · {{ feed.listing.country|upper }}{% endif %}</span>
+    </div>
+    {% endif %}
+    {% if feed.status == 'needs_selection' %}
+    <form action="/news" method="get" class="space-y-3 p-4 border border-zinc-200 dark:border-zinc-800 rounded-lg">
+      <input type="hidden" name="ticker" value="{{ ticker }}">
+      <label for="news-listing" class="block text-sm font-semibold">{{ feed.message }}</label>
+      <div class="flex flex-wrap gap-3">
+        <select id="news-listing" name="listing" class="min-w-0 max-w-full flex-1 p-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-950">
+          {% for candidate in feed.candidates %}<option value="{{ candidate.id }}">{{ candidate.name }} · {{ candidate.symbol }} · {{ candidate.exchange or 'Exchange unspecified' }} · {{ candidate.country|upper }}</option>{% endfor %}
+        </select>
+        <button class="px-4 py-2 bg-amber-500 text-zinc-950 rounded-lg text-sm font-semibold">Use listing</button>
+      </div>
+    </form>
+    {% else %}
+      {% include '_news.html' %}
+    {% endif %}
+  {% else %}
+  <div class="p-6 border border-zinc-200 dark:border-zinc-800 rounded-xl bg-white dark:bg-zinc-900">
+    <p class="text-zinc-600 dark:text-zinc-400">Enter a ticker to see recent headlines. International coverage depends on the listing.</p>
+  </div>
+  {% endif %}
+  <p class="text-xs text-zinc-500 dark:text-zinc-400">News via <a href="https://www.marketaux.com/" target="_blank" rel="noopener noreferrer" class="underline hover:text-amber-600">Marketaux</a>. Updates are cached; this is a selection of recent headlines, not a complete news archive.</p>
+</div>
+{% endblock %}

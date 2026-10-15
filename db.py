@@ -53,6 +53,11 @@ def init_db():
                 value TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS news_request_usage (
+                day      TEXT PRIMARY KEY,
+                attempts INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS gex_snapshots (
                 ticker      TEXT NOT NULL,
                 date        TEXT NOT NULL,
@@ -64,6 +69,19 @@ def init_db():
                 PRIMARY KEY (ticker, date)
             );
         """)
+
+
+def reserve_news_request(day: str, limit: int = 90) -> bool:
+    """Reserve one upstream news attempt atomically across workers/restarts."""
+    if limit <= 0:
+        return False
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO news_request_usage(day, attempts) VALUES (?, 1) "
+            "ON CONFLICT(day) DO UPDATE SET attempts = attempts + 1 "
+            "WHERE attempts < ?", (day, limit),
+        )
+        return cur.rowcount == 1
 
 
 def get_setting(key: str, default: str = "") -> str:
