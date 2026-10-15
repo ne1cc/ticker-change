@@ -226,6 +226,20 @@ class TestBacktestTimeseries(unittest.TestCase):
         self.assertEqual(result.trade_signal.iloc[-1], 1.0)
         self.assertNotEqual(result.strategy_returns.iloc[-1], 0.0)
 
+    def test_rsi_reversion_timeseries(self):
+        idx = _bidx(400)
+        close = pd.Series(100.0 + np.sin(np.linspace(0, 20, 400)) * 10.0, index=idx)
+        result = backtest_timeseries(close, strategy_id="rsi_reversion")
+        self.assertEqual(len(result.strategy_returns), len(close) - 253)
+        self.assertIn(result.trade_signal.iloc[-1], (0.0, 1.0))
+
+    def test_buyer_signal_timeseries(self):
+        idx = _bidx(400)
+        close = pd.Series(100.0 + np.arange(400, dtype=float) * 0.1, index=idx)
+        result = backtest_timeseries(close, strategy_id="buyer_signal")
+        self.assertEqual(len(result.strategy_returns), len(close) - 253)
+        self.assertIn(result.trade_signal.iloc[-1], (0.0, 1.0))
+
     def test_absolute_hurdle_dual_momentum_positive(self):
         hurdle = absolute_hurdle("dual_momentum")
         self.assertIsNotNone(hurdle)
@@ -239,11 +253,11 @@ class TestBacktestTimeseries(unittest.TestCase):
 class TestStrategiesRegistry(unittest.TestCase):
     def test_registry_shape(self):
         self.assertEqual(set(STRATEGIES.keys()),
-                          {"relative_strength", "dual_momentum", "sma_trend"})
+                          {"relative_strength", "dual_momentum", "sma_trend", "rsi_reversion", "buyer_signal"})
         for strategy_id, entry in STRATEGIES.items():
             self.assertEqual(set(entry.keys()), {"label", "family", "hurdle"})
             self.assertIsInstance(entry["label"], str)
-            self.assertIn(entry["family"], {"momentum", "sma"})
+            self.assertIn(entry["family"], {"momentum", "sma", "rsi", "composite"})
 
     def test_unknown_strategy_id_is_defensible(self):
         # absolute_hurdle and the family dispatch must not raise on a bad id.
