@@ -237,6 +237,15 @@ def _colorscale(mid: str) -> list:
     ]
 
 
+# Sector rows carry no ticker or price, so they get their own tooltip.
+_TILE_HOVER = (
+    "<b>%{customdata[2]}</b> (%{customdata[1]})<br>"
+    "$%{customdata[3]:.2f} · %{customdata[0]}"
+    "<extra>%{parent}</extra>"
+)
+_SECTOR_HOVER = "<b>%{customdata[2]}</b><br>%{customdata[0]}<extra></extra>"
+
+
 def render_treemap(data: dict, dark: bool = False) -> str:
     """Server-render the sector treemap as embedded Plotly HTML."""
     mid = "#3f3f46" if dark else "#e4e4e7"
@@ -251,6 +260,7 @@ def render_treemap(data: dict, dark: bool = False) -> str:
     # rides the first-class `text` property instead ("AAPL / +1.23%").
     texts: list[str] = []
     customdata: list[list] = []
+    hovertemplates: list[str] = []
 
     by_sector: dict[str, list[dict]] = {}
     for tile in data["tiles"]:
@@ -269,6 +279,7 @@ def render_treemap(data: dict, dark: bool = False) -> str:
         colors.append(max(-MOVE_SPAN, min(MOVE_SPAN, sector_change)))
         texts.append(f"{sector_change:+.2f}%")
         customdata.append([f"{sector_change:+.2f}%", "", sector, ""])
+        hovertemplates.append(_SECTOR_HOVER)
 
         for tile in members:
             ids.append(tile["symbol"])
@@ -283,6 +294,7 @@ def render_treemap(data: dict, dark: bool = False) -> str:
                 tile["name"],
                 tile["price"],
             ])
+            hovertemplates.append(_TILE_HOVER)
 
     fig = go.Figure(go.Treemap(
         ids=ids,
@@ -302,11 +314,7 @@ def render_treemap(data: dict, dark: bool = False) -> str:
         ),
         texttemplate="%{label}<br>%{text}",
         textfont=dict(size=14, family="Inter, sans-serif", color=text_color),
-        hovertemplate=(
-            "<b>%{customdata[2]}</b> (%{customdata[1]})<br>"
-            "$%{customdata[3]:.2f} · %{customdata[0]}"
-            "<extra>%{parent}</extra>"
-        ),
+        hovertemplate=hovertemplates,
         root_color="rgba(0,0,0,0)",
     ))
     fig.update_layout(
