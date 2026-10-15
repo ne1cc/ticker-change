@@ -12,14 +12,47 @@ from .models import Convention, GexProfile
 CONTRACT_MULTIPLIER = 100.0
 
 
-def clean_chain(df: pd.DataFrame) -> pd.DataFrame:
+def _invert_bs_iv(
+    cp: str,
+    price: float,
+    s: float,
+    k: float,
+    t_years: float,
+    r: float = 0.045,
+) -> Optional[float]:
+    """Invert Black-Scholes formula using Brent's root-finding."""
+    if price <= 0.01 or t_years <= 0 or s <= 0 or k <= 0:
+        return None
+    intrinsic = max(0.0, (s - k) if cp == "C" else (k - s))
+    if price <= intrinsic:
+        return None
+
+    def diff(v: float) -> float:
+        sq_t = math.sqrt(t_years)
+        d1 = (math.log(s / k) + (r + 0.5 * v * v) * t_years) / (v * sq_t)
+        d2 = d1 - v * sq_t
+        if cp == "C":
+            theo = s * norm.cdf(d1) - k * math.exp(-r * t_years) * norm.cdf(d2)
+        else:
+            theo = k * math.exp(-r * t_years) * norm.cdf(-d2) - s * norm.cdf(-d1)
+        return theo - price
+
+    try:
+        from scipy.optimize import brentq
+        return float(brentq(diff, 0.02, 4.0, maxiter=40))
+    except Exception:
+        return None
+
+
+def clean_chain(df: pd.DataFrame, spot: Optional[float] = None) -> pd.DataFrame:
     """Defensively filter and cast an options chain DataFrame.
 
     Filters out unquoted strikes where IV is uninformative or corrupts net GEX.
     Retains 0DTE strikes with zero open interest if volume > 0 (OCC OI is published overnight).
     Prefers rows with a live bid; when those are a small fraction of the chain
-    (e.g. after-hours zero-bid quotes), keeps every row with valid IV plus
-    open interest or volume instead of collapsing the strike ladder.
+    (e.g. after-hours zero-bid quotes), repairs invalid IVs from last_price or
+    expiration medians, keeping every row with valid activity instead of collapsing
+    the strike ladder or blowing out gamma.
     """
     if df is None or df.empty:
         raise ValueError("Options chain is empty or None")
@@ -34,18 +67,50 @@ def clean_chain(df: pd.DataFrame) -> pd.DataFrame:
     out["iv"] = pd.to_numeric(out["iv"], errors="coerce")
     out["cp"] = out["cp"].astype(str).str.upper().str.strip()
 
-    for col in ["bid", "ask", "open_interest", "volume"]:
+    for col in ["bid", "ask", "open_interest", "volume", "last_price"]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
         else:
             out[col] = 0.0
+
+    # Defensive IV repair for corrupt, zero-bid, or after-hours quotes
+    if spot is None:
+        if "underlying_price" in out.columns and out["underlying_price"].dropna().any():
+            spot = float(out["underlying_price"].dropna().iloc[0])
+        elif "spot" in out.columns and out["spot"].dropna().any():
+            spot = float(out["spot"].dropna().iloc[0])
+
+    if spot is not None and spot > 0:
+        valid_mask = out["iv"].between(0.05, 3.5)
+        exp_medians = out[valid_mask].groupby("dte")["iv"].median().to_dict() if valid_mask.any() else {}
+        overall_median = float(out[valid_mask]["iv"].median()) if valid_mask.any() else 0.20
+        if math.isnan(overall_median) or overall_median < 0.05:
+            overall_median = 0.20
+
+        bad_iv = (out["iv"] < 0.05) | (out["iv"] > 4.0) | out["iv"].isna()
+        if bad_iv.any():
+            for idx in out[bad_iv].index:
+                row = out.loc[idx]
+                cp = row["cp"]
+                k = row["strike"]
+                dte = row["dte"]
+                lp = row.get("last_price", 0.0)
+                t_y = max(dte, 1.0) / 365.0
+                repaired = _invert_bs_iv(cp, lp, spot, k, t_y) if lp > 0.01 else None
+                if repaired is not None and 0.05 <= repaired <= 3.5:
+                    out.at[idx, "iv"] = repaired
+                else:
+                    out.at[idx, "iv"] = exp_medians.get(dte, overall_median)
+
+    # Bound IV to safe realistic limits [0.05, 4.0] to prevent gamma singularities
+    out["iv"] = np.clip(out["iv"], 0.05, 4.0)
 
     # Defensive filtering
     quoted = out[
         out["cp"].isin(["C", "P"])
         & (out["strike"] > 0)
         & (out["dte"] >= 0)
-        & (out["iv"].between(0.001, 5.0))
+        & (out["iv"].between(0.05, 4.0))
         & (out["bid"] > 0)
         & ((out["open_interest"] > 0) | (out["volume"] > 0))
     ].copy()
@@ -59,7 +124,7 @@ def clean_chain(df: pd.DataFrame) -> pd.DataFrame:
         out["cp"].isin(["C", "P"])
         & (out["strike"] > 0)
         & (out["dte"] >= 0)
-        & (out["iv"].between(0.001, 5.0))
+        & (out["iv"].between(0.05, 4.0))
         & ((out["open_interest"] > 0) | (out["volume"] > 0))
     ].copy()
 
@@ -112,7 +177,7 @@ def _bs_gamma_matrix(
     s = s_grid[:, None]
     k = k[None, :]
     t = np.maximum(t_years[None, :], 1.0 / 365.0)
-    sig = np.clip(sigma[None, :], 1e-3, 5.0)
+    sig = np.clip(sigma[None, :], 0.05, 5.0)
 
     sq_t = np.sqrt(t)
     d1 = (np.log(s / k) + (r + 0.5 * sig * sig) * t) / (sig * sq_t)
@@ -134,7 +199,7 @@ def find_gamma_flip(
     Revalues Black-Scholes gamma at every spot price rather than assuming static gamma.
     Returns None if net GEX maintains a single sign across the entire range (no flip).
     """
-    df = clean_chain(chain)
+    df = clean_chain(chain, spot=spot)
     k = df["strike"].to_numpy()
     t = df["dte"].to_numpy().astype(np.float64) / 365.0
     iv = df["iv"].to_numpy()
@@ -174,7 +239,7 @@ def compute_gex_profile(
     r: float = 0.045,
 ) -> GexProfile:
     """Compute complete dealer GEX profile across all strikes with walls and gamma flip."""
-    df = clean_chain(chain)
+    df = clean_chain(chain, spot=spot)
 
     k = df["strike"].to_numpy()
     t = df["dte"].to_numpy().astype(np.float64) / 365.0
@@ -185,7 +250,7 @@ def compute_gex_profile(
 
     # Analytical gammas at current spot
     t_safe = np.maximum(t, 1.0 / 365.0)
-    sig_safe = np.clip(iv, 1e-3, 5.0)
+    sig_safe = np.clip(iv, 0.05, 5.0)
     sq_t = np.sqrt(t_safe)
     d1 = (np.log(spot / k) + (r + 0.5 * sig_safe * sig_safe) * t_safe) / (sig_safe * sq_t)
     d2 = d1 - sig_safe * sq_t

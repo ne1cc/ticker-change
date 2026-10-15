@@ -83,7 +83,7 @@ def compute_options_terminal(
 
     try:
         # 1. Clean and normalize chain
-        cleaned_df = clean_chain(chain_df)
+        cleaned_df = clean_chain(chain_df, spot=spot)
 
         # 2. Compute GEX Profile & Structural Levels
         gex = compute_gex_profile(cleaned_df, spot, convention=convention, r=rf_rate)
