@@ -35,6 +35,7 @@ class TestApiDocs(unittest.TestCase):
             "/api/options-analysis/{ticker}",
             "/api/options-ai-report/{ticker}",
             "/api/stock/{ticker}",
+            "/api/news",
             "/api/chart-data/{ticker}",
             "/api/analytics/{ticker}",
             "/api/positioning/{ticker}",
@@ -76,6 +77,15 @@ class TestApiDocs(unittest.TestCase):
         data = response.get_json()
         self.assertEqual(data.get("openapi"), "3.0.3")
         self.assertIn("/api/institutional/{ticker}", data.get("paths", {}))
+
+    def test_news_contract_documents_feed_and_failures(self):
+        endpoint = api_docs.get_openapi_spec()["paths"]["/api/news"]["get"]
+        self.assertEqual({p["name"] for p in endpoint["parameters"]}, {"ticker", "listing"})
+        self.assertIn("same-origin", endpoint["description"])
+        self.assertEqual(set(endpoint["responses"]), {"200", "400", "503"})
+        schema = endpoint["responses"]["200"]["content"]["application/json"]["schema"]
+        self.assertTrue({"articles", "status", "stale", "partial", "fetched_at", "candidates"}.issubset(schema["properties"]))
+        self.assertEqual(schema["properties"]["articles"]["maxItems"], 15)
 
     def test_api_docs_swagger_ui_route(self):
         """Verify GET /api/docs returns 200 and rendered HTML."""

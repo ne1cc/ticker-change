@@ -9,8 +9,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import charts
 import time
 import threading
 import math
@@ -22,6 +21,7 @@ from db import init_db, is_fresh, get_prices, store_prices
 import db
 import s3_cache
 import providers
+import news
 import ml
 import ai
 import corporate_actions
@@ -56,7 +56,7 @@ def _get_yf_ticker(symbol: str) -> yf.Ticker:
 app = Flask(__name__)
 # Only the JSON API surface needs cross-origin access; HTML pages (notably
 # /settings, which manages secrets) must not be fetchable from other origins.
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app, resources={r"/api/(?!news(?:$|/)).*": {"origins": "*"}})
 
 # Expose metric definitions to every template so the `metric` tooltip macro and
 # the /glossary page share a single source of truth.
@@ -374,112 +374,21 @@ def get_price_ranges(ticker, current_price=None):
     return result
 
 def generate_stock_chart(ticker, period="5y"):
-    """Generate an interactive Plotly price chart with timeframe controls from cached DB data."""
+    """Return one price-chart mount and ordered OHLCV records from cached prices."""
     df = get_or_fetch_prices(ticker)
     if df is None or df.empty:
         return None
-
-    try:
-        fig = make_subplots(
-            rows=2, cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.08,
-            row_heights=[0.7, 0.3],
-            subplot_titles=('Price', 'Volume')
-        )
-
-        fig.add_trace(
-            go.Candlestick(
-                x=df.index,
-                open=df['open'],
-                high=df['high'],
-                low=df['low'],
-                close=df['close'],
-                name='Price',
-                increasing_line_color='#10b981',
-                decreasing_line_color='#f43f5e'
-            ),
-            row=1, col=1
-        )
-
-        colors = ['#10b981' if row['close'] >= row['open'] else '#f43f5e'
-                  for idx, row in df.iterrows()]
-
-        fig.add_trace(
-            go.Bar(
-                x=df.index,
-                y=df['volume'],
-                name='Volume',
-                marker_color=colors,
-                showlegend=False,
-                marker_line_width=0
-            ),
-            row=2, col=1
-        )
-
-        fig.update_layout(
-            template='plotly_white',
-            height=600,
-            hovermode='x unified',
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(size=12, family='Inter, sans-serif'),
-            autosize=True,
-            margin=dict(l=60, r=60, t=60, b=80),
-            showlegend=False,
-            xaxis_rangeslider_visible=False,
-            transition=dict(duration=500, easing='cubic-in-out')
-        )
-
-        fig.update_yaxes(title_text="Price ($)", row=1, col=1)
-        fig.update_yaxes(title_text="Volume", row=2, col=1)
-
-        fig.update_xaxes(
-            rangeselector=dict(
-                buttons=list([
-                    dict(count=1,  label="1D",  step="day",   stepmode="backward"),
-                    dict(count=5,  label="5D",  step="day",   stepmode="backward"),
-                    dict(count=1,  label="1M",  step="month", stepmode="backward"),
-                    dict(count=3,  label="3M",  step="month", stepmode="backward"),
-                    dict(count=6,  label="6M",  step="month", stepmode="backward"),
-                    dict(count=1,  label="YTD", step="year",  stepmode="todate"),
-                    dict(count=1,  label="1Y",  step="year",  stepmode="backward"),
-                    dict(count=5,  label="5Y",  step="year",  stepmode="backward"),
-                    dict(label="All", step="all")
-                ]),
-                bgcolor='#f4f4f5',
-                activecolor='#f59e0b',
-                x=0, y=1.0,
-                xanchor='left', yanchor='top',
-                font=dict(size=9)
-            ),
-            type='date',
-            title_text="Date",
-            row=2, col=1
-        )
-
-        records = [
-            {
-                'time': idx.strftime('%Y-%m-%d'),
-                'open': float(row['open']),
-                'high': float(row['high']),
-                'low': float(row['low']),
-                'close': float(row['close']),
-                'volume': int(row['volume'])
-            }
-            for idx, row in df.iterrows()
-        ]
-
-        chart_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
-        date_range = {
-            'start': df.index[0].strftime('%Y-%m-%d'),
-            'end':   df.index[-1].strftime('%Y-%m-%d')
-        }
-        return {'html': chart_html, 'date_range': date_range, 'records': records}
-
-    except Exception as e:
-        print(f"Chart generation failed for {ticker}: {e}")
+    df = df.sort_index(kind='stable')
+    df = df[~df.index.duplicated(keep='last')]
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=['open', 'high', 'low', 'close'])
+    if df.empty:
         return None
+    records = [{'time': idx.strftime('%Y-%m-%d'), 'open': float(row['open']),
+                'high': float(row['high']), 'low': float(row['low']),
+                'close': float(row['close']), 'volume': int(row['volume']) if pd.notna(row['volume']) else 0}
+               for idx, row in df.iterrows()]
+    return {'html': '<div id="stock-chart" class="stock-chart" role="img" aria-label="Price and volume chart"></div>',
+            'date_range': {'start': records[0]['time'], 'end': records[-1]['time']}, 'records': records}
 
 def get_chart_data_json(ticker, start_date=None, end_date=None):
     """Return OHLCV records from DB, optionally filtered by date range."""
@@ -491,6 +400,8 @@ def get_chart_data_json(ticker, start_date=None, end_date=None):
         df = df[df.index >= pd.to_datetime(start_date)]
     if end_date:
         df = df[df.index <= pd.to_datetime(end_date)]
+    if df.empty:
+        return None
 
     data = [
         {
@@ -658,6 +569,31 @@ def chart_data_api(ticker):
         return jsonify({"error": f"Could not retrieve chart data for {ticker}"}), 404
     
     return jsonify(result)
+
+def _news_status(feed):
+    if feed['status'] == 'invalid':
+        return 400
+    return 503 if feed['status'] in ('unconfigured', 'quota_exhausted', 'unavailable') else 200
+
+
+@app.route('/news')
+def news_page():
+    ticker = request.args.get('ticker', '').strip().upper()
+    feed = news.get_feed(ticker, request.args.get('listing')) if ticker else None
+    return render_template('news.html', ticker=ticker, feed=feed), _news_status(feed) if feed else 200
+
+
+@app.route('/api/news')
+def news_api():
+    feed = news.get_feed(request.args.get('ticker', ''), request.args.get('listing'))
+    status = _news_status(feed)
+    if status == 400:
+        return Response(jsonify({
+            'type': '/api/docs#news-invalid-request', 'title': 'Invalid news request',
+            'status': 400, 'detail': feed['message'],
+        }).get_data(), status=400, mimetype='application/problem+json')
+    return jsonify(feed), status
+
 
 @app.route('/stock')
 def stock_page():
@@ -996,7 +932,7 @@ def get_options_smile(ticker: str, current_price: float) -> str | None:
         selected = expirations[:min(4, len(expirations))]
         palette = ['#f59e0b', '#6366f1', '#10b981', '#f43f5e']
 
-        fig = go.Figure()
+        chart_series = []
         plotted = 0
         for exp in selected:
             cached = get_cached_chain(ticker, exp, stock=stock, spot_hint=current_price)
@@ -1012,32 +948,16 @@ def get_options_smile(ticker: str, current_price: float) -> str | None:
             ].sort_values('strike')
             if len(calls) < 3:
                 continue
-            fig.add_trace(go.Scatter(
-                x=calls['strike'] / current_price,
-                y=calls['impliedVolatility'] * 100,
-                mode='lines+markers',
-                name=exp,
-                line=dict(color=palette[plotted % len(palette)], width=2),
-                marker=dict(size=5),
-            ))
+            chart_series.append(charts.line(exp, calls['strike'] / current_price,
+                                            calls['impliedVolatility'] * 100, palette[plotted % len(palette)]))
             plotted += 1
 
         if plotted == 0:
             return None
 
-        fig.add_vline(x=1.0, line_dash='dash', line_color='#a1a1aa',
-                      annotation_text='ATM', annotation_position='top right')
-        fig.update_layout(
-            xaxis_title='Moneyness  (Strike / Spot)',
-            yaxis_title='Implied Volatility (%)',
-            template='plotly_white',
-            height=350,
-            margin=dict(l=50, r=30, t=30, b=50),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            legend=dict(orientation='h', yanchor='bottom', y=1.02),
-        )
-        return fig.to_html(full_html=False, include_plotlyjs=False)
+        return charts.render_chart(charts.cartesian(chart_series, xtype='value',
+            xname='Moneyness (Strike / Spot)', yname='Implied Volatility (%)',
+            refs=[charts.reference('x', 1, 'ATM')]), height=350)
     except Exception as e:
         print(f"Options smile failed for {ticker}: {e}")
         return None
@@ -1237,151 +1157,38 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
         hvl = max(strikes, key=lambda k: abs(net_by_strike[k])) if strikes else None
         hvl_val = _mag(hvl, net_by_strike)
 
-        # Strikes to visually emphasise (outline + on-bar magnitude label).
-        emph = {s for s in (call_wall, put_wall, hvl) if s is not None}
-        EMPH_W = 2.2
-
-        def _outline(seq, levels):
-            return [EMPH_W if k in levels else 0 for k in seq]
-
-        def _labels(seq, table, levels):
-            # Compact $M magnitude printed only on the emphasised bars.
-            return [f"{table[k]:+.0f}" if k in levels else "" for k in seq]
-
-        # Map the precise levels onto their $5 bins for the binned views.
-        def _to_bin(level):
-            return round(level / 5.0) * 5 if level is not None else None
-        cw_b, pw_b, hvl_b = _to_bin(call_wall), _to_bin(put_wall), _to_bin(hvl)
-        emph_b = {s for s in (cw_b, pw_b, hvl_b) if s is not None}
-        bin_net_by_strike = dict(zip(bin_strikes, bin_net))
-        bin_call_by_strike = dict(zip(bin_strikes, bin_call))
-        bin_put_by_strike = dict(zip(bin_strikes, bin_put))
-
         # Symmetric, locked axes so bar proportions reflect real positioning
-        # shifts rather than Plotly auto-scaling one side independently.
+        # shifts rather than chart rendering auto-scaling one side independently.
         bar_max = max([abs(v) for v in call_gex + put_gex + net_gex
                        + bin_call + bin_put + bin_net] or [1.0]) * 1.12
         cum_max = max([abs(v) for v in cum + bin_cum] or [1.0]) * 1.08
-        net_color     = ['#10b981' if v >= 0 else '#f43f5e' for v in net_gex]
-        bin_net_color = ['#10b981' if v >= 0 else '#f43f5e' for v in bin_net]
-        EMERALD_LINE, ROSE_LINE = '#047857', '#9f1239'
-
-        fig = go.Figure()
-
-        # Regime shading: above the zero-gamma flip dealers are net-long gamma
-        # (vol-dampening, mean-reverting → faint green); below it net-short
-        # (vol-expanding, trend-amplifying → faint red). The single biggest
-        # "is price above or below the trigger" read, shown as a backdrop.
-        y_lo, y_hi = min(strikes), max(strikes)
-        pad_y = (y_hi - y_lo) * 0.02 or 1
-        if gamma_flip is not None and y_lo < gamma_flip < y_hi:
-            fig.add_hrect(y0=gamma_flip, y1=y_hi + pad_y, fillcolor='rgba(16,185,129,0.07)',
-                          line_width=0, layer='below')
-            fig.add_hrect(y0=y_lo - pad_y, y1=gamma_flip, fillcolor='rgba(244,63,94,0.07)',
-                          line_width=0, layer='below')
-
-        # Trace order is load-bearing — the toggle buttons index into it below.
-        # 0 call·raw  1 put·raw  2 net·raw  3 cum·raw
-        fig.add_trace(go.Bar(y=strikes, x=call_gex, orientation='h', name='Call GEX',
-                             marker_color='#10b981',
-                             marker_line=dict(color=EMERALD_LINE, width=_outline(strikes, emph)),
-                             hovertemplate='Strike $%{y}<br>Call γ %{x:.1f} $M<extra></extra>',
-                             visible=False))
-        fig.add_trace(go.Bar(y=strikes, x=put_gex, orientation='h', name='Put GEX',
-                             marker_color='#f43f5e',
-                             marker_line=dict(color=ROSE_LINE, width=_outline(strikes, emph)),
-                             hovertemplate='Strike $%{y}<br>Put γ %{x:.1f} $M<extra></extra>',
-                             visible=False))
-        fig.add_trace(go.Bar(y=strikes, x=net_gex, orientation='h', name='Net GEX',
-                             marker_color=net_color,
-                             marker_line=dict(color='rgba(24,24,27,0.55)', width=_outline(strikes, emph)),
-                             text=_labels(strikes, net_by_strike, emph),
-                             textposition='outside', textfont=dict(size=9),
-                             cliponaxis=False,
-                             hovertemplate='Strike $%{y}<br>Net γ %{x:.1f} $M<extra></extra>',
-                             visible=True))
-        fig.add_trace(go.Scatter(y=strikes, x=cum, mode='lines', name='Cumulative net γ',
-                             xaxis='x2', line=dict(color='#6366f1', width=2, shape='spline'),
-                             hovertemplate='Strike $%{y}<br>Cumulative %{x:.1f} $M<extra></extra>',
-                             visible=True))
-        # 4 call·$5  5 put·$5  6 net·$5  7 cum·$5
-        fig.add_trace(go.Bar(y=bin_strikes, x=bin_call, orientation='h', name='Call GEX',
-                             marker_color='#10b981',
-                             marker_line=dict(color=EMERALD_LINE, width=_outline(bin_strikes, emph_b)),
-                             hovertemplate='Strike ~$%{y}<br>Call γ %{x:.1f} $M<extra></extra>',
-                             visible=False))
-        fig.add_trace(go.Bar(y=bin_strikes, x=bin_put, orientation='h', name='Put GEX',
-                             marker_color='#f43f5e',
-                             marker_line=dict(color=ROSE_LINE, width=_outline(bin_strikes, emph_b)),
-                             hovertemplate='Strike ~$%{y}<br>Put γ %{x:.1f} $M<extra></extra>',
-                             visible=False))
-        fig.add_trace(go.Bar(y=bin_strikes, x=bin_net, orientation='h', name='Net GEX',
-                             marker_color=bin_net_color,
-                             marker_line=dict(color='rgba(24,24,27,0.55)', width=_outline(bin_strikes, emph_b)),
-                             text=_labels(bin_strikes, bin_net_by_strike, emph_b),
-                             textposition='outside', textfont=dict(size=9),
-                             cliponaxis=False,
-                             hovertemplate='Strike ~$%{y}<br>Net γ %{x:.1f} $M<extra></extra>',
-                             visible=False))
-        fig.add_trace(go.Scatter(y=bin_strikes, x=bin_cum, mode='lines', name='Cumulative net γ',
-                             xaxis='x2', line=dict(color='#6366f1', width=2, shape='spline'),
-                             hovertemplate='Strike ~$%{y}<br>Cumulative %{x:.1f} $M<extra></extra>',
-                             visible=False))
-
-        # --- Labeled key levels (the lines a trader reads off) ----------------
-        # Spread the annotations to opposite corners so they don't collide.
-        fig.add_hline(y=current_price, line_color='#f59e0b', line_width=2,
-                      annotation_text=f'Spot ${current_price:.2f}',
-                      annotation_position='top right',
-                      annotation_font=dict(color='#f59e0b', size=11))
-        if gamma_flip is not None:
-            fig.add_hline(y=gamma_flip, line_color='#7c3aed', line_width=1.8, line_dash='dash',
-                          annotation_text=f'Zero-Gamma ${gamma_flip:g}',
-                          annotation_position='bottom right',
-                          annotation_font=dict(color='#7c3aed', size=10))
-        if call_wall is not None:
-            fig.add_hline(y=call_wall, line_color='#10b981', line_width=1.4, line_dash='dot',
-                          annotation_text=f'Call Wall ${call_wall:g} · {call_wall_val} $M',
-                          annotation_position='top left',
-                          annotation_font=dict(color='#059669', size=10))
-        if put_wall is not None:
-            fig.add_hline(y=put_wall, line_color='#f43f5e', line_width=1.4, line_dash='dot',
-                          annotation_text=f'Put Wall ${put_wall:g} · {put_wall_val} $M',
-                          annotation_position='bottom left',
-                          annotation_font=dict(color='#e11d48', size=10))
-
-        def _vis(shown):
-            return [i in shown for i in range(8)]
-        buttons = [
-            dict(label='Net',             method='update', args=[{'visible': _vis({2, 3})}]),
-            dict(label='Call / Put',      method='update', args=[{'visible': _vis({0, 1, 3})}]),
-            dict(label='Net · $5',        method='update', args=[{'visible': _vis({6, 7})}]),
-            dict(label='Call / Put · $5', method='update', args=[{'visible': _vis({4, 5, 7})}]),
-        ]
-
-        fig.update_layout(
-            barmode='relative',
-            xaxis=dict(title='Gamma Exposure  (← short γ · $M per 1% move · long γ →)',
-                       range=[-bar_max, bar_max],
-                       zeroline=True, zerolinewidth=1.5, zerolinecolor='rgba(120,120,120,0.55)'),
-            xaxis2=dict(overlaying='x', side='top', range=[-cum_max, cum_max],
-                        showgrid=False, zeroline=False, tickfont=dict(color='#6366f1', size=9),
-                        title=dict(text='cumulative', font=dict(color='#6366f1', size=9))),
-            yaxis=dict(title='Strike ($)', tickformat='$,.0f'),
-            template='plotly_white',
-            height=520,
-            margin=dict(l=64, r=30, t=50, b=84),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            legend=dict(orientation='h', xanchor='center', x=0.5, yanchor='top', y=-0.16),
-            bargap=0.18,
-            uniformtext=dict(mode='hide', minsize=8),
-            updatemenus=[dict(type='dropdown', direction='down', x=0, y=1.13,
-                              xanchor='left', yanchor='bottom', showactive=True,
-                              pad=dict(t=2, b=2), font=dict(size=10), buttons=buttons)],
-        )
+        levels = [charts.reference('y', current_price, f'Spot ${current_price:.2f}', '#f59e0b')]
+        for value, label, color in [(gamma_flip, 'Zero-Gamma', '#7c3aed'),
+                                    (call_wall, 'Call Wall', '#10b981'), (put_wall, 'Put Wall', '#f43f5e'), (hvl, 'HVL', '#71717a')]:
+            if value is not None:
+                levels.append(charts.reference('y', value, f'{label} ${value:g}', color))
+        def _gex_view(seq, calls, puts, nets, cumulative, split):
+            bars = ([charts.bar('Call GEX', calls, seq, '#10b981'), charts.bar('Put GEX', puts, seq, '#f43f5e')]
+                    if split else [charts.bar('Net GEX', nets, seq, ['#10b981' if v >= 0 else '#f43f5e' for v in nets])])
+            for bar in bars:
+                bar['stack'] = 'exposure'
+                bar['encode'] = {'x': 0, 'y': 1}
+            cumulative_line = charts.line('Cumulative net γ', cumulative, seq, '#6366f1', xAxisIndex=1)
+            opt = charts.cartesian(bars + [cumulative_line], xtype='value', yname='Strike ($)', refs=levels)
+            opt['xAxis'] = [{'type': 'value', 'name': 'Gamma exposure ($M / 1% move)', 'min': -bar_max, 'max': bar_max},
+                            {'type': 'value', 'name': 'Cumulative ($M)', 'min': -cum_max, 'max': cum_max, 'position': 'top', 'splitLine': {'show': False}}]
+            opt['terminalHorizontalBars'] = True
+            if gamma_flip is not None:
+                bars[0]['markArea'] = {'silent': True, 'data': [
+                    [{'yAxis': min(seq), 'itemStyle': {'color': 'rgba(244,63,94,.07)'}}, {'yAxis': gamma_flip}],
+                    [{'yAxis': gamma_flip, 'itemStyle': {'color': 'rgba(16,185,129,.07)'}}, {'yAxis': max(seq)}]]}
+            return opt
+        views = [_gex_view(strikes, call_gex, put_gex, net_gex, cum, split) for split in [False, True]]
+        views += [_gex_view(bin_strikes, bin_call, bin_put, bin_net, bin_cum, split) for split in [False, True]]
+        gex_option = {**views[0]}
+        gex_option['terminalViews'] = {'labels': ['Net', 'Call / Put', 'Net · $5', 'Call / Put · $5'], 'options': views.copy()}
         return {
-            'chart': fig.to_html(full_html=False, include_plotlyjs=False),
+            'chart': charts.render_chart(gex_option, height=520),
             'stats': {
                 'total_gex': round(total_gex, 1),
                 'regime': 'positive' if total_gex >= 0 else 'negative',
@@ -1558,53 +1365,13 @@ def get_insider_chart(ticker: str, price_df: pd.DataFrame) -> str | None:
 
         bar_colors = ['#10b981' if v > 0 else '#f43f5e' for v in monthly.values]
 
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=monthly.index, y=monthly.values,
-            name='Net Insider Shares',
-            marker_color=bar_colors,
-            marker_line_width=0,
-            yaxis='y',
-            hovertemplate='%{x|%b %Y}<br>%{y:+,.0f} shares<extra></extra>',
-        ))
+        chart_series = [charts.bar('Net Insider Shares', monthly.index, monthly.values, bar_colors)]
         if price_df is not None and not price_df.empty:
-            fig.add_trace(go.Scatter(
-                x=price_df.index, y=price_df['close'],
-                mode='lines', name='Price',
-                line=dict(color='#f59e0b', width=1.5),
-                yaxis='y2',
-                hovertemplate='%{x|%b %d}<br>$%{y:.2f}<extra></extra>',
-            ))
-
-        fig.update_layout(
-            xaxis=dict(
-                type='date',
-                title_text='',
-                fixedrange=False,
-                rangeselector=dict(
-                    buttons=list([
-                        dict(count=6, label="6M", step="month", stepmode="backward"),
-                        dict(count=1, label="1Y", step="year", stepmode="backward"),
-                        dict(count=3, label="3Y", step="year", stepmode="backward"),
-                        dict(label="All", step="all")
-                    ]),
-                    bgcolor='#f4f4f5',
-                    activecolor='#f59e0b',
-                    x=0, y=1.1,
-                    font=dict(size=10)
-                )
-            ),
-            yaxis=dict(title='Net Shares (Insider)', side='left', fixedrange=False, autorange=True),
-            yaxis2=dict(title='Price ($)', side='right', overlaying='y', showgrid=False, fixedrange=False, autorange=True),
-            template='plotly_white',
-            height=380,
-            margin=dict(l=60, r=60, t=50, b=40),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            legend=dict(orientation='h', yanchor='bottom', y=1.02),
-            hovermode='x unified',
-        )
-        return fig.to_html(full_html=False, include_plotlyjs=False)
+            chart_series.append(charts.line('Price', price_df.index, price_df['close'], yAxisIndex=1))
+        option = charts.cartesian(chart_series, yname='Net Insider Shares')
+        option['terminalRanges'] = ['6M', '1Y', '3Y', 'All']
+        option['yAxis'] = [{'type': 'value', 'name': 'Net shares'}, {'type': 'value', 'name': 'Price ($)', 'scale': True, 'position': 'right', 'splitLine': {'show': False}}]
+        return charts.render_chart(option, height=380)
     except Exception as e:
         print(f"Insider chart failed for {ticker}: {e}")
         return None
@@ -1641,34 +1408,12 @@ def get_cumulative_return_chart(ticker: str, df: pd.DataFrame) -> str | None:
             'QQQ':    'QQQ',
         }
 
-        fig = go.Figure()
+        chart_series = []
         for key in ['SPY', 'QQQ', 'ticker']:
-            if key not in normalised.columns:
-                continue
-            final_val = round(float(normalised[key].iloc[-1]), 1)
-            fig.add_trace(go.Scatter(
-                x=normalised.index,
-                y=normalised[key],
-                mode='lines',
-                name=f"{names[key]}  {final_val}",
-                line=dict(
-                    color=palette[key],
-                    width=2.5 if key == 'ticker' else 1.5,
-                ),
-            ))
-
-        fig.add_hline(y=100, line_dash='dot', line_color='#52525b', line_width=1)
-        fig.update_layout(
-            yaxis_title='Growth of $100',
-            template='plotly_white',
-            height=350,
-            margin=dict(l=50, r=30, t=30, b=50),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            legend=dict(orientation='h', yanchor='bottom', y=1.02),
-            hovermode='x unified',
-        )
-        return fig.to_html(full_html=False, include_plotlyjs=False)
+            if key in normalised.columns:
+                final_val = round(float(normalised[key].iloc[-1]), 1)
+                chart_series.append(charts.line(f"{names[key]}  {final_val}", normalised.index, normalised[key], palette[key]))
+        return charts.render_chart(charts.cartesian(chart_series, yname='Growth of $100', refs=[charts.reference('y', 100)]), height=350)
     except Exception as e:
         print(f"Cumulative return chart failed for {ticker}: {e}")
         return None
@@ -1692,102 +1437,16 @@ def get_price_target_chart(ticker: str, current_price: float) -> str | None:
         is_upside  = upside_pct >= 0
         upside_color = '#10b981' if is_upside else '#f43f5e'
 
-        fig = go.Figure()
-
-        # Range band: low → high
-        fig.add_shape(type='rect',
-            x0=t_low, x1=t_high, y0=0.35, y1=0.65,
-            fillcolor='rgba(99,102,241,0.12)',
-            line=dict(width=0),
-        )
-        # Low → high bar spine
-        fig.add_trace(go.Scatter(
-            x=[t_low, t_high], y=[0.5, 0.5],
-            mode='lines',
-            line=dict(color='#6366f1', width=3),
-            name=f'Target range  ${t_low:.0f} – ${t_high:.0f}',
-            showlegend=True,
-        ))
-        # Mean target diamond
-        fig.add_trace(go.Scatter(
-            x=[t_mean], y=[0.5],
-            mode='markers+text',
-            marker=dict(color='#f59e0b', size=16, symbol='diamond',
-                        line=dict(color='white', width=1.5)),
-            text=[f'${t_mean:.0f}'],
-            textposition='top center',
-            textfont=dict(size=11, color='#f59e0b'),
-            name=f'Mean target  ${t_mean:.2f}',
-            showlegend=True,
-        ))
-        # Median target (smaller)
-        if t_med and t_med != t_mean:
-            fig.add_trace(go.Scatter(
-                x=[t_med], y=[0.5],
-                mode='markers',
-                marker=dict(color='#a78bfa', size=10, symbol='diamond'),
-                name=f'Median  ${t_med:.2f}',
-                showlegend=True,
-            ))
-        # Current price circle
-        fig.add_trace(go.Scatter(
-            x=[current_price], y=[0.5],
-            mode='markers+text',
-            marker=dict(color=upside_color, size=16, symbol='circle',
-                        line=dict(color='white', width=1.5)),
-            text=[f'${current_price:.0f}'],
-            textposition='bottom center',
-            textfont=dict(size=11, color=upside_color),
-            name=f'Current  ${current_price:.2f}',
-            showlegend=True,
-        ))
-
-        # Upside annotation
-        sign = '+' if is_upside else ''
-        fig.add_annotation(
-            x=(t_mean + current_price) / 2,
-            y=0.72,
-            text=f'{sign}{upside_pct:.1f}% to mean target',
-            showarrow=False,
-            font=dict(size=13, color=upside_color),
-        )
-
-        # Low / High labels
-        for x_val, label in [(t_low, f'Low\n${t_low:.0f}'), (t_high, f'High\n${t_high:.0f}')]:
-            fig.add_annotation(
-                x=x_val, y=0.28,
-                text=label.replace('\n', '<br>'),
-                showarrow=False,
-                font=dict(size=10, color='#a1a1aa'),
-                align='center',
-            )
-
-        updated = pt.get('updated', '')
-        fig.update_layout(
-            xaxis=dict(
-                range=[t_low * 0.88, t_high * 1.08],
-                showgrid=False, zeroline=False,
-                showticklabels=True,
-                tickprefix='$',
-            ),
-            yaxis=dict(range=[0, 1], visible=False),
-            template='plotly_white',
-            height=280,
-            margin=dict(l=20, r=20, t=40, b=60),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            legend=dict(orientation='h', yanchor='top', y=-0.18, x=0,
-                        font=dict(size=10)),
-            annotations=fig.layout.annotations + (
-                [dict(
-                    x=0.5, y=-0.32, xref='paper', yref='paper',
-                    text=f'Updated {updated}' if updated else '',
-                    showarrow=False,
-                    font=dict(size=9, color='#71717a'),
-                )]
-            ),
-        )
-        return fig.to_html(full_html=False, include_plotlyjs=False)
+        chart_series = [charts.line(f'Target range ${t_low:.0f} – ${t_high:.0f}', [t_low, t_high], [.5, .5], '#6366f1', width=4)]
+        for value, label, color in [(t_mean, 'Mean target', '#f59e0b'), (t_med, 'Median target', '#a78bfa'), (current_price, 'Current', upside_color)]:
+            if value is not None:
+                chart_series.append({'name': f'{label} ${value:.2f}', 'type': 'scatter', 'symbol': 'diamond' if label != 'Current' else 'circle', 'symbolSize': 14,
+                                     'itemStyle': {'color': color}, 'data': [[value, .5]], 'label': {'show': True, 'position': 'top', 'formatter': f'${value:.0f}'}})
+        option = charts.cartesian(chart_series, xtype='value', xname='Price ($)', title=f'{upside_pct:+.1f}% to mean target')
+        option['yAxis'].update({'min': 0, 'max': 1, 'show': False})
+        option['xAxis'].update({'min': min(t_low, current_price) * .88, 'max': max(t_high, current_price) * 1.08})
+        option['graphic'] = {'type': 'text', 'bottom': 2, 'left': 'center', 'style': {'text': f"Updated {pt.get('updated', '')}"}}
+        return charts.render_chart(option, height=280)
     except Exception as e:
         print(f"Price target chart failed for {ticker}: {e}")
         return None
@@ -1834,91 +1493,26 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
     kurtosis     = float(df['returns'].kurt())
 
     # --- Return distribution histogram ---
-    hist_fig = go.Figure()
-    hist_fig.add_trace(go.Histogram(
-        x=df['returns'] * 100,
-        nbinsx=80,
-        name='Daily Returns',
-        marker_color='#6366f1',
-        opacity=0.8,
-    ))
-    hist_fig.update_layout(
-        title='Daily Return Distribution (%)',
-        xaxis_title='Daily Return (%)',
-        yaxis_title='Frequency',
-        template='plotly_white',
-        height=350,
-        margin=dict(l=50, r=30, t=50, b=50),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    dist_chart = hist_fig.to_html(full_html=False, include_plotlyjs=False)
+    counts, edges = np.histogram(df['returns'] * 100, bins=80)
+    dist_option = charts.cartesian([charts.bar('Daily Returns', (edges[:-1] + edges[1:]) / 2, counts)], xtype='value', xname='Daily Return (%)', yname='Frequency')
+    dist_chart = charts.render_chart(dist_option, height=350)
 
     # --- Rolling 30-day volatility (annualised) ---
     df['rolling_vol'] = df['returns'].rolling(30).std() * np.sqrt(252) * 100
-    vol_fig = go.Figure()
-    vol_fig.add_trace(go.Scatter(
-        x=df.index, y=df['rolling_vol'],
-        mode='lines', name='30d Vol',
-        line=dict(color='#f59e0b', width=1.5),
-        fill='tozeroy', fillcolor='rgba(245,158,11,0.1)',
-    ))
-    vol_fig.update_layout(
-        title='Rolling 30-Day Annualised Volatility (%)',
-        yaxis_title='Volatility (%)',
-        template='plotly_white',
-        height=300,
-        margin=dict(l=50, r=30, t=50, b=50),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    vol_chart = vol_fig.to_html(full_html=False, include_plotlyjs=False)
+    vol_chart = charts.render_chart(charts.cartesian([charts.line('30d Vol', df.index, df['rolling_vol'], area='rgba(245,158,11,.1)')], yname='Volatility (%)'), height=300)
 
     # --- Drawdown ---
     df['cummax'] = df['close'].cummax()
     df['drawdown'] = (df['close'] - df['cummax']) / df['cummax'] * 100
     max_drawdown = float(df['drawdown'].min())
-    dd_fig = go.Figure()
-    dd_fig.add_trace(go.Scatter(
-        x=df.index, y=df['drawdown'],
-        mode='lines', name='Drawdown',
-        line=dict(color='#ef4444', width=1),
-        fill='tozeroy', fillcolor='rgba(239,68,68,0.15)',
-    ))
-    dd_fig.update_layout(
-        title='Drawdown from Rolling Peak (%)',
-        yaxis_title='Drawdown (%)',
-        template='plotly_white',
-        height=300,
-        margin=dict(l=50, r=30, t=50, b=50),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    dd_chart = dd_fig.to_html(full_html=False, include_plotlyjs=False)
+    dd_chart = charts.render_chart(charts.cartesian([charts.line('Drawdown', df.index, df['drawdown'], '#ef4444', area='rgba(239,68,68,.15)')], yname='Drawdown (%)'), height=300)
 
     # --- Rolling Sharpe (252-day, risk-free ≈ 0) ---
     df['rolling_sharpe'] = (
         df['returns'].rolling(252).mean() /
         df['returns'].rolling(252).std()
     ) * np.sqrt(252)
-    sharpe_fig = go.Figure()
-    sharpe_fig.add_trace(go.Scatter(
-        x=df.index, y=df['rolling_sharpe'],
-        mode='lines', name='Sharpe',
-        line=dict(color='#10b981', width=1.5),
-    ))
-    sharpe_fig.add_hline(y=1, line_dash='dash', line_color='#94a3b8',
-                         annotation_text='Sharpe = 1')
-    sharpe_fig.update_layout(
-        title='Rolling 1-Year Sharpe Ratio',
-        yaxis_title='Sharpe Ratio',
-        template='plotly_white',
-        height=300,
-        margin=dict(l=50, r=30, t=50, b=50),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    sharpe_chart = sharpe_fig.to_html(full_html=False, include_plotlyjs=False)
+    sharpe_chart = charts.render_chart(charts.cartesian([charts.line('Sharpe', df.index, df['rolling_sharpe'], '#10b981')], yname='Sharpe Ratio', refs=[charts.reference('y', 1, 'Sharpe = 1')]), height=300)
 
     # --- Seasonality: average monthly return ---
     df['month'] = df.index.month
@@ -1926,23 +1520,7 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
     month_labels = ['Jan','Feb','Mar','Apr','May','Jun',
                     'Jul','Aug','Sep','Oct','Nov','Dec']
     colors = ['#10b981' if v >= 0 else '#ef4444' for v in monthly_avg.values]
-    season_fig = go.Figure()
-    season_fig.add_trace(go.Bar(
-        x=[month_labels[m - 1] for m in monthly_avg.index],
-        y=monthly_avg.values,
-        marker_color=colors,
-        name='Avg Monthly Return',
-    ))
-    season_fig.update_layout(
-        title='Average Monthly Return (%)',
-        yaxis_title='Avg Return (%)',
-        template='plotly_white',
-        height=300,
-        margin=dict(l=50, r=30, t=50, b=50),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    season_chart = season_fig.to_html(full_html=False, include_plotlyjs=False)
+    season_chart = charts.render_chart(charts.cartesian([{'name': 'Avg Monthly Return', 'type': 'bar', 'data': [{'value': v, 'itemStyle': {'color': c}} for v, c in zip(monthly_avg.values, colors)]}], xtype='category', categories=[month_labels[m - 1] for m in monthly_avg.index], yname='Avg Return (%)'), height=300)
 
     # --- Beta vs SPY ---
     spy_df = get_or_fetch_prices('SPY')
@@ -1957,34 +1535,12 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
             var   = merged['spy'].var()
             beta  = round(cov / var, 3) if var != 0 else None
 
-            beta_fig = go.Figure()
-            beta_fig.add_trace(go.Scatter(
-                x=merged['spy'] * 100,
-                y=merged['stock'] * 100,
-                mode='markers',
-                marker=dict(color='#6366f1', size=3, opacity=0.5),
-                name='Daily returns',
-            ))
+            beta_series = [{'name': 'Daily returns', 'type': 'scatter', 'symbolSize': 3, 'itemStyle': {'color': '#6366f1', 'opacity': .5}, 'data': charts.pairs(merged['spy'] * 100, merged['stock'] * 100)}]
             if beta is not None:
                 x_vals = np.linspace(merged['spy'].min(), merged['spy'].max(), 100)
                 y_vals = beta * x_vals + merged['stock'].mean() - beta * merged['spy'].mean()
-                beta_fig.add_trace(go.Scatter(
-                    x=x_vals * 100, y=y_vals * 100,
-                    mode='lines',
-                    line=dict(color='#f59e0b', width=2),
-                    name=f'β = {beta}',
-                ))
-            beta_fig.update_layout(
-                title=f'Beta vs SPY (β = {beta})',
-                xaxis_title='SPY Daily Return (%)',
-                yaxis_title=f'{ticker.upper()} Daily Return (%)',
-                template='plotly_white',
-                height=350,
-                margin=dict(l=50, r=30, t=50, b=50),
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-            )
-            beta_chart = beta_fig.to_html(full_html=False, include_plotlyjs=False)
+                beta_series.append(charts.line(f'β = {beta}', x_vals * 100, y_vals * 100))
+            beta_chart = charts.render_chart(charts.cartesian(beta_series, xtype='value', xname='SPY Daily Return (%)', yname=f'{ticker.upper()} Daily Return (%)'), height=350)
 
     # --- Rolling VaR (95 % & 99 %) + Expected Shortfall ---
     roll_win = 252
@@ -2000,35 +1556,10 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
 
     df['es_95'] = _rolling_es(df['returns'], roll_win, 0.05) * 100
 
-    var_fig = go.Figure()
-    var_fig.add_trace(go.Scatter(
-        x=df.index, y=df['var_95'].abs(),
-        mode='lines', name='VaR 95 %',
-        line=dict(color='#f59e0b', width=1.5),
-        fill='tozeroy', fillcolor='rgba(245,158,11,0.08)',
-    ))
-    var_fig.add_trace(go.Scatter(
-        x=df.index, y=df['var_99'].abs(),
-        mode='lines', name='VaR 99 %',
-        line=dict(color='#f43f5e', width=1.5),
-        fill='tozeroy', fillcolor='rgba(244,63,94,0.08)',
-    ))
-    var_fig.add_trace(go.Scatter(
-        x=df.index, y=df['es_95'].abs(),
-        mode='lines', name='ES 95 %',
-        line=dict(color='#6366f1', width=1.5, dash='dash'),
-    ))
-    var_fig.update_layout(
-        title='Rolling 1-Year Daily VaR & Expected Shortfall',
-        yaxis_title='Potential Daily Loss (%)',
-        template='plotly_white',
-        height=320,
-        margin=dict(l=50, r=30, t=50, b=50),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        legend=dict(orientation='h', yanchor='bottom', y=1.02),
-    )
-    var_chart = var_fig.to_html(full_html=False, include_plotlyjs=False)
+    var_chart = charts.render_chart(charts.cartesian([
+        charts.line('VaR 95 %', df.index, df['var_95'].abs(), area='rgba(245,158,11,.08)'),
+        charts.line('VaR 99 %', df.index, df['var_99'].abs(), '#f43f5e', area='rgba(244,63,94,.08)'),
+        charts.line('ES 95 %', df.index, df['es_95'].abs(), '#6366f1', dash=True)], yname='Potential Daily Loss (%)'))
 
     # Current VaR figures (latest rolling window)
     latest_var_95 = round(float(df['var_95'].dropna().iloc[-1]), 3) if not df['var_95'].dropna().empty else None
@@ -2055,32 +1586,9 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
             poc_bin = int(vol_by_price.idxmax())
             poc_price = round(float(bin_centers[poc_bin]), 2)
 
-            vp_fig = go.Figure()
-            vp_fig.add_trace(go.Bar(
-                x=vol_by_price.values,
-                y=bin_centers,
-                orientation='h',
-                marker_color=vp_colors,
-                marker_line_width=0,
-                name='Volume at Price',
-            ))
-            vp_fig.add_hline(y=current_price, line_dash='solid', line_color='#f59e0b',
-                             line_width=1.5, annotation_text='Current',
-                             annotation_position='top right')
-            vp_fig.add_hline(y=poc_price, line_dash='dash', line_color='#6366f1',
-                             line_width=1, annotation_text=f'POC ${poc_price}',
-                             annotation_position='bottom right')
-            vp_fig.update_layout(
-                yaxis_title='Price ($)',
-                xaxis_title='Cumulative Volume (2 yr)',
-                template='plotly_white',
-                height=420,
-                margin=dict(l=60, r=30, t=30, b=50),
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-                showlegend=False,
-            )
-            vp_chart = vp_fig.to_html(full_html=False, include_plotlyjs=False)
+            vp_option = charts.cartesian([charts.bar('Volume at Price', vol_by_price.values, bin_centers, vp_colors)], xtype='value', xname='Cumulative Volume (2 yr)', yname='Price ($)', refs=[charts.reference('y', current_price, 'Current', '#f59e0b'), charts.reference('y', poc_price, f'POC ${poc_price}', '#6366f1')])
+            vp_option['terminalHorizontalBars'] = True
+            vp_chart = charts.render_chart(vp_option, height=420)
     else:
         poc_price = None
 
@@ -2130,47 +1638,20 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
         pct = np.percentile(paths, [5, 25, 50, 75, 95], axis=0)
         future_dates = pd.bdate_range(df.index[-1], periods=horizon + 1)
 
-        mc_fig = go.Figure()
-        # 5–95% band
-        mc_fig.add_trace(go.Scatter(x=future_dates, y=pct[4], mode='lines',
-            line=dict(width=0), showlegend=False, hoverinfo='skip'))
-        mc_fig.add_trace(go.Scatter(x=future_dates, y=pct[0], mode='lines',
-            line=dict(width=0), fill='tonexty', fillcolor='rgba(99,102,241,0.12)',
-            name='5–95%', hoverinfo='skip'))
-        # 25–75% band
-        mc_fig.add_trace(go.Scatter(x=future_dates, y=pct[3], mode='lines',
-            line=dict(width=0), showlegend=False, hoverinfo='skip'))
-        mc_fig.add_trace(go.Scatter(x=future_dates, y=pct[1], mode='lines',
-            line=dict(width=0), fill='tonexty', fillcolor='rgba(99,102,241,0.28)',
-            name='25–75%', hoverinfo='skip'))
-        # Median path
-        mc_fig.add_trace(go.Scatter(x=future_dates, y=pct[2], mode='lines',
-            line=dict(color='#f59e0b', width=2), name='Median'))
-        # Mark key milestones
-        date_3m = pd.bdate_range(df.index[-1], periods=64)[-1]
-        date_6m = pd.bdate_range(df.index[-1], periods=127)[-1]
-        for date, label, color in [(date_3m, '3m', '#6366f1'), (date_6m, '6m', '#8b5cf6')]:
-            if date < future_dates[-1]:
-                mc_fig.add_vline(x=date, line_dash='dash', line_color=color, line_width=1,
-                                annotation_text=label, annotation_position='top')
-        # Current price reference
-        mc_fig.add_hline(y=current_price, line_dash='dot', line_color='#71717a',
-                         line_width=1, annotation_text='Today',
-                         annotation_position='bottom left',
-                         annotation_font_size=10)
-        mc_fig.update_layout(
-            title='Monte Carlo Forward Projection (1 yr, 1000 paths)',
-            yaxis_title='Simulated Price ($)',
-            template='plotly_white',
-            height=350,
-            margin=dict(l=50, r=30, t=50, b=40),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            legend=dict(orientation='h', yanchor='bottom', y=1.02, x=0,
-                        font=dict(size=10)),
-            hovermode='x unified',
-        )
-        mc_chart = mc_fig.to_html(full_html=False, include_plotlyjs=False)
+        mc_series = []
+        # Stack lower bound plus interval width to preserve percentile bands.
+        for low, high, label, opacity in [(0, 4, '5–95%', .12), (1, 3, '25–75%', .28)]:
+            mc_series.append(charts.line(label + ' lower', future_dates, pct[low], '#6366f1', width=0, stack=label, silent=True))
+            mc_series.append(charts.line(label, future_dates, pct[high] - pct[low], '#6366f1', width=0, stack=label, area=f'rgba(99,102,241,{opacity})'))
+        for band in mc_series:
+            band['tooltip'] = {'show': False, 'trigger': 'none'}
+        mc_series.append(charts.line('Median', future_dates, pct[2]))
+        refs = [charts.reference('y', current_price, 'Today')]
+        for days, label in [(64, '3m'), (127, '6m')]:
+            refs.append(charts.reference('x', pd.bdate_range(df.index[-1], periods=days)[-1].strftime('%Y-%m-%d'), label, '#6366f1'))
+        mc_option = charts.cartesian(mc_series, yname='Simulated Price ($)', refs=refs)
+        mc_option['legend'] = {'data': ['5–95%', '25–75%', 'Median']}
+        mc_chart = charts.render_chart(mc_option, height=350)
 
     return {
         'ticker': ticker.upper(),
@@ -2362,83 +1843,33 @@ def analytics_api(ticker):
 
 
 def _insider_sentiment_chart(sentiment):
-    """Bar chart of monthly insider MSPR (green = net buying, red = net selling)."""
-    points = [s for s in sentiment if isinstance(s.get('mspr'), (int, float))]
+    points = [s for s in sentiment if isinstance(s.get('mspr'), (int, float))][-18:]
     if not points:
         return None
-    points = points[-18:]
     labels = [f"{s['year']}-{str(s['month']).zfill(2)}" for s in points]
     values = [s['mspr'] for s in points]
-    colors = ['#10b981' if v >= 0 else '#ef4444' for v in values]
-    fig = go.Figure(go.Bar(x=labels, y=values, marker_color=colors))
-    fig.update_layout(
-        title='Insider Sentiment (MSPR by month)',
-        yaxis_title='MSPR',
-        template='plotly_white',
-        height=300,
-        margin=dict(l=50, r=30, t=50, b=50),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+    return charts.render_chart(charts.cartesian([charts.bar('MSPR', labels, values, ['#10b981' if v >= 0 else '#ef4444' for v in values])], xtype='category', categories=labels, yname='MSPR'), height=300)
 
 
 def _institutional_holders_chart(holders):
-    """Horizontal bar of top institutional holders by shares held."""
     if not holders:
         return None
     top = holders[:10][::-1]
-    fig = go.Figure(go.Bar(
-        x=[h['shares'] for h in top],
-        y=[h['holder'] for h in top],
-        orientation='h',
-        marker_color='#6366f1',
-    ))
-    fig.update_layout(
-        title='Top Institutional Holders (shares)',
-        template='plotly_white',
-        height=380,
-        margin=dict(l=10, r=30, t=50, b=40),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        yaxis=dict(automargin=True),
-    )
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+    option = {'xAxis': {'type': 'value', 'name': 'Shares'}, 'yAxis': {'type': 'category', 'data': [h['holder'] for h in top]},
+              'series': [{'name': 'Shares', 'type': 'bar', 'data': [h['shares'] for h in top], 'itemStyle': {'color': '#6366f1'}}]}
+    return charts.render_chart(option, height=380)
 
 
 def _peers_quadrant_chart(peers_data: dict) -> str | None:
-    """Valuation percentile (x) vs 12-1 momentum (y, %) scatter; focus highlighted."""
-    try:
-        import plotly.graph_objects as go
-        rows = [peers_data["focus"], *peers_data["peers"]]
-        pts = [r for r in rows
-               if r.get("valuation_pct") is not None and r.get("mom_12_1") is not None]
-        if len(pts) < 2:
-            return None
-        fig = go.Figure()
-        for r in pts:
-            is_focus = r["symbol"] == peers_data["focus"]["symbol"]
-            fig.add_trace(go.Scatter(
-                x=[r["valuation_pct"]], y=[r["mom_12_1"] * 100],
-                mode="markers+text", text=[r["symbol"]], textposition="top center",
-                textfont=dict(size=10),
-                marker=dict(size=14 if is_focus else 9,
-                            color="#f59e0b" if is_focus else "#71717a"),
-                name=r["symbol"], showlegend=False,
-            ))
-        fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#a1a1aa")
-        fig.add_vline(x=50, line_width=1, line_dash="dot", line_color="#a1a1aa")
-        fig.update_layout(
-            height=320, margin=dict(l=10, r=10, t=10, b=10),
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(size=10),
-            xaxis=dict(title="Valuation percentile (higher = cheaper vs peers)"),
-            yaxis=dict(title="12-1 momentum %"),
-        )
-        return fig.to_html(full_html=False, include_plotlyjs=False)
-    except Exception as e:
-        print(f"peers chart failed: {e}")
+    rows = [peers_data['focus'], *peers_data['peers']]
+    pts = [r for r in rows if r.get('valuation_pct') is not None and r.get('mom_12_1') is not None]
+    if len(pts) < 2:
         return None
+    series = [{'name': r['symbol'], 'type': 'scatter', 'data': [[r['valuation_pct'], r['mom_12_1'] * 100]],
+               'symbolSize': 14 if r['symbol'] == peers_data['focus']['symbol'] else 9,
+               'itemStyle': {'color': '#f59e0b' if r['symbol'] == peers_data['focus']['symbol'] else '#71717a'},
+               'label': {'show': True, 'position': 'top', 'formatter': r['symbol']}} for r in pts]
+    return charts.render_chart(charts.cartesian(series, xtype='value', xname='Valuation percentile (higher = cheaper)', yname='12-1 momentum %', refs=[charts.reference('y', 0), charts.reference('x', 50)]))
 
 
 def compute_positioning(ticker: str) -> dict:
@@ -2818,6 +2249,7 @@ def get_full_option_chain_df(
                         'iv': float(iv),
                         'open_interest': _safe_int(r.get('openInterest', 0)),
                         'volume': _safe_int(r.get('volume', 0)),
+                        'underlying_price': float(current_price) if current_price else None,
                     })
 
         return pd.DataFrame(rows) if rows else pd.DataFrame()
@@ -3017,8 +2449,8 @@ def _compute_momentum_impl(ticker: str) -> dict:
 #
 # The page is three tabs over one universe of cached prices. Each tab splits
 # into a data builder (plain data in, plain dict out — no Flask globals, no
-# Plotly, so it can be exercised without a request context) and a chart
-# builder that turns the already-computed series into embedded Plotly HTML.
+# a chart renderer, so it can be exercised without a request context) and a chart
+# builder that turns the already-computed series into native chart mounts.
 # All scoring and backtest math lives in `momentum_engine`; nothing here
 # reimplements it.
 # --------------------------------------------------------------------------
@@ -3315,32 +2747,12 @@ def _strategies_universe_data(symbols, price_df, strategy_id, period):
     }
 
 
-def _strategies_universe_chart(dates, strat_series, spy_series, qqq_series,
-                               strategy_label) -> str:
-    """Growth-of-$10,000 chart. A None benchmark series is simply not drawn."""
-    dates_str = dates.strftime('%Y-%m-%d').tolist()
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=dates_str, y=((1 + strat_series).cumprod() * 10000).tolist(), mode='lines', name=strategy_label, line=dict(color='#fbbf24', width=2)))
-    if spy_series is not None:
-        fig.add_trace(go.Scatter(x=dates_str, y=((1 + spy_series).cumprod() * 10000).tolist(), mode='lines', name='SPY (S&P 500) Benchmark', line=dict(color='#64748b', width=1.5, dash='dash')))
-    if qqq_series is not None:
-        fig.add_trace(go.Scatter(x=dates_str, y=((1 + qqq_series).cumprod() * 10000).tolist(), mode='lines', name='QQQ (Nasdaq 100) Benchmark', line=dict(color='#818cf8', width=1.5, dash='dash')))
-
-    fig.update_layout(
-        title='Growth of $10,000 Investment',
-        xaxis_title='Date',
-        yaxis_title='Portfolio Value ($)',
-        template='plotly_white',
-        height=400,
-        margin=dict(l=50, r=30, t=60, b=80),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        showlegend=True,
-        legend=dict(orientation='h', yanchor='top', y=-0.15, xanchor='center', x=0.5),
-        font=dict(family='Inter, sans-serif')
-    )
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+def _strategies_universe_chart(dates, strat_series, spy_series, qqq_series, strategy_label) -> str:
+    series = [charts.line(strategy_label, dates, (1 + strat_series).cumprod() * 10000)]
+    for values, label, color in [(spy_series, 'SPY (S&P 500) Benchmark', '#64748b'), (qqq_series, 'QQQ (Nasdaq 100) Benchmark', '#818cf8')]:
+        if values is not None:
+            series.append(charts.line(label, dates, (1 + values).cumprod() * 10000, color, dash=True))
+    return charts.render_chart(charts.cartesian(series, yname='Portfolio Value ($)', title='Growth of $10,000 Investment'), height=400)
 
 
 # --------------------------------------------------------------------------
@@ -3366,6 +2778,8 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
     univ_ranks = {sym: idx + 1 for idx, (sym, _) in enumerate(ranked)}
     rank = univ_ranks.get(symbol, len(symbols))
 
+    # The signal series the strategy trades on, and the threshold it crosses.
+    # Keep threshold units stable in chart payloads.
     if is_sma:
         signal_series = momentum_engine.sma_spread(close)
         threshold = 0
@@ -3590,218 +3004,59 @@ def _strategies_ticker_data(symbol, df, price_batch, symbols, strategy_id, perio
 
 
 def _strategies_ticker_charts(symbol, series, strategy_id) -> dict:
-    """Synchronized Interactive Canvas (Price + Signals on top, Growth & DD on bottom)
-    plus rolling indicator diagnostic chart."""
-    dates_str = series["dates"].strftime('%Y-%m-%d').tolist()
-    cum_strat = series["cum_strat"]
-    cum_hold = series["cum_hold"]
-    close = series["close"]
-    strat_label = momentum_engine.STRATEGIES.get(strategy_id, {}).get("label", strategy_id)
+    """Native synchronized price/equity/drawdown canvas and indicator diagnostic."""
+    dates = series['dates']
+    cum_strat, cum_hold, close = series['cum_strat'], series['cum_hold'], series['close']
     fam = _strategy_family(strategy_id)
-
-    # 1. SYNCHRONIZED INTERACTIVE CANVAS
-    fig_canvas = make_subplots(
-        rows=2, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.06,
-        row_heights=[0.58, 0.42],
-        specs=[[{"secondary_y": False}], [{"secondary_y": True}]],
-    )
-
-    # --- Upper Pane: Price, Overlays, and Execution Flags ---
-    fig_canvas.add_trace(
-        go.Scatter(x=dates_str, y=close.tolist(), mode='lines', name=f'{symbol} Price',
-                   line=dict(color='#38bdf8', width=2)),
-        row=1, col=1
-    )
-
-    if fam == "sma":
-        fig_canvas.add_trace(
-            go.Scatter(x=dates_str, y=series["sma50"].tolist(), mode='lines', name='50-day SMA',
-                       line=dict(color='#fbbf24', width=1.4)),
-            row=1, col=1
-        )
-        fig_canvas.add_trace(
-            go.Scatter(x=dates_str, y=series["sma200"].tolist(), mode='lines', name='200-day SMA',
-                       line=dict(color='#a855f7', width=1.4)),
-            row=1, col=1
-        )
-    elif fam == "rsi":
-        fig_canvas.add_trace(
-            go.Scatter(x=dates_str, y=series["sma200"].tolist(), mode='lines', name='200-day SMA (Regime)',
-                       line=dict(color='#a855f7', width=1.4, dash='dash')),
-            row=1, col=1
-        )
-        fig_canvas.add_trace(
-            go.Scatter(x=dates_str, y=series["sma5"].tolist(), mode='lines', name='5-day SMA (Exit)',
-                       line=dict(color='#34d399', width=1.2)),
-            row=1, col=1
-        )
-    else:
-        fig_canvas.add_trace(
-            go.Scatter(x=dates_str, y=series["sma50"].tolist(), mode='lines', name='50-day SMA',
-                       line=dict(color='#fbbf24', width=1.4)),
-            row=1, col=1
-        )
-        fig_canvas.add_trace(
-            go.Scatter(x=dates_str, y=series["sma200"].tolist(), mode='lines', name='200-day SMA',
-                       line=dict(color='#a855f7', width=1.4)),
-            row=1, col=1
-        )
-
-    if not series["buy_dates"].empty:
-        buy_prices = [close.loc[d] if d in close.index else None for d in series["buy_dates"]]
-        fig_canvas.add_trace(
-            go.Scatter(
-                x=series["buy_dates"].strftime('%Y-%m-%d').tolist(),
-                y=buy_prices,
-                mode='markers',
-                marker=dict(symbol='triangle-up', size=11, color='#10b981', line=dict(width=1, color='#047857')),
-                name='Buy Entry'
-            ),
-            row=1, col=1
-        )
-    if not series["sell_dates"].empty:
-        sell_prices = [close.loc[d] if d in close.index else None for d in series["sell_dates"]]
-        fig_canvas.add_trace(
-            go.Scatter(
-                x=series["sell_dates"].strftime('%Y-%m-%d').tolist(),
-                y=sell_prices,
-                mode='markers',
-                marker=dict(symbol='triangle-down', size=11, color='#ef4444', line=dict(width=1, color='#b91c1c')),
-                name='Exit to Cash'
-            ),
-            row=1, col=1
-        )
-
-    # --- Lower Pane: Strategy Equity Curve & Underwater Drawdown ---
+    strat_label = momentum_engine.STRATEGIES.get(strategy_id, {}).get('label', strategy_id)
+    performance = [charts.line(strat_label, dates, cum_strat),
+                   charts.line(f'Buy & Hold {symbol}', series['hold_full_dates'], series['cum_hold_full'], '#64748b', dash=True)]
+    price = [charts.line(f'{symbol} Price', dates, close, '#38bdf8')]
+    for key, label, color in ([('sma200', '200-day SMA (Regime)', '#a855f7'), ('sma5', '5-day SMA (Exit)', '#34d399')] if fam == 'rsi' else
+                              [('sma50', '50-day SMA', '#fbbf24'), ('sma200', '200-day SMA', '#a855f7')]):
+        price.append(charts.line(label, dates, series[key], color, width=1.3))
+    for key, label, color, rotate in [('buy_dates', 'Buy Entry', '#10b981', 0), ('sell_dates', 'Exit to Cash', '#ef4444', 180)]:
+        if not series[key].empty:
+            marker = {'name': label, 'type': 'scatter', 'symbol': 'triangle', 'symbolRotate': rotate, 'symbolSize': 10, 'itemStyle': {'color': color}}
+            performance.append({**marker, 'data': charts.pairs(series[key], cum_strat.loc[series[key]])})
+            price.append({**marker, 'data': charts.pairs(series[key], close.reindex(series[key]))})
     dd_strat = (cum_strat - cum_strat.cummax()) / cum_strat.cummax() * 100
     dd_hold = (cum_hold - cum_hold.cummax()) / cum_hold.cummax() * 100
-
-    fig_canvas.add_trace(
-        go.Scatter(x=dates_str, y=cum_strat.tolist(), mode='lines', name='Strategy ($10k)',
-                   line=dict(color='#fbbf24', width=2.5)),
-        row=2, col=1, secondary_y=False
-    )
-    fig_canvas.add_trace(
-        go.Scatter(x=dates_str, y=cum_hold.tolist(), mode='lines', name=f'Buy & Hold {symbol} ($10k)',
-                   line=dict(color='#94a3b8', width=1.5, dash='dash')),
-        row=2, col=1, secondary_y=False
-    )
-
-    fig_canvas.add_trace(
-        go.Scatter(x=dates_str, y=dd_strat.tolist(), mode='lines', name='Strategy Drawdown (%)',
-                   line=dict(color='#f59e0b', width=1), fill='tozeroy', fillcolor='rgba(245, 158, 11, 0.12)'),
-        row=2, col=1, secondary_y=True
-    )
-    fig_canvas.add_trace(
-        go.Scatter(x=dates_str, y=dd_hold.tolist(), mode='lines', name=f'{symbol} Drawdown (%)',
-                   line=dict(color='#ef4444', width=1, dash='dot')),
-        row=2, col=1, secondary_y=True
-    )
-
-    fig_canvas.update_layout(
-        template='plotly_white',
-        height=620,
-        margin=dict(l=55, r=55, t=30, b=60),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        hovermode='x unified',
-        showlegend=True,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5, font=dict(size=11)),
-        font=dict(family='Inter, sans-serif')
-    )
-    fig_canvas.update_xaxes(
-        showspikes=True, spikemode='across', spikesnap='cursor', spikethickness=1,
-        spikecolor='#71717a', gridcolor='rgba(113, 113, 122, 0.15)', row=1, col=1
-    )
-    fig_canvas.update_xaxes(
-        showspikes=True, spikemode='across', spikesnap='cursor', spikethickness=1,
-        spikecolor='#71717a', gridcolor='rgba(113, 113, 122, 0.15)', row=2, col=1
-    )
-    fig_canvas.update_yaxes(title_text=f'{symbol} Price ($)', tickformat='$.2f', row=1, col=1, gridcolor='rgba(113, 113, 122, 0.15)')
-    fig_canvas.update_yaxes(title_text='Portfolio ($10k)', tickformat='$,.0f', row=2, col=1, secondary_y=False, gridcolor='rgba(113, 113, 122, 0.15)')
-    fig_canvas.update_yaxes(title_text='Drawdown (%)', ticksuffix='%', range=[-100, 5], showgrid=False, row=2, col=1, secondary_y=True)
-
-    # 2. SEPARATE PERF & DD CHARTS (backward compatibility for macros/tests)
-    fig_perf = go.Figure()
-    fig_perf.add_trace(go.Scatter(x=dates_str, y=cum_strat.tolist(), mode='lines', name='Strategy (Long/Cash)', line=dict(color='#fbbf24', width=2)))
-    fig_perf.add_trace(go.Scatter(x=series["hold_full_dates"].strftime('%Y-%m-%d').tolist(), y=series["cum_hold_full"].tolist(), mode='lines', name=f'Buy & Hold {symbol}', line=dict(color='#64748b', width=1.5, dash='dash')))
-    if not series["buy_dates"].empty:
-        fig_perf.add_trace(go.Scatter(x=series["buy_dates"].strftime('%Y-%m-%d').tolist(), y=cum_strat.loc[series["buy_dates"]].tolist(), mode='markers', marker=dict(symbol='triangle-up', size=10, color='#10b981', line=dict(width=1, color='black')), name='Buy Entry'))
-    if not series["sell_dates"].empty:
-        fig_perf.add_trace(go.Scatter(x=series["sell_dates"].strftime('%Y-%m-%d').tolist(), y=cum_strat.loc[series["sell_dates"]].tolist(), mode='markers', marker=dict(symbol='triangle-down', size=10, color='#ef4444', line=dict(width=1, color='black')), name='Sell Exit'))
-    fig_perf.update_layout(title=f'{strat_label} vs Buy & Hold for {symbol}', xaxis_title='Date', yaxis_title='Portfolio Value ($)', template='plotly_white', height=350, margin=dict(l=50, r=30, t=60, b=80), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=True, legend=dict(orientation='h', yanchor='top', y=-0.18, xanchor='center', x=0.5), font=dict(family='Inter, sans-serif'))
-
-    fig_dd = go.Figure()
-    fig_dd.add_trace(go.Scatter(x=dates_str, y=dd_strat.tolist(), mode='lines', name='Strategy DD', line=dict(color='#fbbf24', width=1.5), fill='tozeroy', fillcolor='rgba(251,191,36,0.1)'))
-    fig_dd.add_trace(go.Scatter(x=dates_str, y=dd_hold.tolist(), mode='lines', name=f'{symbol} DD', line=dict(color='#ef4444', width=1, dash='dash'), fill='tozeroy', fillcolor='rgba(239,68,68,0.15)'))
-    fig_dd.update_layout(title='Drawdown Comparison (%)', xaxis_title='Date', yaxis_title='Drawdown (%)', template='plotly_white', height=250, margin=dict(l=50, r=30, t=60, b=80), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=True, legend=dict(orientation='h', yanchor='top', y=-0.22, xanchor='center', x=0.5), font=dict(family='Inter, sans-serif'))
-
-    # 3. ROLLING INDICATOR DIAGNOSTIC CHART
-    if fam == "sma":
-        score_name, score_axis = 'SMA 50/200 Spread %', 'SMA Spread (%)'
-        score_title = f'Rolling SMA 50/200 Spread (%) for {symbol}'
-        threshold_text = "Golden Cross Line (0%)"
-    elif fam == "rsi":
-        score_name, score_axis = 'Connors RSI(2)', 'RSI (2-day)'
-        score_title = f'Rolling 2-Day RSI for {symbol}'
-        threshold_text = "Oversold Entry (15)"
-    elif fam == "composite":
-        score_name, score_axis = 'Composite Score', 'Score (0-100)'
-        score_title = f'Rolling Multi-Factor Composite Score for {symbol}'
-        threshold_text = "Bullish Entry (55)"
+    drawdown = [charts.line('Strategy Drawdown (%)', dates, dd_strat, area='rgba(251,191,36,.1)'),
+                charts.line(f'{symbol} Drawdown (%)', dates, dd_hold, '#ef4444', dash=True)]
+    canvas_series = price + [charts.line('Strategy ($10k)', dates, cum_strat, xAxisIndex=1, yAxisIndex=1),
+                             charts.line(f'Buy & Hold {symbol} ($10k)', dates, cum_hold, '#94a3b8', dash=True, xAxisIndex=1, yAxisIndex=1)]
+    canvas_series += [{**line, 'xAxisIndex': 1, 'yAxisIndex': 2} for line in drawdown]
+    canvas = {'series': canvas_series,
+              'grid': [{'left': 55, 'right': 65, 'top': 60, 'height': '43%', 'containLabel': True},
+                       {'left': 55, 'right': 65, 'top': '61%', 'height': '27%', 'containLabel': True}],
+              'xAxis': [{'type': 'time', 'gridIndex': 0}, {'type': 'time', 'gridIndex': 1}],
+              'yAxis': [{'type': 'value', 'name': f'{symbol} Price ($)', 'scale': True, 'gridIndex': 0},
+                        {'type': 'value', 'name': 'Portfolio ($10k)', 'scale': True, 'gridIndex': 1},
+                        {'type': 'value', 'name': 'Drawdown (%)', 'min': -100, 'max': 5, 'position': 'right', 'gridIndex': 1, 'splitLine': {'show': False}}],
+              'axisPointer': {'link': [{'xAxisIndex': 'all'}]},
+              'dataZoom': [{'type': 'inside', 'xAxisIndex': [0, 1], 'filterMode': 'none'},
+                           {'type': 'slider', 'xAxisIndex': [0, 1], 'height': 15, 'bottom': 10}]}
+    if fam == 'sma':
+        score_name, threshold_text = 'SMA 50/200 Spread %', 'Golden Cross Line (0%)'
+    elif fam == 'rsi':
+        score_name, threshold_text = 'Connors RSI(2)', 'Oversold Entry (15)'
+    elif fam == 'composite':
+        score_name, threshold_text = 'Composite Score', 'Bullish Entry (55)'
     else:
-        score_name, score_axis = '12-1 Momentum %', 'Momentum Score (%)'
-        score_title = f'Rolling 12-1 Momentum Score (%) for {symbol}'
-        threshold_text = ("Zero Threshold (Trend Switch)" if series["threshold"] == 0
-                          else "Absolute Hurdle (Trend Switch)")
-
-    fig_roll = go.Figure()
-    fig_roll.add_trace(go.Scatter(x=series["roll_dates"].strftime('%Y-%m-%d').tolist(),
-                                  y=series["roll_series"].tolist(),
-                                  mode='lines', name=score_name, line=dict(color='#818cf8', width=1.5)))
-    fig_roll.add_hline(
-        y=series["threshold"] * (100 if fam in ("sma", "momentum") else 1),
-        line_dash='dash',
-        line_color='#ef4444',
-        line_width=1,
-        annotation_text=threshold_text,
-        annotation_position="bottom right",
-        annotation_font=dict(size=10, color='#71717a')
-    )
-    if fam == "rsi":
-        fig_roll.add_hline(
-            y=70, line_dash='dot', line_color='#10b981', line_width=1,
-            annotation_text="Overbought Exit (70)", annotation_position="top right",
-            annotation_font=dict(size=10, color='#10b981')
-        )
-    elif fam == "composite":
-        fig_roll.add_hline(
-            y=45, line_dash='dot', line_color='#ef4444', line_width=1,
-            annotation_text="Defensive Exit (45)", annotation_position="bottom right",
-            annotation_font=dict(size=10, color='#ef4444')
-        )
-
-    fig_roll.update_layout(
-        title=score_title,
-        xaxis_title='Date',
-        yaxis_title=score_axis,
-        template='plotly_white',
-        height=280,
-        margin=dict(l=50, r=30, t=50, b=50),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        showlegend=False,
-        font=dict(family='Inter, sans-serif')
-    )
-
-    return {
-        "canvas_chart_html": fig_canvas.to_html(full_html=False, include_plotlyjs=False),
-        "perf_chart_html": fig_perf.to_html(full_html=False, include_plotlyjs=False),
-        "dd_chart_html": fig_dd.to_html(full_html=False, include_plotlyjs=False),
-        "roll_chart_html": fig_roll.to_html(full_html=False, include_plotlyjs=False),
-    }
+        score_name = '12-1 Momentum %'
+        threshold_text = 'Zero Threshold (Trend Switch)' if series['threshold'] == 0 else 'Absolute Hurdle (Trend Switch)'
+    threshold = series['threshold'] * (100 if fam in ('sma', 'momentum') else 1)
+    refs = [charts.reference('y', threshold, threshold_text, '#ef4444')]
+    if fam == 'rsi':
+        refs.append(charts.reference('y', 70, 'Overbought Exit (70)', '#10b981'))
+    elif fam == 'composite':
+        refs.append(charts.reference('y', 45, 'Defensive Exit (45)', '#ef4444'))
+    rolling = [charts.line(score_name, series['roll_dates'], series['roll_series'], '#818cf8')]
+    return {'canvas_chart_html': charts.render_chart(canvas, height=620),
+            'perf_chart_html': charts.render_chart(charts.cartesian(performance, yname='Portfolio Value ($)'), height=350),
+            'dd_chart_html': charts.render_chart(charts.cartesian(drawdown, yname='Drawdown (%)'), height=250),
+            'roll_chart_html': charts.render_chart(charts.cartesian(rolling, yname=score_name, refs=refs), height=280)}
 
 
 # --------------------------------------------------------------------------
@@ -4131,7 +3386,7 @@ _RADAR_EXCLUDED_LABELS = {
 # built-in dev key — see providers._ordered_keys / _finnhub_get / _fmp_get and the
 # AI provider fallback in ai.py.
 SETTINGS_FIELDS = (
-    "finnhub_api_key", "fmp_api_key", "sec_user_agent",
+    "finnhub_api_key", "fmp_api_key", "sec_user_agent", "marketaux_api_key",
 ) + providers.AI_SETTING_KEYS
 
 

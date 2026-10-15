@@ -4,8 +4,6 @@
 {% block title %}Live Market Microstructure - Ticker-Change{% endblock %}
 
 {% block head_extra %}
-<!-- Plotly.js CDN -->
-<script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
 <style>
   /* Fading flash effects for order book updates */
   @keyframes flash-green {
@@ -1091,64 +1089,12 @@
     const askPrices = orderBook.asks.map(a => a.price);
     const askDepths = orderBook.asks.map(a => a.cumulative);
     
-    const isDark = document.documentElement.classList.contains('dark');
-    
     const mid = (orderBook.bids[0].price + orderBook.asks[0].price) / 2;
+    const series = [TerminalCharts.line('Bids',bidPrices,bidDepths,'#10b981',{step:'end',areaStyle:{opacity:.1}}),
+                    TerminalCharts.line('Asks',askPrices,askDepths,'#f43f5e',{step:'end',areaStyle:{opacity:.1}})];
+    series[0].markLine={symbol:'none',data:[TerminalCharts.ref('x',mid,`Mid $${mid.toFixed(2)}`)]};
+    TerminalCharts.mount('depth-chart',TerminalCharts.cartesian(series,'Price ($)','Cumulative shares'));
 
-    const data = [
-      {
-        x: bidPrices,
-        y: bidDepths,
-        type: 'scatter',
-        mode: 'lines',
-        name: 'Bids',
-        fill: 'tozeroy',
-        fillcolor: 'rgba(16, 185, 129, 0.1)',
-        line: { color: '#10b981', shape: 'hv', width: 2 },
-        hovertemplate: 'Bid $%{x:.2f}<br>Cum %{y:,.0f}<extra></extra>'
-      },
-      {
-        x: askPrices,
-        y: askDepths,
-        type: 'scatter',
-        mode: 'lines',
-        name: 'Asks',
-        fill: 'tozeroy',
-        fillcolor: 'rgba(244, 63, 94, 0.1)',
-        line: { color: '#f43f5e', shape: 'hv', width: 2 },
-        hovertemplate: 'Ask $%{x:.2f}<br>Cum %{y:,.0f}<extra></extra>'
-      }
-    ];
-
-    const layout = {
-      xaxis: {
-        tickfont: { size: 9, color: isDark ? '#ffffff' : '#71717a' },
-        gridcolor: isDark ? '#27272a' : '#f4f4f5',
-        tickformat: '$,.2f',
-        zeroline: false
-      },
-      yaxis: {
-        tickfont: { size: 9, color: isDark ? '#ffffff' : '#71717a' },
-        gridcolor: isDark ? '#27272a' : '#f4f4f5',
-        zeroline: false
-      },
-      shapes: [{
-        type: 'line', x0: mid, x1: mid, y0: 0, y1: 1, yref: 'paper',
-        line: { color: '#fbbf24', width: 1.25, dash: 'dash' }
-      }],
-      annotations: [{
-        x: mid, y: 1, yref: 'paper', text: `Mid $${mid.toFixed(2)}`,
-        showarrow: false, yanchor: 'bottom',
-        font: { size: 9, color: '#fbbf24', weight: 'bold' }
-      }],
-      margin: { l: 55, r: 15, t: 14, b: 28 },
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(0,0,0,0)',
-      showlegend: false,
-      hovermode: 'x unified'
-    };
-
-    Plotly.newPlot('depth-chart', data, layout, { displayModeBar: false, responsive: true });
   }
 
 </script>

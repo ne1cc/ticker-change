@@ -3,8 +3,6 @@
 {% block title %}Strategy Backtests — ticker/change{% endblock %}
 
 {% block head_extra %}
-<!-- Load Plotly script since base.html doesn't include it globally -->
-<script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
 {% endblock %}
 
 {% block content %}
@@ -1067,80 +1065,7 @@
   {% endif %}
 </div>
 
-<script>
-  // Add dark mode support to Plotly charts dynamically
-  (function () {
-    const observer = new MutationObserver(mutations => {
-      mutations.forEach(mutation => {
-        if (mutation.attributeName === 'class') {
-          const isDark = document.documentElement.classList.contains('dark');
-          const charts = document.querySelectorAll('.js-plotly-plot');
-          charts.forEach(c => {
-            const update = {
-              'paper_bgcolor': 'rgba(0,0,0,0)',
-              'plot_bgcolor': 'rgba(0,0,0,0)',
-              'xaxis.gridcolor': isDark ? '#27272a' : '#f4f4f5',
-              'yaxis.gridcolor': isDark ? '#27272a' : '#f4f4f5',
-              'xaxis.title.font.color': isDark ? '#ffffff' : '#71717a',
-              'yaxis.title.font.color': isDark ? '#ffffff' : '#71717a',
-              'xaxis.tickfont.color': isDark ? '#ffffff' : '#71717a',
-              'yaxis.tickfont.color': isDark ? '#ffffff' : '#71717a',
-              'legend.font.color': isDark ? '#ffffff' : '#27272a',
-              'title.font.color': isDark ? '#ffffff' : '#18181b'
-            };
 
-            // Sync annotation text colors dynamically
-            if (c.layout && c.layout.annotations && c.layout.annotations.length > 0) {
-              const updatedAnns = c.layout.annotations.map(ann => {
-                const newAnn = {...ann};
-                newAnn.font = newAnn.font || {};
-                newAnn.font.color = isDark ? '#ffffff' : '#71717a';
-                return newAnn;
-              });
-              update['annotations'] = updatedAnns;
-            }
-
-            Plotly.relayout(c, update);
-          });
-        }
-      });
-    });
-    observer.observe(document.documentElement, { attributes: true });
-
-    // Initial load styling adjustment
-    window.addEventListener('load', () => {
-      const isDark = document.documentElement.classList.contains('dark');
-      const charts = document.querySelectorAll('.js-plotly-plot');
-      charts.forEach(c => {
-        const update = {
-          'paper_bgcolor': 'rgba(0,0,0,0)',
-          'plot_bgcolor': 'rgba(0,0,0,0)',
-          'xaxis.gridcolor': isDark ? '#27272a' : '#f4f4f5',
-          'yaxis.gridcolor': isDark ? '#27272a' : '#f4f4f5',
-          'xaxis.title.font.color': isDark ? '#ffffff' : '#71717a',
-          'yaxis.title.font.color': isDark ? '#ffffff' : '#71717a',
-          'xaxis.tickfont.color': isDark ? '#ffffff' : '#71717a',
-          'yaxis.tickfont.color': isDark ? '#ffffff' : '#71717a',
-          'legend.font.color': isDark ? '#ffffff' : '#27272a',
-          'title.font.color': isDark ? '#ffffff' : '#18181b'
-        };
-
-        // Sync annotation text colors dynamically
-        if (c.layout && c.layout.annotations && c.layout.annotations.length > 0) {
-          const updatedAnns = c.layout.annotations.map(ann => {
-            const newAnn = {...ann};
-            newAnn.font = newAnn.font || {};
-            newAnn.font.color = isDark ? '#ffffff' : '#71717a';
-            return newAnn;
-          });
-          update['annotations'] = updatedAnns;
-        }
-
-        Plotly.relayout(c, update);
-      });
-    });
-  })();
-</script>
 
 <script>
   // CSV export. Rows are read back out of the rendered <table> named by the

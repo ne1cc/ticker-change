@@ -92,6 +92,12 @@ def active_finnhub_key() -> str:
     return keys[0] if keys else ""
 
 
+def marketaux_key() -> str:
+    """Single server-side news credential; saved settings take precedence."""
+    return (db.get_setting("marketaux_api_key") or
+            os.environ.get("MARKETAUX_API_KEY", "")).strip()
+
+
 def sec_user_agent() -> str:
     """SEC contact UA: user setting overrides env, which overrides the default."""
     setting = (db.get_setting("sec_user_agent") or "").strip()
@@ -148,6 +154,7 @@ def configured() -> dict:
     return {
         "finnhub": bool(finnhub),
         "fmp": bool(fmp),
+        "marketaux": bool(marketaux_key()),
         "sec": True,  # keyless
         "finnhub_key_count": len(finnhub),
         "fmp_key_count": len(fmp),

@@ -67,6 +67,7 @@ carries your symbol across every page.
 | View | Pillar | Route | Purpose |
 | --- | --- | --- | --- |
 | **Price Table** | Markets | `/stock` | Multi-period change, candlestick chart, fundamentals glance |
+| **Ticker News** | Markets | `/news` | English-language headlines for the selected US or international listing |
 | **Live Microstructure** | Markets | `/live` | L2 depth, trades feed, options chain + Greeks, payoff simulator |
 | **S&P Heatmap** | Markets | `/heatmap` | Sector-grouped S&P 500 treemap, colored by daily % change, sized by dollar volume |
 | **Options Terminal** | Options | `/options` | Dollar GEX by strike, IV term structure, 3D vol surface, Greek matrix |
@@ -88,12 +89,34 @@ Also: [`/glossary`](https://ticker-change.duckdns.org/glossary) (metric referenc
 
 ### Observe — aggregate public data
 
+**`/news` — ticker headlines (optional Marketaux key)**
+- Up to 15 English-language headlines from the last seven days, newest first,
+  with publisher, publication time, and original article links
+- Three-headline preview on `/stock`, loaded independently of prices
+- Supports international listings that Marketaux can resolve; ambiguous listings
+  require a choice, and unsupported listings display a coverage message
+- Shared one-hour cache; saved headlines may be served for up to 24 hours when
+  updates fail, with the original fetch time visible
+
+Set `MARKETAUX_API_KEY` or save a key through the protected `/settings` page
+(the saved Marketaux key takes precedence). No key means a clear unavailable
+state; no simulated news is shown. The free plan returns three articles per
+request, so a full 15-headline refresh takes five requests, plus a lookup for
+an uncached listing. This integration caps all upstream attempts at 90 per UTC
+day across workers and restarts. Cached page views cost no extra requests;
+results are a selection, not a complete archive or a real-time feed.
+
+Use a dedicated key to keep the local budget meaningful. Before enabling news
+on a public deployment, confirm API-specific public-display and temporary-cache
+rights with Marketaux. A free API key alone does not establish those rights.
+No automatic paid upgrade occurs.
+
 **`/stock`**
 - 18-period price change (1D–5D through 5Y + YTD), percentage and net dollar
 - Custom lookback: *N* trading days or calendar days ago
 - ATR (30d), 52-week and all-time ranges
 - Fundamentals mini-panel (P/E, EV/EBITDA, short % float, …)
-- Interactive candlestick + volume chart (Plotly)
+- Interactive candlestick + volume chart (TradingView Lightweight Charts)
 
 **`/positioning`**
 - Valuation and fundamentals (Finnhub)
@@ -227,6 +250,7 @@ serve rather than falling back to open access.
 | _(none)_ | [SEC EDGAR](https://www.sec.gov/edgar) | Insider + 13F filings — **no key needed** |
 | `FINNHUB_API_KEY` | [Finnhub](https://finnhub.io) | Fundamentals, insider, analyst data, live trades |
 | `FMP_API_KEY` | [FMP](https://financialmodelingprep.com) | Institutional 13F holders |
+| `MARKETAUX_API_KEY` | [Marketaux](https://www.marketaux.com) | English-language ticker news |
 | `SEC_USER_AGENT` | — | Required contact string for SEC, e.g. `"Name you@email.com"` |
 
 ### AI reports *(any one provider is enough)*
@@ -250,6 +274,7 @@ JSON twins of every view, plus health and config:
 | --- | --- |
 | `GET /api/checklist/<ticker>` | Pre-trade checklist (`?trade_type=long_stock`) |
 | `GET /api/stock/<ticker>` | Price, period changes, chart metadata |
+| `GET /api/news?ticker=...` | Same-origin news feed, listing choices, freshness and availability (`?listing=` accepts a returned candidate ID) |
 | `GET /api/analytics/<ticker>` | Risk stats and metrics |
 | `GET /api/positioning/<ticker>` | Valuation, insider, institutional data |
 | `GET /api/options-greeks/<ticker>` | Option chain + Greeks (`?expiration=`, `?strikes=N\|all`) |
@@ -270,7 +295,7 @@ Full schema: [`/api/docs`](/api/docs)
 ## How it works
 
 ```
-  Browser ──►  Flask (routes, Plotly, ML, AI)
+  Browser ──►  Flask (routes, chart data, ML, AI)
                   │
                   ├── yfinance ──► SQLite (daily_prices, api_cache, settings)
                   ├── Finnhub / FMP / SEC EDGAR
@@ -311,6 +336,7 @@ Fly.io mounts a persistent volume at `/data` for `stocks.db`. Also ships with
 app.py               Routes, charts, GEX/options pricing, page data assembly
 db.py                SQLite: daily_prices, api_cache, app_settings, locks
 providers.py         Finnhub / FMP / SEC EDGAR / AI clients (fail gracefully)
+news.py              Marketaux listing resolution, headlines, cache and quota policy
 
 decide.py            Pre-trade checklist
 signals.py           Buyer Signals factor tally
@@ -333,7 +359,7 @@ ai.py                LLM analyst reports
 glossary.py          Metric definitions (tooltips + /glossary)
 api_docs.py          OpenAPI spec behind /api/docs
 warehouse.py         DuckDB warehouse experiment (not wired into the app)
-templates/           Jinja2 + Tailwind CDN + Plotly
+templates/           Jinja2 + Tailwind CDN + ECharts / Lightweight Charts
 ```
 
 ---
@@ -363,7 +389,7 @@ delayed data.
 
 ## Tech stack
 
-Flask · yfinance · pandas · numpy · Plotly · LightGBM/sklearn · Tailwind (CDN) ·
+Flask · yfinance · pandas · numpy · ECharts · LightGBM/sklearn · Tailwind (CDN) ·
 Jinja2 · Gunicorn · AWS Lightsail
 
 Do not commit secrets — use environment variables or `/settings`.

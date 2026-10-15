@@ -36,6 +36,7 @@ class TestNavigation(unittest.TestCase):
         routes = [
             "/",
             "/stock",
+            "/news",
             "/options",
             "/analytics",
             "/positioning",
@@ -83,6 +84,28 @@ class TestNavigation(unittest.TestCase):
                 html,
                 f"Pillar nav-strategies not found in response for {path}",
             )
+
+    def test_news_navigation_keeps_international_tickers(self):
+        import json
+        import subprocess
+        from test_base_nav_script import DOM_STUB, NODE, nav_script
+        if not NODE:
+            self.skipTest("node is required for executable navigation checks")
+        stub = (DOM_STUB.replace("PATHNAME", json.dumps("/news"))
+                .replace("SEARCH", json.dumps("?ticker=VOD.L"))
+                .replace("SEED", "{}"))
+        script = stub + nav_script() + """
+          const href = els['sub-link-news'].href;
+          const mobileHref = els['mobile-nav-news'].href;
+          executeTickerSearch('7203.T');
+          console.log(JSON.stringify({href, mobileHref, target: window.location.href}));
+        """
+        result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = json.loads(result.stdout)
+        self.assertEqual(state['href'], '/news?ticker=VOD.L')
+        self.assertEqual(state['mobileHref'], '/news?ticker=VOD.L')
+        self.assertEqual(state['target'], '/news?ticker=7203.T')
 
     def test_top_nav_search_bar_present_to_the_left_of_glossary(self):
         """Verify that a visible searchbar is present in top right navigation to the left of glossary."""

@@ -291,12 +291,14 @@ class TestOptionsTerminalFlaskRoutes:
             assert 'vol' in data
             assert 'cones' in data
 
-    def test_workspace_charts_enable_plotly_modebar(self):
-        """Zoom/Reset requires the modebar; every newPlot on this page must
-        keep it enabled (regression: charts were zoomable but un-restorable)."""
+    def test_workspace_charts_have_reset_and_native_renderer(self):
         from pathlib import Path
-        template = Path(__file__).resolve().parents[1] / "templates" / "options.html"
-        assert "displayModeBar: false" not in template.read_text()
+        root = Path(__file__).resolve().parents[1]
+        template = (root / 'templates/options.html').read_text()
+        assert 'Plotly' not in template
+        assert "TerminalCharts.mount('greeks-chart'" in template
+        assert "TerminalCharts.mount('payoff-chart'" in template
+        assert "['Reset'" in (root / 'static/charts.js').read_text()
 
     def test_get_full_option_chain_df_handles_nan_values(self):
         from app import get_full_option_chain_df
@@ -418,3 +420,40 @@ class TestEmpiricalGexEventStudy:
         res = compute_options_terminal("TEST", spot, chain_df, daily_df, convention="naive")
         assert res.validation is not None
         assert isinstance(res.validation, dict)
+
+
+class TestGexIvRepairAndBarStability:
+    def test_clean_chain_repairs_after_hours_corrupt_iv(self):
+        from options.gex import clean_chain, compute_gex_profile
+        # Corrupt after-hours chain: bid=0, ask=0, IV zeroed or binary sentinel (0.000010)
+        # but last_price has real value
+        df = pd.DataFrame([
+            {"strike": 100.0, "cp": "C", "dte": 1, "iv": 0.000010, "bid": 0.0, "ask": 0.0, "last_price": 2.50, "open_interest": 5000, "volume": 1200},
+            {"strike": 100.0, "cp": "P", "dte": 1, "iv": 0.015635, "bid": 0.0, "ask": 0.0, "last_price": 2.45, "open_interest": 4500, "volume": 1100},
+            {"strike": 105.0, "cp": "C", "dte": 1, "iv": 0.000010, "bid": 0.0, "ask": 0.0, "last_price": 0.50, "open_interest": 3000, "volume": 800},
+            {"strike": 95.0,  "cp": "P", "dte": 1, "iv": 0.000010, "bid": 0.0, "ask": 0.0, "last_price": 0.45, "open_interest": 3500, "volume": 900},
+        ])
+        
+        cleaned = clean_chain(df, spot=100.0)
+        assert len(cleaned) == 4, "All rows should be preserved after repair"
+        # Check that IVs were repaired to realistic levels and not left at 0.000010
+        assert (cleaned["iv"] >= 0.05).all()
+        assert (cleaned["iv"] <= 4.0).all()
+
+        # Compute GEX profile - verify no singular blowout
+        prof = compute_gex_profile(cleaned, 100.0, convention="naive")
+        assert len(prof.strikes) > 0
+        assert all(abs(g) < 1000 for g in prof.net_gex_series)
+        assert prof.call_wall is not None
+        assert prof.put_wall is not None
+
+    def test_clean_chain_repairs_via_median_fallback_if_no_last_price(self):
+        from options.gex import clean_chain
+        df = pd.DataFrame([
+            {"strike": 100.0, "cp": "C", "dte": 5, "iv": 0.25, "bid": 0.0, "ask": 0.0, "last_price": 0.0, "open_interest": 100, "volume": 10},
+            {"strike": 105.0, "cp": "C", "dte": 5, "iv": 0.000010, "bid": 0.0, "ask": 0.0, "last_price": 0.0, "open_interest": 100, "volume": 10},
+        ])
+        cleaned = clean_chain(df, spot=100.0)
+        assert len(cleaned) == 2
+        # The corrupt strike should take the median valid IV (0.25)
+        assert 0.20 <= cleaned.loc[cleaned["strike"] == 105.0, "iv"].iloc[0] <= 0.30

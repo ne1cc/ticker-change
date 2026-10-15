@@ -9,7 +9,7 @@ partial coverage and fills in as the warmer downloads history.
 from __future__ import annotations
 
 import pandas as pd
-import plotly.graph_objects as go
+import charts
 
 import db
 import sp500
@@ -237,94 +237,26 @@ def _colorscale(mid: str) -> list:
     ]
 
 
-# Sector rows carry no ticker or price, so they get their own tooltip.
-_TILE_HOVER = (
-    "<b>%{customdata[2]}</b> (%{customdata[1]})<br>"
-    "$%{customdata[3]:.2f} · %{customdata[0]}"
-    "<extra>%{parent}</extra>"
-)
-_SECTOR_HOVER = "<b>%{customdata[2]}</b><br>%{customdata[0]}<extra></extra>"
-
-
 def render_treemap(data: dict, dark: bool = False) -> str:
-    """Server-render the sector treemap as embedded Plotly HTML."""
-    mid = "#3f3f46" if dark else "#e4e4e7"
-    text_color = "#fafafa" if dark else "#111111"
-
-    ids: list[str] = []
-    labels: list[str] = []
-    parents: list[str] = []
-    values: list[float] = []
-    colors: list[float] = []
-    # treemap texttemplate can't substitute customdata, so the change text
-    # rides the first-class `text` property instead ("AAPL / +1.23%").
-    texts: list[str] = []
-    customdata: list[list] = []
-    hovertemplates: list[str] = []
-
-    by_sector: dict[str, list[dict]] = {}
-    for tile in data["tiles"]:
-        by_sector.setdefault(tile["sector"], []).append(tile)
-
+    """Native sector treemap; request path remains entirely cache-only."""
+    by_sector = {}
+    for tile in data['tiles']:
+        by_sector.setdefault(tile['sector'], []).append(tile)
+    sectors = []
     for sector, members in sorted(by_sector.items()):
-        sector_id = f"sector::{sector}"
-        sector_change = (
-            sum(m["change_pct"] * max(m["dollar_volume"], 1) for m in members)
-            / sum(max(m["dollar_volume"], 1) for m in members)
-        )
-        ids.append(sector_id)
-        labels.append(sector)
-        parents.append("")
-        values.append(sum(max(m["dollar_volume"], 1) for m in members))
-        colors.append(max(-MOVE_SPAN, min(MOVE_SPAN, sector_change)))
-        texts.append(f"{sector_change:+.2f}%")
-        customdata.append([f"{sector_change:+.2f}%", "", sector, ""])
-        hovertemplates.append(_SECTOR_HOVER)
-
-        for tile in members:
-            ids.append(tile["symbol"])
-            labels.append(tile["symbol"])
-            parents.append(sector_id)
-            values.append(max(tile["dollar_volume"], 1))
-            colors.append(max(-MOVE_SPAN, min(MOVE_SPAN, tile["change_pct"])))
-            texts.append(f"{tile['change_pct']:+.2f}%")
-            customdata.append([
-                f"{tile['change_pct']:+.2f}%",
-                tile["symbol"],
-                tile["name"],
-                tile["price"],
-            ])
-            hovertemplates.append(_TILE_HOVER)
-
-    fig = go.Figure(go.Treemap(
-        ids=ids,
-        labels=labels,
-        parents=parents,
-        values=values,
-        text=texts,
-        customdata=customdata,
-        branchvalues="total",
-        marker=dict(
-            colors=colors,
-            colorscale=_colorscale(mid),
-            cmin=-MOVE_SPAN,
-            cmax=MOVE_SPAN,
-            line=dict(width=1, color=mid),
-            showscale=False,
-        ),
-        texttemplate="%{label}<br>%{text}",
-        textfont=dict(size=14, family="Inter, sans-serif", color=text_color),
-        hovertemplate=hovertemplates,
-        root_color="rgba(0,0,0,0)",
-    ))
-    fig.update_layout(
-        margin=dict(l=0, r=0, t=0, b=0),
-        paper_bgcolor="rgba(0,0,0,0)",
-        clickmode="event",
-    )
-    return fig.to_html(
-        full_html=False,
-        include_plotlyjs=False,
-        div_id="heatmap-treemap",
-        config={"displayModeBar": False, "responsive": True},
-    )
+        total = sum(max(m['dollar_volume'], 1) for m in members)
+        change = sum(m['change_pct'] * max(m['dollar_volume'], 1) for m in members) / total
+        leaves = [{'name': t['symbol'], 'symbol': t['symbol'], 'leaf': True,
+                   'value': [max(t['dollar_volume'], 1), max(-MOVE_SPAN, min(MOVE_SPAN, t['change_pct']))],
+                   'change': f"{t['change_pct']:+.2f}%", 'company': t['name'], 'price': t['price']}
+                  for t in members]
+        sectors.append({'id': 'sector::' + sector, 'name': sector, 'change': f'{change:+.2f}%', 'value': [total, max(-MOVE_SPAN, min(MOVE_SPAN, change))], 'children': leaves})
+    option = {'series': [{'type': 'treemap', 'name': 'S&P 500', 'data': sectors,
+                         'roam': False, 'nodeClick': False, 'leafDepth': 2,
+                         'breadcrumb': {'show': False}, 'visualDimension': 1,
+                         'visualMin': -MOVE_SPAN, 'visualMax': MOVE_SPAN,
+                         'color': [stop[1] for stop in _colorscale('#3f3f46' if dark else '#e4e4e7')],
+                         'colorMappingBy': 'value', 'upperLabel': {'show': True, 'height': 24},
+                         'label': {'show': True}, 'levels': [{'itemStyle': {'borderWidth': 0, 'gapWidth': 3}},
+                             {'itemStyle': {'borderWidth': 2, 'gapWidth': 1}, 'colorMappingBy': 'value', 'visualDimension': 1}]}]}
+    return charts.render_chart(option, chart_id='heatmap-treemap', height=600)
