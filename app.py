@@ -3925,6 +3925,21 @@ def _start_heatmap_warmer():
     threading.Thread(target=_recurring, daemon=True, name="heatmap-recurring").start()
 
 
+# The warm takes ~12 min for the S&P 500. The lock is short and refreshed
+# every chunk, so a warm killed by a redeploy frees it within 30 min instead
+# of blocking the next one for hours.
+_RADAR_LOCK_TTL_HOURS = 0.5
+_RADAR_REWARM_HOURS = 12
+
+
+def _radar_warm_due() -> bool:
+    """True unless a warm ran to completion within the last 12h."""
+    progress = db.cache_get("radar", "warm_progress", _RADAR_REWARM_HOURS)
+    return not (isinstance(progress, dict)
+                and progress.get("total")
+                and progress.get("done") == progress.get("total"))
+
+
 def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True):
     """Refresh the per-ticker earnings/fundamentals/SI payloads the /radar
     scans read. Mirrors _warm_heatmap: background thread, cross-worker lock,
@@ -3932,7 +3947,8 @@ def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True)
     `background=False` runs the worker synchronously (used by tests)."""
     def _worker():
         try:
-            if not db.try_claim_lock("radar_warmer_lock", ttl_hours=6.0):
+            if not db.try_claim_lock("radar_warmer_lock",
+                                     ttl_hours=_RADAR_LOCK_TTL_HOURS):
                 return
             # The heatmap warmer keeps only ~10 sessions per S&P 500 name, so
             # backfill a year (batched, no per-ticker calls) before the
@@ -3962,6 +3978,7 @@ def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True)
                         print(f"[radar] {fn.__name__} failed for {sym}: {e}")
                 done += 1
                 if done % 25 == 0:
+                    db.cache_set("internal", "radar_warmer_lock", {})  # heartbeat
                     db.cache_set("radar", "warm_progress",
                                  {"done": done, "total": len(syms),
                                   "updated": radar.now_iso()})
@@ -3981,16 +3998,18 @@ def _warm_radar_cache(symbols: list[str] | None = None, background: bool = True)
 
 
 def _start_radar_warmer():
-    """Warm once shortly after boot, then every 12h (payload TTL is 24h)."""
+    """Every 30 min, warm if the last complete warm is over 12h old (payload
+    TTL is 24h). Redeploys don't re-warm fresh data, and an interrupted warm
+    is retried once its lock lapses."""
     if os.environ.get("RADAR_WARM_ON_BOOT", "1") != "1":
         return
 
     def _recurring():
         time.sleep(120)  # let the app bind before competing for locks
-        _warm_radar_cache()
         while True:
-            time.sleep(12 * 3600)
-            _warm_radar_cache()
+            if _radar_warm_due():
+                _warm_radar_cache(background=False)
+            time.sleep(1800)
 
     threading.Thread(target=_recurring, daemon=True, name="radar-recurring").start()
 
