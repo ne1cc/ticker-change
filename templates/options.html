@@ -520,7 +520,7 @@
       </div>
       
       <!-- GEX Chart Container -->
-      <div id="gex-plot-container" class="w-full h-[450px]"></div>
+      <div id="gex-plot-container" class="w-full h-[480px]" style="height: 480px;"></div>
 
       <!-- Top Gamma Nodes & Vanna/Charm Matrix -->
       {% if data.gex.top_nodes %}
@@ -1049,14 +1049,61 @@
   function renderGexPlot() {
     const g = terminalData?.gex;
     if (!g?.strikes?.length) return;
+    const spot = terminalData.spot_price;
     const c = TerminalCharts;
-    const series = [c.bar('Call GEX', g.call_gex_series, g.strikes, '#10b981'), c.bar('Put GEX', g.put_gex_series, g.strikes, '#f43f5e'), c.line('Net GEX', g.net_gex_series, g.strikes)];
-    const limit = Math.max(...g.call_gex_series.map(Math.abs), ...g.put_gex_series.map(Math.abs), ...g.net_gex_series.map(Math.abs), 1) * 1.12;
-    const refs = [c.ref('y', terminalData.spot_price, 'Spot')];
-    if (g.gamma_flip != null) refs.push(c.ref('y', g.gamma_flip, 'Zero-Gamma', '#a855f7'));
-    series[0].markLine = {symbol:'none', data:refs};
+
+    // Filter to active trading moneyness (+/- 15% of spot) or strikes with significant GEX,
+    // ensuring bars have proper height and visibility rather than rendering hundreds of empty 0.3px rows.
+    const minStrike = spot * 0.85;
+    const maxStrike = spot * 1.15;
+
+    const filteredStrikes = [];
+    const filteredCallGex = [];
+    const filteredPutGex = [];
+    const filteredNetGex = [];
+
+    for (let i = 0; i < g.strikes.length; i++) {
+      const k = g.strikes[i];
+      const cg = g.call_gex_series[i];
+      const pg = g.put_gex_series[i];
+      const ng = g.net_gex_series[i];
+      const hasGex = Math.abs(cg) > 0.05 || Math.abs(pg) > 0.05 || Math.abs(ng) > 0.05;
+      if ((k >= minStrike && k <= maxStrike) || hasGex) {
+        filteredStrikes.push(k);
+        filteredCallGex.push(cg);
+        filteredPutGex.push(pg);
+        filteredNetGex.push(ng);
+      }
+    }
+
+    const strikes = filteredStrikes.length ? filteredStrikes : g.strikes;
+    const callSeries = filteredStrikes.length ? filteredCallGex : g.call_gex_series;
+    const putSeries = filteredStrikes.length ? filteredPutGex : g.put_gex_series;
+    const netSeries = filteredStrikes.length ? filteredNetGex : g.net_gex_series;
+
+    const series = [
+      c.bar('Call GEX', callSeries, strikes, '#10b981'),
+      c.bar('Put GEX', putSeries, strikes, '#f43f5e'),
+      c.line('Net GEX', netSeries, strikes, '#f59e0b', { lineStyle: { color: '#f59e0b', width: 2.2 }, showSymbol: true, symbolSize: 4 })
+    ];
+
+    const maxVal = Math.max(...callSeries.map(Math.abs), ...putSeries.map(Math.abs), ...netSeries.map(Math.abs), 1);
+    const limit = Math.ceil(maxVal * 1.12);
+
+    const refs = [c.ref('y', spot, `Spot $${spot.toFixed(2)}`, '#eab308')];
+    if (g.call_wall != null) refs.push(c.ref('y', g.call_wall, `Call Wall $${g.call_wall}`, '#10b981'));
+    if (g.put_wall != null) refs.push(c.ref('y', g.put_wall, `Put Wall $${g.put_wall}`, '#f43f5e'));
+    if (g.gamma_flip != null && g.gamma_flip >= minStrike && g.gamma_flip <= maxStrike) {
+      refs.push(c.ref('y', g.gamma_flip, `Zero-Gamma $${g.gamma_flip}`, '#a855f7'));
+    }
+
+    series[0].markLine = { symbol: 'none', data: refs };
     const option = c.cartesian(series, 'Gamma exposure ($M per 1% move)', 'Strike ($)');
-    option.xAxis.min = -limit; option.xAxis.max = limit; option.terminalHorizontalBars = true;
+    option.xAxis.min = -limit;
+    option.xAxis.max = limit;
+    option.yAxis.min = Math.floor(spot * 0.88);
+    option.yAxis.max = Math.ceil(spot * 1.12);
+    option.terminalHorizontalBars = true;
     TerminalCharts.mount('gex-plot-container', option);
   }
 
