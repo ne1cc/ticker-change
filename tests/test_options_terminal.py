@@ -323,7 +323,8 @@ class TestOptionsTerminalFlaskRoutes:
             'volume': 500,
         }])
 
-        with patch('app.get_cached_expirations', return_value=['2026-10-16']), \
+        expiration = (pd.Timestamp.now() + pd.Timedelta(days=7)).strftime('%Y-%m-%d')
+        with patch('app.get_cached_expirations', return_value=[expiration]), \
              patch('app.get_cached_chain', return_value=(calls_df, puts_df, None)):
             df = get_full_option_chain_df('TEST', current_price=100.0)
             assert not df.empty
