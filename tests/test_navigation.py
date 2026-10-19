@@ -162,18 +162,15 @@ class TestNavigation(unittest.TestCase):
                 f"Deprecated legacy topbar navigation element still present: {legacy_id}",
             )
 
-    def test_desktop_nav_presents_brief_first_with_demoted_evidence(self):
-        """Hierarchy inversion: the brief surface leads the nav, and the deep
-        pages follow an 'Evidence' grouping, demoted to secondary styling."""
+    def test_desktop_nav_presents_brief_first_with_demoted_drill_down_pages(self):
+        """The brief surface leads the nav, followed by the secondary drill-down pages."""
         resp = self.client.get("/glossary")
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
 
         self.assertIn('id="nav-brief" href="/"', html)
         pos_brief = html.find('id="nav-brief"')
-        pos_evidence_label = html.find(">Evidence</span>")
-        self.assertGreater(pos_evidence_label, pos_brief,
-                           "Evidence grouping must follow the brief surface")
+        self.assertNotIn(">Evidence</span>", html)
 
         evidence_ids = [
             "nav-markets", "nav-options", "nav-analytics",
@@ -181,8 +178,8 @@ class TestNavigation(unittest.TestCase):
         ]
         for link_id in evidence_ids:
             self.assertIn(f'id="{link_id}"', html)
-            self.assertGreater(html.find(f'id="{link_id}"'), pos_evidence_label,
-                               f"{link_id} must sit under the Evidence grouping")
+            self.assertGreater(html.find(f'id="{link_id}"'), pos_brief,
+                               f"{link_id} must follow the brief link")
 
         demoted_class = re.search(r'<a id="nav-markets"[^>]*class="([^"]*)"', html)
         self.assertIsNotNone(demoted_class)
