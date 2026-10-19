@@ -32,7 +32,7 @@ function harness() {
   }))};
   const functions = ['bsD1D2', 'bsVanna', 'bsCharm', 'bsVomma', 'renderChartReferences',
     'switchGreeksChart', 'prepareComparisonView', 'setComparisonRange', 'comparisonConvention',
-    'comparisonColors', 'renderComparisonSummary', 'renderGreeksChart', 'drawPayoffDiagram'];
+    'comparisonColors', 'renderComparisonSummary', 'renderGreeksChart', 'renderGexPlot', 'drawPayoffDiagram'];
   for (const name of functions) {
     const start = template.indexOf(`  function ${name}(`);
     if (start < 0) continue;
@@ -247,4 +247,19 @@ test('polling refreshes snapshot metadata without rebuilding an unchanged chain 
   assert.equal(h.optionsData.source_as_of,fresh.source_as_of);
   assert.equal(tableRenders,0);
   assert.equal(chartRenders,1);
+});
+
+test('dealer GEX retains the taller chart and vertical navigation after merging main', () => {
+  const h = harness();
+  h.terminalData = {spot_price:100,gex:{strikes:[90,100,110],call_gex_series:[1,2,3],
+    put_gex_series:[-3,-2,-1],net_gex_series:[-2,0,2],call_wall:110,put_wall:90,gamma_flip:100}};
+  h.renderGexPlot();
+  assert.equal(h.last.id,'gex-plot-container');
+  assert.match(template, /id="gex-plot-container"[^>]*style="height: 720px;"/);
+  assert.equal(h.last.option.xAxis.min,-h.last.option.xAxis.max);
+  assert.equal(h.last.option.dataZoom[0].type,'inside');
+  assert.equal(h.last.option.dataZoom[0].yAxisIndex,0);
+  assert.equal(h.last.option.dataZoom[1].orient,'vertical');
+  assert.equal(h.last.option.dataZoom[1].yAxisIndex,0);
+  assert.equal(h.last.option.dataZoom[1].filterMode,'none');
 });

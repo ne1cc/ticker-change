@@ -1139,6 +1139,10 @@
     option.yAxis.min = Math.floor(spot * 0.88);
     option.yAxis.max = Math.ceil(spot * 1.12);
     option.terminalHorizontalBars = true;
+    option.dataZoom = [
+      { type: 'inside', yAxisIndex: 0, filterMode: 'none' },
+      { type: 'slider', yAxisIndex: 0, orient: 'vertical', right: 4, width: 12, filterMode: 'none' }
+    ];
     TerminalCharts.mount('gex-plot-container', option);
   }
 
