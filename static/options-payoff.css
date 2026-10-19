@@ -1,0 +1,45 @@
+.payoff-shell { color: inherit; min-width: 0; }
+.payoff-heading { margin-bottom: .75rem; }
+.payoff-assumptions,.payoff-source,.payoff-legend,.payoff-status { color: #71717a; font-size: .75rem; margin: .35rem 0; }
+html.dark .payoff-assumptions,html.dark .payoff-source,html.dark .payoff-legend,html.dark .payoff-status { color: #a1a1aa; }
+.payoff-actions,.payoff-view-controls,.payoff-settings { display:flex; flex-wrap:wrap; align-items:end; gap:.6rem; margin:.75rem 0; }
+.payoff-label { display:flex; flex-direction:column; gap:.3rem; color:#52525b; font-size:.75rem; font-weight:600; }
+html.dark .payoff-label { color:#d4d4d8; }
+.payoff-input { min-width:5rem; max-width:100%; border:1px solid #d4d4d8; border-radius:.375rem; background:#fafafa; padding:.4rem .5rem; color:inherit; font:inherit; }
+html.dark .payoff-input { background:#27272a; border-color:#52525b; }
+.payoff-input:focus-visible,.payoff-button:focus-visible { outline:2px solid #b45309; outline-offset:2px; }
+html.dark .payoff-input:focus-visible,html.dark .payoff-button:focus-visible { outline-color:#fbbf24; }
+.payoff-button { border:1px solid #d4d4d8; border-radius:.375rem; padding:.45rem .7rem; font-size:.75rem; font-weight:600; }
+html.dark .payoff-button { border-color:#52525b; }
+.payoff-button:hover { background:#f4f4f5; }
+html.dark .payoff-button:hover { background:#3f3f46; }
+.payoff-leg-editor,.payoff-grid-wrap { overflow:auto; max-width:100%; }
+.payoff-legs-table,.payoff-grid-table { border-collapse:separate; border-spacing:0; width:100%; font-size:.75rem; }
+.payoff-legs-table th,.payoff-legs-table td,.payoff-grid-table th,.payoff-grid-table td { border-bottom:1px solid #e4e4e7; padding:.35rem; text-align:right; white-space:nowrap; }
+html.dark .payoff-legs-table th,html.dark .payoff-legs-table td,html.dark .payoff-grid-table th,html.dark .payoff-grid-table td { border-color:#3f3f46; }
+.payoff-legs-table th:first-child,.payoff-legs-table td:first-child,.payoff-grid-table th:first-child,.payoff-grid-table td:first-child { text-align:left; }
+.payoff-legs-table .payoff-input { width:7rem; }
+.payoff-leg-selected { background:#fef3c7; }
+html.dark .payoff-leg-selected { background:#422006; }
+.payoff-source { display:block; font-size:.65rem; }
+.payoff-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(9rem,1fr)); gap:.65rem; margin:1rem 0; }
+.payoff-stat { background:#f4f4f5; border-radius:.5rem; padding:.7rem; }
+html.dark .payoff-stat { background:#27272a; }
+.payoff-stat-label,.payoff-stat-value { display:block; }
+.payoff-stat-label { color:#71717a; font-size:.7rem; margin-bottom:.3rem; }
+.payoff-stat-value { font-family:ui-monospace,monospace; font-size:1rem; }
+.payoff-grid-table { min-width:40rem; table-layout:fixed; }
+.payoff-grid-table th,.payoff-grid-table td { text-align:center; }
+.payoff-grid-table .payoff-price-sticky { position:sticky; left:0; z-index:1; background:#f4f4f5; text-align:left; }
+html.dark .payoff-grid-table .payoff-price-sticky { background:#27272a; }
+.payoff-cell { font-variant-numeric:tabular-nums; }
+html.dark .payoff-cell { color:#fff !important; }
+html.excel .payoff-cell { color:#18181b !important; }
+.payoff-cell:focus { outline:2px solid #f59e0b; outline-offset:-2px; }
+.payoff-error { color:#e11d48; font-size:.75rem; margin:.5rem 0; }
+.payoff-empty { color:#71717a; font-size:.8rem; padding:.75rem 0; }
+.payoff-control { display:flex; flex-direction:column; gap:.35rem; min-width:12rem; }
+.payoff-slider-value { font-size:.75rem; }
+.payoff-references { display:flex; flex-wrap:wrap; gap:.5rem 1rem; font-size:.7rem; margin:.5rem 0; }
+.payoff-chart { height:420px !important; }
+@media(max-width:639px) { .payoff-chart { height:360px !important; } .payoff-legs-table .payoff-input { width:5.5rem; } }

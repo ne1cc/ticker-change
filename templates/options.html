@@ -8,6 +8,7 @@
 {% block main_class %}w-full px-4 sm:px-6 lg:px-8 py-5 sm:py-8{% endblock %}
 
 {% block head_extra %}
+<link rel="stylesheet" href="{{ url_for('static', filename='options-payoff.css') }}">
 <style>
   /* Explicit chart heights survive the renderer's inline height on resize. */
   .options-visualizer-chart { height: 460px !important; flex: none; }
@@ -16,8 +17,6 @@
   html.excel .options-metric-button[aria-pressed="true"] { color: #217346; }
   html.dark .options-metric-button[aria-pressed="true"] { background: #3f3f46; color: #fbbf24; }
   .options-metric-button:focus-visible,
-  .options-payoff-inputs :is(input, select):focus-visible { outline: 2px solid #b45309; outline-offset: 2px; }
-  .options-payoff-stats > div { min-width: 0; overflow-wrap: anywhere; }
   .options-comparison-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
   .options-comparison-button { min-height: 34px; padding: 6px 10px; border: 1px solid #d4d4d8; border-radius: 6px; font-weight: 600; }
   .options-comparison-button[aria-pressed="true"] { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; }
@@ -446,7 +445,7 @@
       </div>
 
       <!-- Greeks Visualizer & Payoff Simulator -->
-      <div class="grid grid-cols-1 2xl:grid-cols-2 gap-6 items-start">
+      <div class="grid grid-cols-1 gap-6 items-start">
 
         <!-- Greeks Charts Viewer -->
         <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm min-w-0 flex flex-col">
@@ -478,65 +477,11 @@
         </div>
 
         <!-- Payoff Simulator -->
-        <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm min-w-0 flex flex-col">
-          <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-50 mb-3">{{ metric('Options Payoff Simulator', 'payoff') }}</h3>
-          <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-4">Profit or loss at expiration, before fees.</p>
-
-          <!-- Input Controls -->
-          <div class="options-payoff-inputs grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4 text-sm">
-            <div>
-              <label for="payoff-position" class="block text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">Position</label>
-              <select id="payoff-position" onchange="drawPayoffDiagram()" class="w-full px-2.5 py-1.5 bg-zinc-100 dark:bg-zinc-850 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none font-semibold">
-                <option value="long">Long (Buy)</option>
-                <option value="short">Short (Sell)</option>
-              </select>
-            </div>
-
-            <div>
-              <label for="payoff-type" class="block text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">Option Type</label>
-              <select id="payoff-type" onchange="updateSimulatorPremium(); drawPayoffDiagram()" class="w-full px-2.5 py-1.5 bg-zinc-100 dark:bg-zinc-850 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none font-semibold">
-                <option value="call">Call Option</option>
-                <option value="put">Put Option</option>
-              </select>
-            </div>
-
-            <div>
-              <label for="payoff-strike" class="block text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">Strike Price ($)</label>
-              <input id="payoff-strike" type="number" step="0.5" value="150" onchange="updateSimulatorPremium(); drawPayoffDiagram()" oninput="updateSimulatorPremium(); drawPayoffDiagram()" class="w-full px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg font-mono font-semibold" />
-            </div>
-
-            <div>
-              <label for="payoff-premium" class="block text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">Premium per share ($)</label>
-              <input id="payoff-premium" type="number" step="0.05" value="5.0" onchange="drawPayoffDiagram()" oninput="drawPayoffDiagram()" class="w-full px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg font-mono font-semibold" />
-            </div>
-
-            <div class="sm:col-span-2">
-              <label for="payoff-qty" class="block text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">Contracts (100 shares each)</label>
-              <input id="payoff-qty" type="number" min="1" value="1" onchange="drawPayoffDiagram()" oninput="drawPayoffDiagram()" class="w-full px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg font-mono font-semibold" />
-            </div>
-          </div>
-
-          <!-- Payoff Output Stats -->
-          <div class="options-payoff-stats grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-semibold mb-4">
-            <div class="bg-zinc-50 dark:bg-zinc-850 p-2 rounded-lg">
-              <span class="text-zinc-600 dark:text-zinc-300 block mb-1">Breakeven price</span>
-              <span id="payoff-stat-breakeven" class="font-mono text-base font-bold text-zinc-800 dark:text-zinc-200">--</span>
-            </div>
-            <div class="bg-zinc-50 dark:bg-zinc-850 p-2 rounded-lg">
-              <span class="text-zinc-600 dark:text-zinc-300 block mb-1">Max Profit</span>
-              <span id="payoff-stat-profit" class="font-mono text-base font-bold text-emerald-500">--</span>
-            </div>
-            <div class="bg-zinc-50 dark:bg-zinc-850 p-2 rounded-lg">
-              <span class="text-zinc-600 dark:text-zinc-300 block mb-1">Max Loss</span>
-              <span id="payoff-stat-loss" class="font-mono text-base font-bold text-rose-500">--</span>
-            </div>
-          </div>
-
-          <!-- Payoff Chart -->
-          <div id="payoff-references" class="flex flex-wrap gap-x-5 gap-y-2 text-xs text-zinc-600 dark:text-zinc-300 mb-2" aria-label="Payoff chart reference prices"></div>
-          <div id="payoff-chart" class="w-full options-visualizer-chart"></div>
-        </div>
-
+        <section class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm min-w-0 flex flex-col">
+          <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-50 mb-1">{{ metric('Options Payoff Simulator', 'payoff') }}</h3>
+          <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-3">Build an options strategy and explore profit or loss across underlying prices and dates.</p>
+          <div id="payoff-simulator-content"></div>
+        </section>
       </div>
     </div>
 
@@ -1070,6 +1015,8 @@
   </div>
 </div>
 
+<script src="{{ url_for('static', filename='options-payoff.js') }}"></script>
+<script src="{{ url_for('static', filename='options-payoff-simulator.js') }}"></script>
 <script>
   const terminalData = {{ data | tojson }};
   const ticker = "{{ ticker }}";
@@ -1084,6 +1031,29 @@
   let requestedExpiration = null;
   let optionsAnalysisData = null;
   let greeksPollInterval = null;  // 60s options greeks refresh (chain tab only)
+  let payoffController = null;
+
+  function ensurePayoffSimulator() {
+    if (payoffController) return payoffController;
+    if (!window.TerminalCharts || !window.OptionsPayoffSimulator) return null;
+    const root = document.getElementById('payoff-simulator-content');
+    if (!root) return null;
+    payoffController = OptionsPayoffSimulator.create({
+      root,
+      charts: TerminalCharts,
+      renderReferences: renderChartReferences,
+      getRate: () => {
+        const value = parseFloat(document.getElementById('rf-rate-input')?.value || '0.045');
+        return Number.isFinite(value) ? value : 0.045;
+      }
+    });
+    return payoffController;
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const controller = ensurePayoffSimulator();
+    if (optionsData) controller?.setChain(optionsData, optionsLoadStatus);
+  });
 
   function switchTab(tabName) {
     activeTab = tabName;
@@ -1332,6 +1302,7 @@
     const requestGeneration = ++optionsRequestGeneration;
     requestedExpiration = date;
     optionsLoadStatus = 'loading';
+    ensurePayoffSimulator()?.setStatus('loading', date);
     if (optionsData?.options?.length) renderGreeksChart();
 
     document.getElementById('option-chain-body').innerHTML = `
@@ -1354,6 +1325,7 @@
     } catch (error) {
       if (requestGeneration !== optionsRequestGeneration) return;
       optionsLoadStatus = 'error';
+      ensurePayoffSimulator()?.setStatus('error', date);
       renderGreeksChart();
       document.getElementById('option-chain-body').innerHTML = '<tr class="text-center text-rose-500"><td colspan="21" class="py-40">Failed to fetch options chain. <button class="underline" onclick="loadOptionsGreeks()">Retry</button></td></tr>';
       return;
@@ -1361,6 +1333,7 @@
     if (requestGeneration !== optionsRequestGeneration) return;
     if (!res.ok) {
       optionsLoadStatus = 'error';
+      ensurePayoffSimulator()?.setStatus('error', date);
       renderGreeksChart();
       document.getElementById('option-chain-body').innerHTML = `
         <tr class="text-center text-zinc-400">
@@ -1376,7 +1349,7 @@
     optionsLoadStatus = optionsData.options?.length ? 'ready' : 'empty';
     renderOptionChainTable();
     renderGreeksChart();
-    initPayoffSimulator();
+    ensurePayoffSimulator()?.setChain(optionsData, optionsLoadStatus);
 
     // Keep OI/volume/Greeks current during a live session; harmless once
     // already running since the interval is only ever created once.
@@ -1457,59 +1430,10 @@
     syncChainHeaderOffset();
   }
 
-  function updateSimulatorPremium() {
-    if (!optionsData || !optionsData.options.length) return;
-
-    const strike = parseFloat(document.getElementById('payoff-strike').value);
-    const type = document.getElementById('payoff-type').value;
-
-    if (isNaN(strike)) return;
-
-    // Find closest strike
-    let closestOpt = optionsData.options[0];
-    let minDiff = Math.abs(closestOpt.strike - strike);
-
-    optionsData.options.forEach(opt => {
-      const diff = Math.abs(opt.strike - strike);
-      if (diff < minDiff) {
-        minDiff = diff;
-        closestOpt = opt;
-      }
-    });
-
-    // Calculate premium (mid price)
-    let premium = 0;
-    if (type === 'call') {
-      premium = (closestOpt.call_bid + closestOpt.call_ask) / 2 || closestOpt.call_last || 1.5;
-    } else {
-      // Use put mid/last, fallback to call if missing, else default
-      premium = (closestOpt.put_bid + closestOpt.put_ask) / 2 || closestOpt.put_last || (closestOpt.call_bid + closestOpt.call_ask) / 2 || 1.5;
-    }
-
-    document.getElementById('payoff-premium').value = premium.toFixed(2);
-  }
-
   function selectOptionForSimulator(strike, type) {
     if (!optionsData) return;
-
-    const opt = optionsData.options.find(o => Math.abs(o.strike - strike) < 0.01);
-    if (!opt) return;
-
-    document.getElementById('payoff-strike').value = strike.toFixed(2);
-    document.getElementById('payoff-type').value = type;
-
-    let premium = 0;
-    if (type === 'call') {
-      premium = (opt.call_bid + opt.call_ask) / 2 || opt.call_last || 1.5;
-    } else {
-      premium = (opt.put_bid + opt.put_ask) / 2 || opt.put_last || (opt.call_bid + opt.call_ask) / 2 || 1.5;
-    }
-
-    document.getElementById('payoff-premium').value = premium.toFixed(2);
-    drawPayoffDiagram();
-
-    // Smooth scroll to the payoff chart
-    document.getElementById('payoff-chart').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    ensurePayoffSimulator()?.selectFromChain(strike, type);
+    document.getElementById('payoff-simulator-content')?.scrollIntoView({behavior:'smooth',block:'nearest'});
   }
 
   function renderChartReferences(id, refs) {
@@ -1750,120 +1674,6 @@
     TerminalCharts.mount('greeks-chart',option);
   }
 
-  function initPayoffSimulator() {
-    if (!optionsData || !optionsData.options.length) return;
-
-    const strikes = optionsData.options;
-    const spot = optionsData.spot_price;
-    let closestOpt = strikes[0];
-    let minDiff = Math.abs(closestOpt.strike - spot);
-
-    strikes.forEach(opt => {
-      const diff = Math.abs(opt.strike - spot);
-      if (diff < minDiff) {
-        minDiff = diff;
-        closestOpt = opt;
-      }
-    });
-
-    document.getElementById('payoff-strike').value = closestOpt.strike.toFixed(2);
-    const premium = (closestOpt.call_bid + closestOpt.call_ask) / 2 || closestOpt.call_last || 1.5;
-    document.getElementById('payoff-premium').value = premium.toFixed(2);
-
-    drawPayoffDiagram();
-  }
-
-  function drawPayoffDiagram() {
-    const strike = parseFloat(document.getElementById('payoff-strike').value);
-    const premium = parseFloat(document.getElementById('payoff-premium').value);
-    const qty = parseInt(document.getElementById('payoff-qty').value) || 1;
-    const type = document.getElementById('payoff-type').value;
-    const position = document.getElementById('payoff-position').value;
-
-    if (isNaN(strike) || isNaN(premium) || !optionsData) return;
-
-    const spot = optionsData.spot_price;
-
-    const breakeven = type === 'call' ? strike + premium : strike - premium;
-    const prices = [];
-    let minVal = Math.max(0, Math.min(strike, spot) * 0.8);
-    let maxVal = Math.max(strike, spot) * 1.2;
-    const padding = Math.max((maxVal - minVal) * .05, .01);
-    if (Number.isFinite(breakeven) && breakeven >= 0) {
-      if (breakeven < minVal) minVal = Math.max(0, breakeven - padding);
-      if (breakeven > maxVal) maxVal = breakeven + padding;
-    }
-    const steps = 100;
-
-    for (let i = 0; i <= steps; i++) {
-      prices.push(minVal + (i / steps) * (maxVal - minVal));
-    }
-
-    [strike, breakeven].forEach(price => {
-      if (price >= minVal && price <= maxVal && !prices.includes(price)) prices.push(price);
-    });
-    prices.sort((a,b) => a-b);
-
-    const pnlValues = prices.map(s => {
-      let payoff = 0;
-      if (type === 'call') {
-        payoff = Math.max(s - strike, 0);
-      } else {
-        payoff = Math.max(strike - s, 0);
-      }
-
-      let pnl = 0;
-      if (position === 'long') {
-        pnl = (payoff - premium) * qty * 100;
-      } else {
-        pnl = (premium - payoff) * qty * 100;
-      }
-
-      return pnl;
-    });
-
-    let maxProfit = 0;
-    let maxLoss = 0;
-
-    if (type === 'call') {
-      if (position === 'long') {
-        maxProfit = 'Unlimited';
-        maxLoss = `-$${(premium * qty * 100).toFixed(0)}`;
-      } else {
-        maxProfit = `$${(premium * qty * 100).toFixed(0)}`;
-        maxLoss = 'Unlimited';
-      }
-    } else {
-      if (position === 'long') {
-        maxProfit = `$${((strike - premium) * qty * 100).toFixed(0)}`;
-        maxLoss = `-$${(premium * qty * 100).toFixed(0)}`;
-      } else {
-        maxProfit = `$${(premium * qty * 100).toFixed(0)}`;
-        maxLoss = `-$${((strike - premium) * qty * 100).toFixed(0)}`;
-      }
-    }
-
-    document.getElementById('payoff-stat-breakeven').innerText = `$${breakeven.toFixed(2)}`;
-
-    const profitEl = document.getElementById('payoff-stat-profit');
-    profitEl.innerText = maxProfit;
-    profitEl.className = (maxProfit.includes('-') || maxProfit === 'Shortage?') ? 'font-mono text-base font-bold text-rose-500' : 'font-mono text-base font-bold text-emerald-500';
-
-    const lossEl = document.getElementById('payoff-stat-loss');
-    lossEl.innerText = maxLoss;
-    lossEl.className = (maxLoss.includes('-') || maxLoss === 'Unlimited') ? 'font-mono text-base font-bold text-rose-500' : 'font-mono text-base font-bold text-emerald-500';
-
-    const series = [TerminalCharts.line('P&L ($)',prices,pnlValues,'#6366f1')];
-    const refs = [TerminalCharts.ref('y',0,'$0 P&L','#71717a'),TerminalCharts.ref('x',spot,'Current price'),TerminalCharts.ref('x',breakeven,'Breakeven price','#10b981')];
-    renderChartReferences('payoff-references', refs);
-    series[0].markLine={symbol:'none',data:refs.filter(ref => ref.xAxis == null || ref.xAxis >= 0)};
-    const option = TerminalCharts.cartesian(series,'Underlying price at expiration ($)','Total P&L ($)');
-    Object.assign(option.xAxis, {scale:true,min:minVal,max:maxVal,axisLabel:{fontSize:12,hideOverlap:true}});
-    option.yAxis.axisLabel = {fontSize:12,hideOverlap:true};
-    option.yAxis.nameGap = 55;
-    TerminalCharts.mount('payoff-chart',option);
-  }
-
   // Options greeks poll — refreshes the chain every 60s while the chain tab
   // is visible, so OI/volume/Greeks stay current during a live session.
   async function pollOptionsGreeks() {
@@ -1884,6 +1694,7 @@
         optionsData = fresh;
         if (observationsChanged) renderOptionChainTable();
         renderGreeksChart();
+        ensurePayoffSimulator()?.setChain(optionsData, 'ready');
       }
     } catch (e) { /* network blip — ignore, next tick retries */ }
   }

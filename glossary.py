@@ -210,8 +210,8 @@ GLOSSARY: dict[str, dict] = {
     "payoff": {
         "term": "Payoff Diagram & Breakeven",
         "section": "Options & Volatility",
-        "short": "Profit/loss of an option position at expiration across stock prices, plus the breakeven point.",
-        "long": "Shows P&L at expiration as a function of the underlying price for the selected position. Breakeven for a long call is strike + premium; for a long put, strike − premium. Long options cap loss at the premium; short options cap gain at the premium but carry large or unlimited loss. This ignores early assignment and pre-expiry time value.",
+        "short": "Combined strategy profit or loss across underlying prices, with breakeven points.",
+        "long": "Shows combined option-leg P&L at expiration using intrinsic value, including multiple breakevens. Scenario dates before expiration use Black–Scholes values and each leg’s implied volatility. Estimates exclude dividends, early exercise or assignment, commissions, and slippage.",
     },
     "event_vol_flag": {
         "term": "Event Vol Flag",

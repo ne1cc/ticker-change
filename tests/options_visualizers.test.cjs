@@ -32,21 +32,16 @@ function harness() {
   }))};
   const functions = ['bsD1D2', 'bsVanna', 'bsCharm', 'bsVomma', 'renderChartReferences',
     'switchGreeksChart', 'prepareComparisonView', 'setComparisonRange', 'comparisonConvention',
-    'comparisonColors', 'renderComparisonSummary', 'renderGreeksChart', 'renderGexPlot', 'drawPayoffDiagram'];
+    'comparisonColors', 'renderComparisonSummary', 'renderGreeksChart', 'renderGexPlot'];
   for (const name of functions) {
     const start = template.indexOf(`  function ${name}(`);
     if (start < 0) continue;
     const end = template.indexOf('\n  }', start) + 4;
     vm.runInContext(template.slice(start, end), context);
   }
-  for (const [id, value] of Object.entries({'rf-rate-input': '.045', 'payoff-strike': '705',
-    'payoff-premium': '10', 'payoff-qty': '1', 'payoff-type': 'call', 'payoff-position': 'long'})) {
-    document.getElementById(id).value = value;
-  }
   return context;
 }
 function text(node) { return [node.textContent, node.innerText, ...node.children.map(text)].join(' '); }
-function pnlAt(option, price) { return option.series[0].data.find(p => p[0] === price)?.[1]; }
 
 test('Greeks fills the selected strike range, including a single-strike chain', () => {
   const h = harness(); h.renderGreeksChart();
@@ -154,49 +149,6 @@ test('reference key preserves distinct names at an identical price', () => {
   assert.match(key, /Current price/); assert.match(key, /Call wall/); assert.match(key, /705\.00/);
 });
 
-for (const type of ['call', 'put']) for (const position of ['long', 'short']) {
-  test(`${position} ${type} retains expiration P&L and risk statistics`, () => {
-    const h = harness();
-    h.document.getElementById('payoff-type').value = type;
-    h.document.getElementById('payoff-position').value = position;
-    h.drawPayoffDiagram();
-    const direction = position === 'long' ? 1 : -1;
-    const breakeven = type === 'call' ? 715 : 695;
-    assert.equal(pnlAt(h.last.option, 705), -1000 * direction);
-    assert.equal(pnlAt(h.last.option, breakeven), 0);
-    assert.equal(h.document.getElementById('payoff-stat-breakeven').innerText, `$${breakeven.toFixed(2)}`);
-    const profit = h.document.getElementById('payoff-stat-profit').innerText;
-    const loss = h.document.getElementById('payoff-stat-loss').innerText;
-    assert.equal(profit, position === 'short' ? '$1000' : type === 'call' ? 'Unlimited' : '$69500');
-    assert.equal(loss, position === 'long' ? '-$1000' : type === 'call' ? 'Unlimited' : '-$69500');
-    const first = pnlAt(h.last.option, 705);
-    h.document.getElementById('payoff-qty').value = '2'; h.drawPayoffDiagram();
-    assert.equal(pnlAt(h.last.option, 705), first * 2);
-    assert.equal(h.document.getElementById('payoff-stat-breakeven').innerText, `$${breakeven.toFixed(2)}`);
-    assert.equal(h.last.option.xAxis.scale, true);
-    assert.ok(h.last.option.xAxis.min > 0);
-  });
-}
-
-test('coincident spot and breakeven keep readable keys and hide rotated labels', () => {
-  const h = harness(); h.document.getElementById('payoff-premium').value = '0'; h.drawPayoffDiagram();
-  const refs = h.last.option.series[0].markLine.data;
-  assert.ok(refs.filter(ref => ref.xAxis != null).every(ref => ref.label.show === false));
-  assert.ok(refs.some(ref => ref.name === '$0 P&L'));
-  const key = text(h.document.getElementById('payoff-references'));
-  assert.match(key, /Current price/); assert.match(key, /Breakeven price/);
-});
-
-test('positive breakeven outside the old range is included; negative prices are excluded', () => {
-  const h = harness(); h.document.getElementById('payoff-premium').value = '400'; h.drawPayoffDiagram();
-  assert.ok(h.last.option.xAxis.max > 1105);
-  assert.equal(pnlAt(h.last.option, 1105), 0);
-  h.document.getElementById('payoff-type').value = 'put';
-  h.document.getElementById('payoff-premium').value = '800'; h.drawPayoffDiagram();
-  assert.ok(h.last.option.xAxis.min >= 0);
-  assert.match(text(h.document.getElementById('payoff-references')), /outside/);
-});
-
 test('chain loading ignores a stale JSON response and supports failure, empty data, and retry', async () => {
   const h = harness();
   const start = template.indexOf('  async function loadOptionsGreeks(');
@@ -204,7 +156,8 @@ test('chain loading ignores a stale JSON response and supports failure, empty da
   vm.runInContext(template.slice(start, end), h);
   Object.assign(h, {activeTab:'chain', ticker:'META', optionsRequestGeneration:0,
     requestedExpiration:null, greeksPollInterval:1, strikeCountParam:()=>'',
-    renderOptionChainTable(){}, renderGreeksChart(){}, initPayoffSimulator(){}});
+    renderOptionChainTable(){}, renderGreeksChart(){},
+    ensurePayoffSimulator(){return {setStatus(){},setChain(){}};}});
   const select = h.document.getElementById('expiration-select');
   select.value = '2026-11-20';
   let finishOld;
