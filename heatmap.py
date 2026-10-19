@@ -366,7 +366,7 @@ def _series_data(tiles: list[dict], period: dict) -> list[dict]:
 def render_treemap(data: dict, dark: bool = False) -> str:
     """Native sector treemap; request path remains entirely cache-only.
 
-    Clicking a sector zooms into it (breadcrumb returns to the full map);
+    Clicking a sector zooms into it (the '← All sectors' control returns to the full map);
     clicking a ticker opens its price table (wired in static/charts.js).
     The 1D view is the base option; `terminalPeriods` carries the data for
     each period so the toggle swaps views client-side without a round trip.
@@ -377,8 +377,7 @@ def render_treemap(data: dict, dark: bool = False) -> str:
     option = {'terminalPeriods': periods,
               'series': [{'type': 'treemap', 'name': data.get('label', 'S&P 500'), 'data': periods[0]['data'],
                          'roam': False, 'nodeClick': False, 'leafDepth': 2,
-                         'breadcrumb': {'show': True, 'bottom': 0, 'height': 24, 'emptyItemWidth': 28,
-                                        'itemStyle': {'gapWidth': 10}},
+                         'breadcrumb': {'show': False},
                          'visualDimension': 1,
                          'visualMin': -first['span'], 'visualMax': first['span'],
                          'color': [stop[1] for stop in _colorscale('#3f3f46' if dark else '#e4e4e7')],

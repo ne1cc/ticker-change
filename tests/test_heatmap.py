@@ -189,9 +189,10 @@ class TestRenderTreemap(TempDBCase):
         html = heatmap.render_treemap(self._data())
         option = json.loads(html.split('type="application/json"', 1)[1].split('>', 1)[1].split('</script>', 1)[0])
         series = option['series'][0]
-        # Sector clicks re-root via charts.js (treemapRootToNode); the breadcrumb is the way back.
+        # Sector clicks re-root via charts.js (treemapRootToNode); an HTML control is the way back,
+        # because the canvas breadcrumb's text boxes overlapped.
         self.assertFalse(series['nodeClick'])
-        self.assertTrue(series['breadcrumb']['show'])
+        self.assertFalse(series['breadcrumb']['show'])
         self.assertEqual('sector::Technology', series['data'][0]['id'])
 
     def test_sector_tooltip_omits_ticker_and_price(self):
