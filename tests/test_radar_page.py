@@ -1,5 +1,8 @@
 """/radar: three tabs render; cold cache renders warming skeleton; tunables echoed."""
 import os
+import re
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -125,6 +128,102 @@ class TestRadarPage(unittest.TestCase):
     def test_value_tab_has_no_peer_cap_input(self):
         html = self._render(self._snap(), "value")
         self.assertNotIn("tunable-peer-cap", html)
+
+    def test_squeeze_table_filter_and_sort_controls(self):
+        squeeze = {"rows": [{"symbol": "ECHO", "short_pct_float": 0.225,
+                              "dtc_vendor": 8.23, "dtc_calc": 6.64,
+                              "si_change": -8.1, "squeeze_score": 72.9,
+                              "squeeze_level": "HIGH", "price_20d": -0.087}],
+                   "excluded": []}
+        html = self._render(self._snap(squeeze=squeeze), "squeeze")
+
+        self.assertIn('id="squeeze-row-filter"', html)
+        self.assertEqual(html.count("data-sort-column="), 6)
+        self.assertIn('data-sort-value="0.225"', html)
+        self.assertIn('data-sort-value="8.23"', html)
+
+        for tab in ("drift", "value"):
+            self.assertNotIn('id="squeeze-row-filter"',
+                             self._render(self._snap(squeeze=squeeze), tab))
+
+    @unittest.skipUnless(shutil.which("node"), "node is required for browser-script checks")
+    def test_squeeze_filter_and_sort_behavior(self):
+        squeeze = {"rows": [{"symbol": "ECHO", "short_pct_float": 0.225,
+                              "dtc_vendor": 8.23, "dtc_calc": 6.64,
+                              "si_change": -8.1, "squeeze_score": 72.9,
+                              "squeeze_level": "HIGH", "price_20d": -0.087},
+                             {"symbol": "FOXA", "short_pct_float": 0.282,
+                              "dtc_vendor": 9.72, "dtc_calc": 13.17,
+                              "si_change": 5.8, "squeeze_score": 76.9,
+                              "squeeze_level": "EXTREME", "price_20d": -0.009}],
+                   "excluded": []}
+        html = self._render(self._snap(squeeze=squeeze), "squeeze")
+        script = next(s for s in re.findall(r"<script>(.*?)</script>", html, re.S)
+                      if "[data-squeeze-table]" in s)
+        harness = r"""
+const assert = require('node:assert/strict');
+function node() {
+  const listeners = {};
+  return {
+    listeners, hidden: false, textContent: '', value: '', attributes: {},
+    addEventListener(type, fn) { listeners[type] = fn; },
+    setAttribute(key, value) { this.attributes[key] = value; },
+    querySelector(selector) { return selector === '.sort-indicator' ? this.indicator : null; },
+    closest() { return null; },
+  };
+}
+const keys = ['symbol', 'short_pct_float', 'dtc_vendor', 'si_change', 'squeeze_score', 'price_20d'];
+const headers = keys.map((key, i) => Object.assign(node(), {
+  dataset: {sortColumn: key, sortType: i === 0 ? 'text' : 'number'},
+  parentElement: null, indicator: node(),
+}));
+headers.forEach(header => { header.parentElement = {children: headers}; });
+function row(values) {
+  const result = node();
+  result.cells = values.map(value => Object.assign(node(), {dataset: {sortValue: String(value)}}));
+  Object.defineProperty(result, 'textContent', {get() { return this.cells.map(cell => cell.dataset.sortValue).join(' '); }});
+  return result;
+}
+const echo = row(['ECHO', 0.225, 8.23, -8.1, 72.9, -0.087]);
+const foxa = row(['FOXA', 0.282, 9.72, 5.8, 76.9, -0.009]);
+const rows = [foxa, echo];
+const emptyRow = node();
+const body = {
+  querySelectorAll() { return rows; },
+  insertBefore(item) { rows.splice(rows.indexOf(item), 1); rows.push(item); },
+};
+const table = {
+  tBodies: [body],
+  querySelectorAll() { return headers; },
+  querySelector() { return emptyRow; },
+};
+const filter = Object.assign(node(), {value: ''});
+const count = node();
+global.document = {
+  querySelector(selector) { return selector === '[data-squeeze-table]' ? table : null; },
+  querySelectorAll() { return []; },
+  getElementById(id) { return id === 'squeeze-row-filter' ? filter : count; },
+};
+"""
+        checks = r"""
+assert.equal(count.textContent, '2 of 2 rows');
+filter.value = 'FOXA';
+filter.listeners.input();
+assert.equal(echo.hidden, true);
+assert.equal(foxa.hidden, false);
+headers[2].listeners.click({target: headers[2]});
+assert.deepEqual(rows.map(item => item.cells[0].dataset.sortValue), ['ECHO', 'FOXA']);
+assert.equal(headers[2].attributes['aria-sort'], 'ascending');
+headers[2].listeners.click({target: headers[2]});
+assert.deepEqual(rows.map(item => item.cells[0].dataset.sortValue), ['FOXA', 'ECHO']);
+assert.equal(headers[2].attributes['aria-sort'], 'descending');
+filter.value = 'not found';
+filter.listeners.input();
+assert.equal(emptyRow.hidden, false);
+"""
+        result = subprocess.run([shutil.which("node"), "-e", harness + script + checks],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_empty_tab_explains_exclusions(self):
         squeeze = {"rows": [], "excluded": [

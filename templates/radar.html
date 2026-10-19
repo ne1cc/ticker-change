@@ -74,6 +74,13 @@
            class="w-28 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-900 dark:text-zinc-100">
     <span class="hidden text-emerald-500 radar-saved">saved · rescanning, refreshing shortly</span>
   </form>
+  <div class="flex items-center gap-2 mb-4 text-xs text-zinc-400">
+    <label for="squeeze-row-filter">Filter rows</label>
+    <input id="squeeze-row-filter" type="search" placeholder="Ticker or value"
+           autocomplete="off"
+           class="w-48 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400">
+    <span id="squeeze-filter-count" class="text-zinc-400" aria-live="polite"></span>
+  </div>
   {% endif %}
 
   {% if tab == 'drift' and payload and payload.drift.upcoming %}
@@ -133,28 +140,31 @@
       </tbody>
     </table>
     {% else %}
-    <table class="w-full text-sm">
+    <table class="w-full text-sm" data-squeeze-table>
       <thead>
         <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
-          <th class="py-1.5 pr-4">Ticker</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('SI % float', 'short_pct_float') }}</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('DTC', 'days_to_cover') }}</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('MoM Δ', 'si_mom_change') }}</th>
-          <th class="py-1.5 pr-4 text-right">{{ metric('Squeeze score', 'squeeze_composite') }}</th>
-          <th class="py-1.5 pr-4 text-right">20d chg</th>
+          <th scope="col" tabindex="0" aria-sort="none" data-sort-column="symbol" data-sort-type="text" class="py-1.5 pr-4 cursor-pointer select-none focus-visible:outline focus-visible:outline-amber-500">Ticker <span class="sort-indicator" aria-hidden="true">↕</span></th>
+          <th scope="col" tabindex="0" aria-sort="none" data-sort-column="short_pct_float" data-sort-type="number" class="py-1.5 pr-4 text-right cursor-pointer select-none focus-visible:outline focus-visible:outline-amber-500">{{ metric('SI % float', 'short_pct_float') }} <span class="sort-indicator" aria-hidden="true">↕</span></th>
+          <th scope="col" tabindex="0" aria-sort="none" data-sort-column="dtc_vendor" data-sort-type="number" class="py-1.5 pr-4 text-right cursor-pointer select-none focus-visible:outline focus-visible:outline-amber-500">{{ metric('DTC', 'days_to_cover') }} <span class="sort-indicator" aria-hidden="true">↕</span></th>
+          <th scope="col" tabindex="0" aria-sort="none" data-sort-column="si_change" data-sort-type="number" class="py-1.5 pr-4 text-right cursor-pointer select-none focus-visible:outline focus-visible:outline-amber-500">{{ metric('MoM Δ', 'si_mom_change') }} <span class="sort-indicator" aria-hidden="true">↕</span></th>
+          <th scope="col" tabindex="0" aria-sort="none" data-sort-column="squeeze_score" data-sort-type="number" class="py-1.5 pr-4 text-right cursor-pointer select-none focus-visible:outline focus-visible:outline-amber-500">{{ metric('Squeeze score', 'squeeze_composite') }} <span class="sort-indicator" aria-hidden="true">↕</span></th>
+          <th scope="col" tabindex="0" aria-sort="none" data-sort-column="price_20d" data-sort-type="number" class="py-1.5 pr-4 text-right cursor-pointer select-none focus-visible:outline focus-visible:outline-amber-500">20d chg <span class="sort-indicator" aria-hidden="true">↕</span></th>
         </tr>
       </thead>
       <tbody class="font-mono">
         {% for r in payload[tab].rows %}
-        <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
-          <td class="py-1.5 pr-4"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
-          <td class="py-1.5 pr-4 text-right">{{ '%.1f%%' | format((r.short_pct_float or 0) * 100) }}</td>
-          <td class="py-1.5 pr-4 text-right">{{ r.dtc_vendor }} <span class="text-[10px] text-zinc-400">calc {{ r.dtc_calc if r.dtc_calc is not none else '—' }}</span></td>
-          <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (r.si_change or 0) > 0 else 'text-red-500' if (r.si_change or 0) < 0 else 'text-zinc-400' }}">{{ '%+.1f%%' | format(r.si_change) if r.si_change is not none else '—' }}</td>
-          <td class="py-1.5 pr-4 text-right">{{ r.squeeze_score }} <span class="text-[10px] text-zinc-400">{{ r.squeeze_level }}</span></td>
-          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format((r.price_20d or 0) * 100) if r.price_20d is not none else '—' }}</td>
+        <tr class="border-b border-zinc-100 dark:border-zinc-800/50" data-squeeze-row>
+          <td class="py-1.5 pr-4" data-sort-value="{{ r.symbol }}"><a class="hover:text-amber-500" href="/analytics?ticker={{ r.symbol }}">{{ r.symbol }}</a></td>
+          <td class="py-1.5 pr-4 text-right" data-sort-value="{{ r.short_pct_float if r.short_pct_float is not none else '' }}">{{ '%.1f%%' | format((r.short_pct_float or 0) * 100) }}</td>
+          <td class="py-1.5 pr-4 text-right" data-sort-value="{{ r.dtc_vendor if r.dtc_vendor is not none else '' }}">{{ r.dtc_vendor }} <span class="text-[10px] text-zinc-400">calc {{ r.dtc_calc if r.dtc_calc is not none else '—' }}</span></td>
+          <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (r.si_change or 0) > 0 else 'text-red-500' if (r.si_change or 0) < 0 else 'text-zinc-400' }}" data-sort-value="{{ r.si_change if r.si_change is not none else '' }}">{{ '%+.1f%%' | format(r.si_change) if r.si_change is not none else '—' }}</td>
+          <td class="py-1.5 pr-4 text-right" data-sort-value="{{ r.squeeze_score if r.squeeze_score is not none else '' }}">{{ r.squeeze_score }} <span class="text-[10px] text-zinc-400">{{ r.squeeze_level }}</span></td>
+          <td class="py-1.5 pr-4 text-right" data-sort-value="{{ r.price_20d if r.price_20d is not none else '' }}">{{ '%+.1f%%' | format((r.price_20d or 0) * 100) if r.price_20d is not none else '—' }}</td>
         </tr>
         {% endfor %}
+        <tr data-squeeze-filter-empty hidden>
+          <td colspan="6" class="py-4 text-center text-sm text-zinc-400">No rows match this filter.</td>
+        </tr>
       </tbody>
     </table>
     {% endif %}
@@ -188,4 +198,86 @@
     });
   });
 </script>
+{% if tab == 'squeeze' and payload and payload.squeeze.rows %}
+<script>
+  (function () {
+    var table = document.querySelector('[data-squeeze-table]');
+    if (!table) return;
+
+    var filter = document.getElementById('squeeze-row-filter');
+    var count = document.getElementById('squeeze-filter-count');
+    var emptyRow = table.querySelector('[data-squeeze-filter-empty]');
+    var body = table.tBodies[0];
+    var rows = Array.from(body.querySelectorAll('[data-squeeze-row]'));
+    var headers = Array.from(table.querySelectorAll('[data-sort-column]'));
+    var sortedColumn = null;
+    var sortDirection = 'asc';
+
+    function applyFilter() {
+      var query = filter.value.trim().toLocaleLowerCase();
+      var visible = 0;
+      rows.forEach(function (row) {
+        var matches = row.textContent.toLocaleLowerCase().includes(query);
+        row.hidden = !matches;
+        if (matches) visible += 1;
+      });
+      emptyRow.hidden = visible > 0;
+      count.textContent = visible + ' of ' + rows.length + ' rows';
+    }
+
+    function sortRows(header) {
+      var column = header.dataset.sortColumn;
+      sortDirection = sortedColumn === column && sortDirection === 'asc' ? 'desc' : 'asc';
+      sortedColumn = column;
+      var columnIndex = Array.from(header.parentElement.children).indexOf(header);
+      var numeric = header.dataset.sortType === 'number';
+
+      rows.sort(function (a, b) {
+        var aValue = a.cells[columnIndex].dataset.sortValue || '';
+        var bValue = b.cells[columnIndex].dataset.sortValue || '';
+        if (numeric) {
+          aValue = aValue === '' ? null : Number(aValue);
+          bValue = bValue === '' ? null : Number(bValue);
+          if (!Number.isFinite(aValue)) aValue = null;
+          if (!Number.isFinite(bValue)) bValue = null;
+        } else {
+          aValue = aValue.toLocaleLowerCase();
+          bValue = bValue.toLocaleLowerCase();
+        }
+
+        if (aValue === null || bValue === null) {
+          if (aValue === bValue) return 0;
+          return aValue === null ? 1 : -1;
+        }
+        var result = numeric ? aValue - bValue : aValue.localeCompare(bValue, undefined, {numeric: true});
+        return sortDirection === 'asc' ? result : -result;
+      });
+
+      rows.forEach(function (row) { body.insertBefore(row, emptyRow); });
+      headers.forEach(function (item) {
+        var active = item === header;
+        item.setAttribute('aria-sort', active ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none');
+        item.querySelector('.sort-indicator').textContent = active ? (sortDirection === 'asc' ? '↑' : '↓') : '↕';
+      });
+    }
+
+    filter.addEventListener('input', applyFilter);
+    headers.forEach(function (header) {
+      function activate(event) {
+        if (event.target.closest('a')) return;
+        sortRows(header);
+      }
+      header.addEventListener('click', activate);
+      header.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          activate(event);
+        }
+      });
+    });
+
+    applyFilter();
+  })();
+</script>
+{% endif %}
 {% endblock %}
