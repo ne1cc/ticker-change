@@ -367,19 +367,6 @@
 
 {% endif %}
 
-{% if data.ticker or ticker %}
-<section id="news-preview" data-ticker="{{ data.ticker or ticker }}" data-excel="{{ 'true' if excel_mode else 'false' }}"
-         class="mt-6 p-4 sm:p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl">
-    <div class="flex items-center justify-between gap-3">
-        <h2 class="font-bold text-zinc-900 dark:text-zinc-100">Latest news</h2>
-        <a data-news-link href="{{ url_for('news_page', ticker=data.ticker or ticker) }}" class="text-sm font-semibold text-amber-600 dark:text-amber-400 hover:underline">View all news →</a>
-    </div>
-    <div data-news-content aria-live="polite"><p class="py-3 text-sm text-zinc-500 dark:text-zinc-400">Loading headlines…</p></div>
-    <noscript><p class="py-3 text-sm text-zinc-500">Open News to see headlines for this ticker.</p></noscript>
-</section>
-<script src="{{ url_for('static', filename='news.js') }}" defer></script>
-{% endif %}
-
 <div class="mt-8 sm:mt-12 text-center">
     <a href="/" class="inline-flex items-center gap-2 text-sm sm:text-base text-zinc-500 dark:text-zinc-400 hover:text-amber-600 dark:hover:text-amber-400 font-medium transition">
         <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

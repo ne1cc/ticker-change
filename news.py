@@ -13,6 +13,7 @@ import providers
 _SESSION = requests.Session()  # requests defaults to no automatic retries
 _PROVIDER = "marketaux_news"
 _BASE = "https://api.marketaux.com/v1"
+_ARTICLE_LIMIT = 500  # Five pages at the largest standard plan's page size.
 
 
 def _now():
@@ -42,7 +43,7 @@ def _result(ticker, status, listing=None):
     }
     return dict(ticker=ticker, status=status, listing=listing,
                 candidates=[], articles=[], fetched_at=None, stale=False,
-                partial=False, message=messages.get(status, ""), limit=15)
+                partial=False, message=messages.get(status, ""), limit=_ARTICLE_LIMIT)
 
 
 def _cooldown():
@@ -50,7 +51,7 @@ def _cooldown():
     return hit if hit and _date(hit["until"]) > _now() else None
 
 
-def _request(path, params, deadline):
+def _request(path, params, deadline, metadata=None):
     """One charged attempt; never expose authenticated URLs or exceptions."""
     if _cooldown() or time.monotonic() >= deadline:
         return None, "unavailable"
@@ -64,6 +65,8 @@ def _request(path, params, deadline):
         if response.status_code == 200:
             payload = response.json()
             if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+                if metadata is not None and isinstance(payload.get("meta"), dict):
+                    metadata.update(payload["meta"])
                 return payload["data"], None
         retry = response.headers.get("Retry-After", "")
         try:
@@ -164,7 +167,7 @@ def _articles(items, listing):
         valid.append(dict(id=identity, title=title.strip(), url=url,
                           source=urlsplit(url).hostname, published_at=_iso(published),
                           language="en", entities=[{k: listing[k] for k in ("symbol", "exchange", "country")}]))
-    return sorted(valid, key=lambda a: a["published_at"], reverse=True)[:15]
+    return sorted(valid, key=lambda a: a["published_at"], reverse=True)[:_ARTICLE_LIMIT]
 
 
 def _snapshot(key, listing):
@@ -199,7 +202,7 @@ def get_feed(ticker: str, listing_id: str | None = None) -> dict:
         result = _result(ticker, error)
         result["candidates"] = candidates
         return result
-    key = "feed:" + listing["id"] + ":en:7d"
+    key = "feed:" + listing["id"] + ":en:7d:plan-max"
     cached, fresh = _snapshot(key, listing)
     if fresh:
         return cached
@@ -208,13 +211,15 @@ def get_feed(ticker: str, listing_id: str | None = None) -> dict:
     items, error = [], None
     for page in range(1, 6):
         params = dict(symbols=listing["symbol"], language="en", filter_entities="true",
-                      group_similar="true", limit=3, page=page,
+                      group_similar="true", page=page,
                       published_after=(_now() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S"))
-        batch, error = _request("/news/all", params, deadline)
+        metadata = {}
+        batch, error = _request("/news/all", params, deadline, metadata=metadata)
         if error:
             break
         items.extend(batch)
-        if len(batch) < 3 or len(_articles(items, listing)) >= 15:
+        if (not batch or len(batch) < metadata.get("limit", len(batch))
+                or len(_articles(items, listing)) >= _ARTICLE_LIMIT):
             break
     articles = _articles(items, listing)
     if error and (not articles or cached and len(cached["articles"]) >= len(articles)):

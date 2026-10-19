@@ -21,7 +21,7 @@ def get_openapi_spec() -> Dict[str, Any]:
             "status": {"type": "string", "enum": ["ok", "empty", "needs_selection", "unsupported", "unconfigured", "quota_exhausted", "unavailable"]},
             "listing": listing_schema,
             "candidates": {"type": "array", "items": listing_schema},
-            "articles": {"type": "array", "maxItems": 15, "items": {
+            "articles": {"type": "array", "maxItems": 500, "items": {
                 "type": "object", "required": ["id", "title", "url", "source", "published_at", "language", "entities"],
                 "properties": {
                     "id": {"type": "string"}, "title": {"type": "string"},
@@ -35,7 +35,7 @@ def get_openapi_spec() -> Dict[str, Any]:
             }},
             "fetched_at": {"type": "string", "format": "date-time", "nullable": True},
             "stale": {"type": "boolean"}, "partial": {"type": "boolean"},
-            "message": {"type": "string"}, "limit": {"type": "integer", "enum": [15]},
+            "message": {"type": "string"}, "limit": {"type": "integer", "enum": [500]},
         },
     }
     return {
@@ -91,8 +91,10 @@ def get_openapi_spec() -> Dict[str, Any]:
         "paths": {
             "/api/news": {"get": {
                 "tags": ["Market Data & Analytics"], "summary": "English-language ticker headlines",
-                "description": "A same-origin feed used by the News page and stock preview. No visitor authentication. "
-                               "Requires a server-side Marketaux key. Returns at most 15 headlines from seven days, "
+                "description": "A same-origin feed used by the News page. No visitor authentication. "
+                               "Requires a server-side Marketaux key. Fetches up to five pages at the provider plan's "
+                               "maximum page size, returning at most 500 headlines from seven days "
+                               "(up to 15 on the free plan), "
                                "with hourly shared caching and a daily upstream budget. No visitor pagination. "
                                "A 200 may contain empty, unsupported, needs_selection, partial, or stale results; "
                                "503 returns an explanatory feed envelope when no usable snapshot exists.",
@@ -116,7 +118,7 @@ def get_openapi_spec() -> Dict[str, Any]:
                         "schema": feed_schema,
                         "example": {"ticker": "AAPL", "status": "unconfigured", "listing": None,
                                     "candidates": [], "articles": [], "fetched_at": None, "stale": False,
-                                    "partial": False, "message": "News is not configured yet. Please check back later.", "limit": 15},
+                                    "partial": False, "message": "News is not configured yet. Please check back later.", "limit": 500},
                     }}},
                 },
             }},
