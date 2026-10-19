@@ -96,7 +96,10 @@ def _resolve(ticker, listing_id, deadline):
     if cached is None:
         if not db.try_claim_lock("news:" + key, 2 / 60):
             return None, [], "unavailable"
-        items, error = _request("/entity/search", {"symbols": ticker, "types": "equity"}, deadline)
+        params = {"symbols": ticker, "types": "equity"}
+        if "." not in ticker:
+            params["countries"] = "us"
+        items, error = _request("/entity/search", params, deadline)
         if error:
             return None, [], error
         candidates = {}

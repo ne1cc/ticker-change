@@ -73,12 +73,26 @@ def test_five_pages_supply_fifteen_sorted_articles_and_cache(service, monkeypatc
     assert feed["articles"][-1]["title"] == "Headline 14"
     assert feed["ticker"] == "AAPL"
     assert len(calls) == 6  # one entity lookup, five news pages
+    assert calls[0][1]["countries"] == "us"
     params = calls[1][1]
     assert params["language"] == "en" and params["limit"] == 3
     assert params["symbols"] == "AAPL"
     assert "private-news-token" not in str(feed)
     assert service.get_feed("AAPL") == feed
     assert len(calls) == 6
+
+
+def test_bare_us_ticker_resolves_exact_marketaux_listing(service, monkeypatch):
+    listing = entity("MU", name="Micron Technology, Inc.")
+    calls = upstream(monkeypatch, service, pages=[[]], entities=[listing])
+
+    feed = service.get_feed("MU")
+
+    assert feed["status"] == "empty"
+    assert feed["listing"]["symbol"] == "MU"
+    assert feed["listing"]["name"] == "Micron Technology, Inc."
+    assert calls[0][1]["symbols"] == "MU"
+    assert calls[0][1]["countries"] == "us"
 
 
 def test_filters_unsafe_wrong_language_old_future_and_wrong_entity(service, monkeypatch):
@@ -121,6 +135,7 @@ def test_preserves_international_suffix_and_verifies_exchange(service, monkeypat
     assert feed["listing"]["symbol"] == "VOD.L"
     assert len(feed["articles"]) == 1
     assert calls[0][1]["symbols"] == "VOD.L"
+    assert "countries" not in calls[0][1]
     assert calls[1][1]["symbols"] == "VOD.L"
 
 
