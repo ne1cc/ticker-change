@@ -12,6 +12,7 @@ Env vars:
 """
 import os
 import re
+from datetime import datetime, timedelta, timezone
 import requests
 import pandas as pd
 import yfinance as yf
@@ -43,6 +44,7 @@ _DEFAULT_SEC_UA = "anonymous@example.com"
 
 FINNHUB_BASE = "https://finnhub.io/api/v1"
 FMP_BASE = "https://financialmodelingprep.com/api/v3"
+ALPACA_DATA_BASE = "https://data.alpaca.markets"
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 
@@ -96,6 +98,13 @@ def marketaux_key() -> str:
     """Single server-side news credential; saved settings take precedence."""
     return (db.get_setting("marketaux_api_key") or
             os.environ.get("MARKETAUX_API_KEY", "")).strip()
+
+
+def alpaca_credentials() -> tuple[str, str] | None:
+    """(key id, secret) from /settings, else env; None unless both are present."""
+    key_id = (db.get_setting("alpaca_api_key_id") or os.environ.get("ALPACA_API_KEY_ID", "")).strip()
+    secret = (db.get_setting("alpaca_api_secret_key") or os.environ.get("ALPACA_API_SECRET_KEY", "")).strip()
+    return (key_id, secret) if key_id and secret else None
 
 
 def sec_user_agent() -> str:
@@ -155,6 +164,7 @@ def configured() -> dict:
         "finnhub": bool(finnhub),
         "fmp": bool(fmp),
         "marketaux": bool(marketaux_key()),
+        "alpaca": alpaca_credentials() is not None,
         "sec": True,  # keyless
         "finnhub_key_count": len(finnhub),
         "fmp_key_count": len(fmp),
@@ -174,6 +184,31 @@ def _get_json(url, headers=None, params=None):
     except (requests.RequestException, ValueError) as e:
         print(f"[providers] {url} failed: {e}")
         return None
+
+
+def alpaca_option_trades(ticker: str, symbols: list) -> dict | None:
+    """Recent delayed option trades {OCC symbol: [trade]} from Alpaca's free
+    indicative feed, cached 10 min. None when unconfigured or the call fails.
+
+    Basic plan refuses the newest 15 minutes, so the window ends 16 min ago and
+    spans 5 days to reach the last session across weekends.
+    """
+    creds = alpaca_credentials()
+    if not creds or not symbols:
+        return None
+
+    def fetch():
+        end = datetime.now(timezone.utc) - timedelta(minutes=16)
+        data = _get_json(
+            f"{ALPACA_DATA_BASE}/v1beta1/options/trades",
+            headers={"APCA-API-KEY-ID": creds[0], "APCA-API-SECRET-KEY": creds[1]},
+            params={"symbols": ",".join(symbols), "feed": "indicative", "sort": "desc",
+                    "limit": 1000, "end": end.isoformat(),
+                    "start": (end - timedelta(days=5)).isoformat()},
+        )
+        return data.get("trades", {}) if isinstance(data, dict) else None
+
+    return _cached("alpaca", f"opttrades:{ticker}", fetch, ttl_hours=10 / 60)
 
 
 def _cached(provider, key, fetch_fn, ttl_hours=CACHE_TTL_HOURS):

@@ -79,6 +79,19 @@
              class="w-full px-3 py-2 text-sm font-mono bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500">
     </div>
 
+    <!-- Alpaca -->
+    <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm">
+      <h2 class="text-sm font-bold text-zinc-900 dark:text-zinc-50">Alpaca Market Data</h2>
+      <span class="text-xs text-zinc-500">{{ 'configured' if status.alpaca else 'not configured' }}</span>
+      <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1 mb-3">Powers the delayed options prints on /options (free Basic plan, indicative feed, 15 min delay). Saved values override ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY. <a href="https://app.alpaca.markets/signup" target="_blank" rel="noopener noreferrer" class="text-amber-600 hover:underline">Get a free key</a>.</p>
+      <label for="alpaca_api_key_id" class="sr-only">Alpaca API key ID</label>
+      <input id="alpaca_api_key_id" name="alpaca_api_key_id" type="text" value="{{ current.alpaca_api_key_id }}" placeholder="Key ID" autocomplete="off"
+             class="w-full mb-2 px-3 py-2 text-sm font-mono bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500">
+      <label for="alpaca_api_secret_key" class="sr-only">Alpaca API secret key</label>
+      <input id="alpaca_api_secret_key" name="alpaca_api_secret_key" type="password" value="{{ current.alpaca_api_secret_key }}" placeholder="Secret key" autocomplete="new-password"
+             class="w-full px-3 py-2 text-sm font-mono bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500">
+    </div>
+
     <!-- SEC User-Agent -->
     <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm">
       <label for="sec_user_agent" class="text-sm font-bold text-zinc-900 dark:text-zinc-50">SEC EDGAR Contact (User-Agent)</label>
