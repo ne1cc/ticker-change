@@ -9,6 +9,25 @@
 
 {% block head_extra %}
 <style>
+  /* Explicit chart heights survive the renderer's inline height on resize. */
+  .options-visualizer-chart { height: 460px !important; flex: none; }
+  .options-metric-button { min-height: 36px; padding: 6px 10px; font-size: 12px; font-weight: 600; border-radius: 6px; }
+  .options-metric-button[aria-pressed="true"] { background: #ffffff; color: #b45309; box-shadow: 0 1px 3px #0002; }
+  html.excel .options-metric-button[aria-pressed="true"] { color: #217346; }
+  html.dark .options-metric-button[aria-pressed="true"] { background: #3f3f46; color: #fbbf24; }
+  .options-metric-button:focus-visible,
+  .options-payoff-inputs :is(input, select):focus-visible { outline: 2px solid #b45309; outline-offset: 2px; }
+  .options-payoff-stats > div { min-width: 0; overflow-wrap: anywhere; }
+  .options-comparison-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+  .options-comparison-button { min-height: 34px; padding: 6px 10px; border: 1px solid #d4d4d8; border-radius: 6px; font-weight: 600; }
+  .options-comparison-button[aria-pressed="true"] { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; }
+  html.dark .options-comparison-button { border-color: #52525b; }
+  html.dark .options-comparison-button[aria-pressed="true"] { background: #27272a; color: #93c5fd; }
+  .options-gex-total { min-width: 0; overflow-wrap: anywhere; }
+  @media (max-width: 639px) {
+    .options-visualizer-chart { height: 400px !important; }
+  }
+
   /* Sticky option-chain header.
      The chain can run to 277 rows with "All strikes", so the scroll box owns
      the vertical overflow and both header rows pin to its top. Two rows means
@@ -426,37 +445,47 @@
         </div>
       </div>
 
-      <!-- Greeks Visualizer & Payoff Simulator (side by side) -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Greeks Visualizer & Payoff Simulator -->
+      <div class="grid grid-cols-1 2xl:grid-cols-2 gap-6 items-start">
 
         <!-- Greeks Charts Viewer -->
-        <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm flex flex-col h-[320px]">
-          <div class="flex items-center justify-between mb-2">
+        <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm min-w-0 flex flex-col">
+          <div class="flex flex-col gap-3 mb-3">
             <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-50">Greeks Visualizer</h3>
-            <div class="flex bg-zinc-100 dark:bg-zinc-800 p-0.5 rounded-lg">
-              <button onclick="switchGreeksChart('delta')" id="chart-tab-delta" title="{{ GLOSSARY.delta.short }}" class="px-2 py-0.5 text-[10px] font-bold rounded-md bg-white dark:bg-zinc-700 shadow-sm text-amber-500">Delta</button>
-              <button onclick="switchGreeksChart('gamma')" id="chart-tab-gamma" title="{{ GLOSSARY.gamma.short }}" class="px-2 py-0.5 text-[10px] font-bold rounded-md text-zinc-500 dark:text-zinc-400">Gamma</button>
-              <button onclick="switchGreeksChart('iv')" id="chart-tab-iv" title="{{ GLOSSARY.iv_smile.short }}" class="px-2 py-0.5 text-[10px] font-bold rounded-md text-zinc-500 dark:text-zinc-400">Smile</button>
-              <button onclick="switchGreeksChart('gex')" id="chart-tab-gex" title="{{ GLOSSARY.gex.short }}" class="px-2 py-0.5 text-[10px] font-bold rounded-md text-zinc-500 dark:text-zinc-400">GEX</button>
-              <button onclick="switchGreeksChart('vanna')" id="chart-tab-vanna" title="{{ GLOSSARY.vanna.short }}" class="px-2 py-0.5 text-[10px] font-bold rounded-md text-zinc-500 dark:text-zinc-400">Vanna</button>
-              <button onclick="switchGreeksChart('charm')" id="chart-tab-charm" title="{{ GLOSSARY.charm.short }}" class="px-2 py-0.5 text-[10px] font-bold rounded-md text-zinc-500 dark:text-zinc-400">Charm</button>
-              <button onclick="switchGreeksChart('vomma')" id="chart-tab-vomma" title="{{ GLOSSARY.vomma.short }}" class="px-2 py-0.5 text-[10px] font-bold rounded-md text-zinc-500 dark:text-zinc-400">Vomma</button>
-              <button onclick="switchGreeksChart('voloi')" id="chart-tab-voloi" title="Open Interest & Volume by strike" class="px-2 py-0.5 text-[10px] font-bold rounded-md text-zinc-500 dark:text-zinc-400">Vol/OI</button>
-              <button onclick="switchGreeksChart('pctchg')" id="chart-tab-pctchg" title="Daily P/L % by strike" class="px-2 py-0.5 text-[10px] font-bold rounded-md text-zinc-500 dark:text-zinc-400">P/L %</button>
+            <div class="flex flex-wrap gap-1 bg-zinc-100 dark:bg-zinc-800 p-1 rounded-lg text-zinc-600 dark:text-zinc-300">
+              <button onclick="switchGreeksChart('delta')" id="chart-tab-delta" aria-pressed="true" title="{{ GLOSSARY.delta.short }}" class="options-metric-button">Delta</button>
+              <button onclick="switchGreeksChart('gamma')" id="chart-tab-gamma" aria-pressed="false" title="{{ GLOSSARY.gamma.short }}" class="options-metric-button">Gamma</button>
+              <button onclick="switchGreeksChart('iv')" id="chart-tab-iv" aria-pressed="false" title="{{ GLOSSARY.iv_smile.short }}" class="options-metric-button">IV smile</button>
+              <button onclick="switchGreeksChart('gex')" id="chart-tab-gex" aria-pressed="false" title="{{ GLOSSARY.gex.short }}" class="options-metric-button">GEX</button>
+              <button onclick="switchGreeksChart('vanna')" id="chart-tab-vanna" aria-pressed="false" title="{{ GLOSSARY.vanna.short }}" class="options-metric-button">Vanna</button>
+              <button onclick="switchGreeksChart('charm')" id="chart-tab-charm" aria-pressed="false" title="{{ GLOSSARY.charm.short }}" class="options-metric-button">Charm</button>
+              <button onclick="switchGreeksChart('vomma')" id="chart-tab-vomma" aria-pressed="false" title="{{ GLOSSARY.vomma.short }}" class="options-metric-button">Vomma</button>
+              <button onclick="switchGreeksChart('voloi')" id="chart-tab-voloi" aria-pressed="false" title="Open Interest & Volume by strike" class="options-metric-button">Volume / OI</button>
+              <button onclick="switchGreeksChart('pctchg')" id="chart-tab-pctchg" aria-pressed="false" title="Daily percentage change in option prices by strike." class="options-metric-button">Daily change %</button>
             </div>
           </div>
 
-          <div id="greeks-chart" class="w-full flex-1"></div>
+          <p id="greeks-description" class="text-sm text-zinc-600 dark:text-zinc-300 mb-3" aria-live="polite">{{ GLOSSARY.delta.short }}</p>
+          <div id="greeks-comparison-context" class="hidden text-sm text-zinc-600 dark:text-zinc-300 mb-2" aria-live="polite"></div>
+          <div id="greeks-gex-totals" class="hidden grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2 text-base"></div>
+          <div id="greeks-range-controls" class="hidden options-comparison-controls mb-2">
+            <button id="greeks-range-near" class="options-comparison-button" type="button" onclick="setComparisonRange('near')" aria-pressed="true">Near spot (20)</button>
+            <button id="greeks-range-loaded" class="options-comparison-button" type="button" onclick="setComparisonRange('loaded')" aria-pressed="false">All loaded strikes</button>
+            <span id="greeks-range-summary" class="text-zinc-600 dark:text-zinc-300"></span>
+          </div>
+          <div id="greeks-references" class="flex flex-wrap gap-x-5 gap-y-2 text-xs text-zinc-600 dark:text-zinc-300 mb-2" aria-label="Greeks chart reference prices"></div>
+          <div id="greeks-chart" class="w-full options-visualizer-chart"></div>
         </div>
 
         <!-- Payoff Simulator -->
-        <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm flex-1 flex flex-col">
+        <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm min-w-0 flex flex-col">
           <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-50 mb-3">{{ metric('Options Payoff Simulator', 'payoff') }}</h3>
+          <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-4">Profit or loss at expiration, before fees.</p>
 
           <!-- Input Controls -->
-          <div class="grid grid-cols-2 gap-3 mb-4 text-xs">
+          <div class="options-payoff-inputs grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4 text-sm">
             <div>
-              <label class="block font-bold text-zinc-400 uppercase mb-0.5">Position</label>
+              <label for="payoff-position" class="block text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">Position</label>
               <select id="payoff-position" onchange="drawPayoffDiagram()" class="w-full px-2.5 py-1.5 bg-zinc-100 dark:bg-zinc-850 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none font-semibold">
                 <option value="long">Long (Buy)</option>
                 <option value="short">Short (Sell)</option>
@@ -464,7 +493,7 @@
             </div>
 
             <div>
-              <label class="block font-bold text-zinc-400 uppercase mb-0.5">Option Type</label>
+              <label for="payoff-type" class="block text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">Option Type</label>
               <select id="payoff-type" onchange="updateSimulatorPremium(); drawPayoffDiagram()" class="w-full px-2.5 py-1.5 bg-zinc-100 dark:bg-zinc-850 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none font-semibold">
                 <option value="call">Call Option</option>
                 <option value="put">Put Option</option>
@@ -472,39 +501,40 @@
             </div>
 
             <div>
-              <label class="block font-bold text-zinc-400 uppercase mb-0.5">Strike Price ($)</label>
+              <label for="payoff-strike" class="block text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">Strike Price ($)</label>
               <input id="payoff-strike" type="number" step="0.5" value="150" onchange="updateSimulatorPremium(); drawPayoffDiagram()" oninput="updateSimulatorPremium(); drawPayoffDiagram()" class="w-full px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg font-mono font-semibold" />
             </div>
 
             <div>
-              <label class="block font-bold text-zinc-400 uppercase mb-0.5">Premium / Price ($)</label>
+              <label for="payoff-premium" class="block text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">Premium per share ($)</label>
               <input id="payoff-premium" type="number" step="0.05" value="5.0" onchange="drawPayoffDiagram()" oninput="drawPayoffDiagram()" class="w-full px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg font-mono font-semibold" />
             </div>
 
-            <div class="col-span-2">
-              <label class="block font-bold text-zinc-400 uppercase mb-0.5">Contracts (Multiplier x100)</label>
+            <div class="sm:col-span-2">
+              <label for="payoff-qty" class="block text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">Contracts (100 shares each)</label>
               <input id="payoff-qty" type="number" min="1" value="1" onchange="drawPayoffDiagram()" oninput="drawPayoffDiagram()" class="w-full px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg font-mono font-semibold" />
             </div>
           </div>
 
           <!-- Payoff Output Stats -->
-          <div class="grid grid-cols-3 gap-2 text-center text-[10px] font-bold uppercase mb-4">
+          <div class="options-payoff-stats grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-semibold mb-4">
             <div class="bg-zinc-50 dark:bg-zinc-850 p-2 rounded-lg">
-              <span class="text-zinc-400 block mb-0.5">Breakeven</span>
-              <span id="payoff-stat-breakeven" class="font-mono text-xs font-bold text-zinc-800 dark:text-zinc-200">--</span>
+              <span class="text-zinc-600 dark:text-zinc-300 block mb-1">Breakeven price</span>
+              <span id="payoff-stat-breakeven" class="font-mono text-base font-bold text-zinc-800 dark:text-zinc-200">--</span>
             </div>
             <div class="bg-zinc-50 dark:bg-zinc-850 p-2 rounded-lg">
-              <span class="text-zinc-400 block mb-0.5">Max Profit</span>
-              <span id="payoff-stat-profit" class="font-mono text-xs font-bold text-emerald-500">--</span>
+              <span class="text-zinc-600 dark:text-zinc-300 block mb-1">Max Profit</span>
+              <span id="payoff-stat-profit" class="font-mono text-base font-bold text-emerald-500">--</span>
             </div>
             <div class="bg-zinc-50 dark:bg-zinc-850 p-2 rounded-lg">
-              <span class="text-zinc-400 block mb-0.5">Max Loss</span>
-              <span id="payoff-stat-loss" class="font-mono text-xs font-bold text-rose-500">--</span>
+              <span class="text-zinc-600 dark:text-zinc-300 block mb-1">Max Loss</span>
+              <span id="payoff-stat-loss" class="font-mono text-base font-bold text-rose-500">--</span>
             </div>
           </div>
 
           <!-- Payoff Chart -->
-          <div id="payoff-chart" class="w-full h-[220px]"></div>
+          <div id="payoff-references" class="flex flex-wrap gap-x-5 gap-y-2 text-xs text-zinc-600 dark:text-zinc-300 mb-2" aria-label="Payoff chart reference prices"></div>
+          <div id="payoff-chart" class="w-full options-visualizer-chart"></div>
         </div>
 
       </div>
@@ -520,7 +550,7 @@
       </div>
       
       <!-- GEX Chart Container -->
-      <div id="gex-plot-container" class="w-full h-[480px]" style="height: 480px;"></div>
+      <div id="gex-plot-container" class="w-full h-[720px]" style="height: 720px;"></div>
 
       <!-- Top Gamma Nodes & Vanna/Charm Matrix -->
       {% if data.gex.top_nodes %}
@@ -977,6 +1007,10 @@
   let activeTab = 'gex';
   let optionsData = null;
   let currentGreeksChart = 'delta';
+  let comparisonRange = 'near';
+  let optionsRequestGeneration = 0;
+  let optionsLoadStatus = 'empty';
+  let requestedExpiration = null;
   let optionsAnalysisData = null;
   let greeksPollInterval = null;  // 60s options greeks refresh (chain tab only)
 
@@ -1220,6 +1254,10 @@
 
     const date = select.value;
     const rfRate = document.getElementById('rf-rate-input').value;
+    const requestGeneration = ++optionsRequestGeneration;
+    requestedExpiration = date;
+    optionsLoadStatus = 'loading';
+    if (optionsData?.options?.length) renderGreeksChart();
 
     document.getElementById('option-chain-body').innerHTML = `
       <tr class="text-center text-zinc-400">
@@ -1235,17 +1273,32 @@
       </tr>
     `;
 
-    const res = await fetch(`/api/options-greeks/${ticker}?expiration=${date}&rf_rate=${rfRate}${strikeCountParam()}`);
+    let res;
+    try {
+      res = await fetch(`/api/options-greeks/${ticker}?expiration=${date}&rf_rate=${rfRate}${strikeCountParam()}`);
+    } catch (error) {
+      if (requestGeneration !== optionsRequestGeneration) return;
+      optionsLoadStatus = 'error';
+      renderGreeksChart();
+      document.getElementById('option-chain-body').innerHTML = '<tr class="text-center text-rose-500"><td colspan="21" class="py-40">Failed to fetch options chain. <button class="underline" onclick="loadOptionsGreeks()">Retry</button></td></tr>';
+      return;
+    }
+    if (requestGeneration !== optionsRequestGeneration) return;
     if (!res.ok) {
+      optionsLoadStatus = 'error';
+      renderGreeksChart();
       document.getElementById('option-chain-body').innerHTML = `
         <tr class="text-center text-zinc-400">
-          <td colspan="21" class="py-40 text-rose-500 font-semibold">Failed to fetch options chain.</td>
+          <td colspan="21" class="py-40 text-rose-500 font-semibold">Failed to fetch options chain. <button class="underline" onclick="loadOptionsGreeks()">Retry</button></td>
         </tr>
       `;
       return;
     }
 
-    optionsData = await res.json();
+    const fresh = await res.json();
+    if (requestGeneration !== optionsRequestGeneration) return;
+    optionsData = fresh;
+    optionsLoadStatus = optionsData.options?.length ? 'ready' : 'empty';
     renderOptionChainTable();
     renderGreeksChart();
     initPayoffSimulator();
@@ -1384,32 +1437,134 @@
     document.getElementById('payoff-chart').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
+  function renderChartReferences(id, refs) {
+    const key = document.getElementById(id);
+    key.replaceChildren();
+    refs.forEach(ref => {
+      const item = document.createElement('span');
+      item.className = 'inline-flex items-center gap-2';
+      const swatch = document.createElement('span');
+      swatch.className = 'inline-block w-5 shrink-0';
+      swatch.style.borderTop = `2px dashed ${ref.lineStyle.color}`;
+      swatch.setAttribute('aria-hidden', 'true');
+      const label = document.createElement('span');
+      const outside = ref.xAxis != null && (ref.outsideRange || ref.xAxis < 0);
+      label.textContent = ref.xAxis == null ? ref.name : `${ref.name} $${ref.xAxis.toFixed(2)}${outside ? ' (outside displayed range)' : ''}`;
+      item.append(swatch, label);
+      key.append(item);
+      ref.label = {show: false};
+    });
+  }
+
   function switchGreeksChart(type) {
     currentGreeksChart = type;
-
-    const tabs = ['delta', 'gamma', 'iv', 'gex', 'vanna', 'charm', 'vomma', 'voloi', 'pctchg'];
-    tabs.forEach(t => {
-      const btn = document.getElementById(`chart-tab-${t}`);
-      if (btn) {
-        if (t === type) {
-          btn.className = "px-2 py-0.5 text-[10px] font-bold rounded-md bg-white dark:bg-zinc-700 shadow-sm text-amber-500";
-        } else {
-          btn.className = "px-2 py-0.5 text-[10px] font-bold rounded-md text-zinc-500 dark:text-zinc-400";
-        }
-      }
+    ['delta', 'gamma', 'iv', 'gex', 'vanna', 'charm', 'vomma', 'voloi', 'pctchg'].forEach(t => {
+      document.getElementById(`chart-tab-${t}`).setAttribute('aria-pressed', String(t === type));
     });
-
     renderGreeksChart();
   }
 
+  function setComparisonRange(range) {
+    comparisonRange = range === 'loaded' ? 'loaded' : 'near';
+    renderGreeksChart();
+  }
+
+  function prepareComparisonView(data, mode, range, convention) {
+    const rows = data?.options || [];
+    const spot = Number(data?.spot_price);
+    const factor = 100 * spot * spot * .01 / 1e6;
+    const all = rows.map(row => {
+      const strike = Number(row.strike);
+      const callGamma = typeof row.call_gamma === 'number' && Number.isFinite(row.call_gamma) && row.call_gamma >= 0 ? row.call_gamma : null;
+      const putGamma = typeof row.put_gamma === 'number' && Number.isFinite(row.put_gamma) && row.put_gamma >= 0 ? row.put_gamma : null;
+      let call = null, put = null;
+      if (mode === 'gex') {
+        if (row.call_oi_available === true && callGamma != null && Number.isFinite(Number(row.call_oi)) && Number(row.call_oi) >= 0) {
+          const sign = convention === 'short_wings' && strike > spot ? -1 : 1;
+          call = callGamma * Number(row.call_oi) * factor * sign;
+        }
+        if (row.put_oi_available === true && putGamma != null && Number.isFinite(Number(row.put_oi)) && Number(row.put_oi) >= 0) {
+          const sign = convention === 'short_wings' ? (strike < spot ? -1 : 1) : -1;
+          put = putGamma * Number(row.put_oi) * factor * sign;
+        }
+      } else {
+        call = row.call_change_available === true && typeof row.call_pct_change === 'number' && Number.isFinite(row.call_pct_change) ? row.call_pct_change : null;
+        put = row.put_change_available === true && typeof row.put_pct_change === 'number' && Number.isFinite(row.put_pct_change) ? row.put_pct_change : null;
+      }
+      return {strike, call, put, net: mode === 'gex' && call != null && put != null ? call + put : null, source: row};
+    }).filter(point => Number.isFinite(point.strike)).sort((a,b) => a.strike - b.strike);
+    const visible = range === 'loaded' ? all : [...all].sort((a,b) => Math.abs(a.strike-spot)-Math.abs(b.strike-spot) || a.strike-b.strike).slice(0,20).sort((a,b) => a.strike-b.strike);
+    const visibleSet = new Set(visible.map(point => point.strike));
+    const outside = all.filter(point => !visibleSet.has(point.strike));
+    const sumKnown = key => {
+      const known = all.filter(point => point[key] != null);
+      return known.length ? known.reduce((sum, point) => sum + point[key], 0) : null;
+    };
+    const incompleteCount = mode === 'gex' ? all.filter(point => point.call == null || point.put == null).length : all.filter(point => point.call == null || point.put == null).length;
+    const changes = outside.flatMap(point => [point.source.call_change_available === true ? point.source.call_pct_change : null, point.source.put_change_available === true ? point.source.put_pct_change : null]).filter(value => typeof value === 'number' && Number.isFinite(value));
+    return {mode, all, visible, bounds: {min: visible.length ? Math.min(...visible.map(point=>point.strike)) : spot, max: visible.length ? Math.max(...visible.map(point=>point.strike)) : spot},
+      totals: mode === 'gex' ? {call:sumKnown('call'), put:sumKnown('put'), net:sumKnown('net'), incompleteCount} : null,
+      excludedCount: outside.length, outsideMaxAbsChange: changes.length ? Math.max(...changes.map(Math.abs)) : null};
+  }
+
+  function comparisonConvention() {
+    return terminalData.convention || new URLSearchParams(location.search).get('convention') || 'naive';
+  }
+
+  function comparisonColors() {
+    const dark = document.documentElement.classList.contains('dark') && !document.documentElement.classList.contains('excel');
+    return dark ? {call:'#60a5fa', put:'#fb923c', net:'#fafafa', zero:'#a1a1aa'} : {call:'#2563eb', put:'#c2410c', net:'#18181b', zero:'#71717a'};
+  }
+
+  function renderComparisonSummary(view) {
+    const context = document.getElementById('greeks-comparison-context');
+    const totals = document.getElementById('greeks-gex-totals');
+    const rangeControls = document.getElementById('greeks-range-controls');
+    const rangeSummary = document.getElementById('greeks-range-summary');
+    const comparison = ['gex','pctchg'].includes(currentGreeksChart);
+    [context, totals, rangeControls].forEach(el => el.classList.toggle('hidden', !comparison));
+    if (!comparison) return;
+    const expiration = optionsData?.selected_expiration || 'unknown expiration';
+    const source = optionsData?.source || 'source unavailable';
+    const asOf = optionsData?.source_as_of ? ` · Snapshot time supplied: ${optionsData.source_as_of}` : '';
+    const updating = optionsLoadStatus === 'loading' ? optionsData?.options?.length ? `Updating ${requestedExpiration || 'expiration'}… showing ${expiration}. ` : `Loading ${requestedExpiration || expiration}… ` : optionsLoadStatus === 'error' ? `Update failed · showing ${expiration}. ` : '';
+    context.textContent = `${updating}Expiration ${expiration} · ${source}${asOf}${currentGreeksChart === 'gex' ? ` · OI-based estimate · ${comparisonConvention()} dealer convention` : ''}`;
+    if (currentGreeksChart !== 'gex' || !view?.totals) totals.replaceChildren();
+    if (view) {
+      document.getElementById('greeks-range-near').setAttribute('aria-pressed', String(comparisonRange === 'near'));
+      document.getElementById('greeks-range-loaded').setAttribute('aria-pressed', String(comparisonRange === 'loaded'));
+      document.getElementById('greeks-range-loaded').textContent = `All loaded strikes (${view.all.length})`;
+      const shown = comparisonRange === 'loaded' ? view.all.length : view.visible.length;
+      const range = view.visible.length ? `$${view.bounds.min.toFixed(2)}–$${view.bounds.max.toFixed(2)}` : 'no strikes';
+      const outlier = currentGreeksChart === 'pctchg' && view.outsideMaxAbsChange != null ? ` · ${view.excludedCount} outside · largest absolute change outside ${view.outsideMaxAbsChange.toFixed(1)}%` : ` · ${view.excludedCount} outside`;
+      rangeSummary.textContent = `Showing ${shown} of ${view.all.length} loaded strikes · ${range}${comparisonRange === 'near' ? outlier : ''}`;
+    }
+  }
+
   function renderGreeksChart() {
-    if (!optionsData?.options?.length) return;
-    const c = TerminalCharts, rows = optionsData.options, strikes = rows.map(o=>o.strike), spot = optionsData.spot_price;
+    const c = TerminalCharts, colors = comparisonColors();
+    if (!optionsData?.options?.length) {
+      if (['gex','pctchg'].includes(currentGreeksChart)) {
+        renderComparisonSummary(null);
+        document.getElementById('greeks-comparison-context').textContent = optionsLoadStatus === 'loading' ? 'Loading selected expiration…' : optionsLoadStatus === 'error' ? 'No loaded observations. Retry the selected expiration.' : 'No usable observations for this expiration.';
+        const empty = c.cartesian([], 'Strike ($)', ''); empty.terminalViewKey = `${currentGreeksChart}:empty`;
+        TerminalCharts.mount('greeks-chart', empty);
+      }
+      return;
+    }
+    const rows = optionsData.options, strikes = rows.map(o=>o.strike), spot = optionsData.spot_price;
     const t_years = Math.max(1e-5,(optionsData.days_to_expiration || 30)/365);
-    const rf_rate = parseFloat(document.getElementById('rf-rate-input')?.value || '0.045') || .045;
+    const parsedRate = parseFloat(document.getElementById('rf-rate-input')?.value ?? '0.045');
+    const rf_rate = Number.isFinite(parsedRate) ? parsedRate : .045;
     const option = c.cartesian([], 'Strike ($)', '');
-    const refs = [c.ref('x',spot,'Spot')];
+    const prices = [...strikes, spot].filter(v => Number.isFinite(v) && v > 0);
+    const low = Math.min(...prices), high = Math.max(...prices);
+    const padding = high > low ? (high - low) * .04 : Math.max(high * .02, .01);
+    Object.assign(option.xAxis, {scale:true, min:Math.max(0,low-padding), max:high+padding, axisLabel:{fontSize:12,hideOverlap:true}});
+    document.getElementById('greeks-description').textContent = document.getElementById(`chart-tab-${currentGreeksChart}`).title;
+    const refs = [c.ref('x',spot,'Current price')];
     const values = key => rows.map(o=>typeof o[key] === 'number' ? o[key] : null);
+    let view = null;
     if (currentGreeksChart === 'delta') {
       option.series = [c.line('Call Delta',strikes,values('call_delta'),'#10b981'), c.line('Put Delta',strikes,values('put_delta'),'#f43f5e')];
       option.yAxis.name = 'Delta';
@@ -1424,78 +1579,86 @@
       const data = rows.map(o=>calc(spot,o.strike,Math.max(o.call_iv,o.put_iv)/100,t_years,rf_rate)/(currentGreeksChart === 'vanna' ? 100 : 1));
       option.series = [c.line(currentGreeksChart,strikes,data,'#8b5cf6',{areaStyle:{opacity:.1}})];
       option.yAxis.name = currentGreeksChart === 'vanna' ? 'Vanna per 1% vol move' : currentGreeksChart;
-    } else if (currentGreeksChart === 'gex') {
-      const callGex = rows.map(o=>(o.call_gamma === 'N/A' ? 0:o.call_gamma)*(o.call_oi || 0)*100*spot*spot*.01/1e6);
-      const putGex = rows.map(o=>-(o.put_gamma === 'N/A' ? 0:o.put_gamma)*(o.put_oi || 0)*100*spot*spot*.01/1e6);
-      const netGex = callGex.map((v,i)=>v+putGex[i]);
-      option.series = [c.bar('Net GEX',strikes,netGex,netGex.map(v=>v>=0?'#10b981':'#f43f5e')),c.bar('Call GEX',strikes,callGex,'#10b981'),c.bar('Put GEX',strikes,putGex,'#f43f5e')];
-      option.legend = {selected:{'Call GEX':false,'Put GEX':false}};
-      option.yAxis.name = 'GEX ($M / 1% move)';
-      // Call wall (max +GEX) and put wall (most −GEX) — structural res/support.
-      let callWall = null, putWall = null, maxC = 0, minP = 0;
-      callGex.forEach((v, i) => { if (v > maxC) { maxC = v; callWall = strikes[i]; } });
-      putGex.forEach((v, i) => { if (v < minP) { minP = v; putWall = strikes[i]; } });
-
-      // Gamma flip: spot price where total net GEX crosses zero (grid search).
-      function calcTotalGexAtSpot(s) {
-        let total = 0;
-        optionsData.options.forEach(o => {
-          const k = o.strike;
-          const t_years = Math.max(1e-5, optionsData.days_to_expiration / 365.0);
-          const rf_rate = 0.045; // standard
-
-          if (o.call_oi > 0 && o.call_iv > 0) {
-            const iv = o.call_iv / 100.0;
-            const d1 = (Math.log(s / k) + (rf_rate + 0.5 * iv * iv) * t_years) / (iv * Math.sqrt(t_years));
-            const pdf_d1 = Math.exp(-0.5 * d1 * d1) / Math.sqrt(2.0 * Math.PI);
-            const gamma = pdf_d1 / (s * iv * Math.sqrt(t_years));
-            total += gamma * o.call_oi * 100 * s * s * 0.01 / 1e6;
-          }
-
-          if (o.put_oi > 0 && o.put_iv > 0) {
-            const iv = o.put_iv / 100.0;
-            const d1 = (Math.log(s / k) + (rf_rate + 0.5 * iv * iv) * t_years) / (iv * Math.sqrt(t_years));
-            const pdf_d1 = Math.exp(-0.5 * d1 * d1) / Math.sqrt(2.0 * Math.PI);
-            const gamma = pdf_d1 / (s * iv * Math.sqrt(t_years));
-            total -= gamma * o.put_oi * 100 * s * s * 0.01 / 1e6;
-          }
-        });
-        return total;
-      }
-
-      let flip = null;
-      if (strikes.length > 0) {
-        const y_lo = strikes[0];
-        const y_hi = strikes[strikes.length - 1];
-        const steps = 100;
-        const crossings = [];
-
-        for (let i = 0; i < steps; i++) {
-          const s0 = y_lo + (i / steps) * (y_hi - y_lo);
-          const s1 = y_lo + ((i + 1) / steps) * (y_hi - y_lo);
-          const g0 = calcTotalGexAtSpot(s0);
-          const g1 = calcTotalGexAtSpot(s1);
-
-          if ((g0 <= 0 && g1 > 0) || (g0 >= 0 && g1 < 0)) {
-            const val = g1 !== g0 ? s0 + (s1 - s0) * (-g0) / (g1 - g0) : s1;
-            crossings.push(val);
-          }
+    } else if (currentGreeksChart === 'gex' || currentGreeksChart === 'pctchg') {
+      document.getElementById('greeks-description').textContent = currentGreeksChart === 'pctchg'
+        ? 'Option price change, not GEX. Small starting prices can create large percentage moves.'
+        : 'Estimated dealer gamma exposure by strike. Calls and puts are OI-based estimates; net is their signed sum.';
+      view = prepareComparisonView(optionsData, currentGreeksChart, comparisonRange, comparisonConvention());
+      renderComparisonSummary(view);
+      option.tooltip = option.tooltip || {};
+      option.terminalComparison = true;
+      option.terminalLegendFontSize = 12;
+      const x = view.visible.map(point => point.strike);
+      const call = view.visible.map(point => point.call);
+      const put = view.visible.map(point => point.put);
+      if (currentGreeksChart === 'gex') {
+        option.series = [c.bar('Calls',x,call,colors.call,{barMaxWidth:16,barGap:'20%',barCategoryGap:'45%',itemStyle:{color:colors.call,opacity:.8}}),
+          c.bar('Puts',x,put,colors.put,{barMaxWidth:16,barGap:'20%',barCategoryGap:'45%',itemStyle:{color:colors.put,opacity:.8}}),
+          c.line('Net GEX',x,view.visible.map(point=>point.net),colors.net,{showSymbol:false,lineStyle:{color:colors.net,width:2.5},itemStyle:{color:colors.net},connectNulls:false})];
+        option.yAxis.name = 'GEX ($M / 1% move)';
+        const formatTotal = value => value == null ? 'unavailable' : `${totals.incompleteCount ? 'Partial · ' : ''}${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(2)} $M / 1% move`;
+        const totals = view.totals;
+        const complete = totals.incompleteCount === 0;
+        document.getElementById('greeks-gex-totals').innerHTML = `<div class="options-gex-total"><span class="block text-xs text-zinc-500" style="color:${colors.call}">Loaded-chain calls</span><strong>${formatTotal(totals.call)}</strong></div><div class="options-gex-total"><span class="block text-xs text-zinc-500" style="color:${colors.put}">Loaded-chain puts</span><strong>${formatTotal(totals.put)}</strong></div><div class="options-gex-total"><span class="block text-xs text-zinc-500" style="color:${colors.net}">Loaded-chain net</span><strong>${formatTotal(totals.net)}</strong><span class="block text-xs text-zinc-500">${complete ? 'Complete observations' : `Partial · ${totals.incompleteCount} incomplete strikes`} · $M per 1% underlying move</span></div>`;
+        const largest = key => view.all.filter(point=>point[key]!=null).reduce((best,point)=>!best || Math.abs(point[key])>Math.abs(best[key]) ? point : best,null);
+        const callNode = largest('call'), putNode = largest('put');
+        if (callNode) refs.push(c.ref('x',callNode.strike,'Largest call contribution',colors.call));
+        if (putNode) refs.push(c.ref('x',putNode.strike,'Largest put contribution',colors.put));
+        const expiryYears = Number(optionsData.time_to_expiration_years);
+        const completeForFlip = expiryYears > 0 && rows.every(row => row.call_oi_available === true && row.put_oi_available === true && Number.isFinite(row.call_gamma) && Number.isFinite(row.put_gamma));
+        const flipIv = row => {
+          let callIv = Number(row.call_iv)/100, putIv = Number(row.put_iv)/100;
+          if (callIv <= .01 && putIv > .01) callIv = putIv;
+          if (putIv <= .01 && callIv > .01) putIv = callIv;
+          return Number.isFinite(callIv) && Number.isFinite(putIv) && callIv > .01 && putIv > .01 ? [callIv,putIv] : null;
+        };
+        const canFlip = completeForFlip && rows.every(row => flipIv(row));
+        if (canFlip) {
+          const signs = rows.map(row => ({call:comparisonConvention()==='short_wings' && row.strike>spot ? -1 : 1, put:comparisonConvention()==='short_wings' ? (row.strike<spot ? -1 : 1) : -1}));
+          const exposureAt = underlying => rows.reduce((sum,row,index) => {
+            const ivs = flipIv(row), rootT = Math.sqrt(expiryYears);
+            const gamma = iv => { const d1=(Math.log(underlying/row.strike)+(rf_rate+.5*iv*iv)*expiryYears)/(iv*rootT); return Math.exp(-.5*d1*d1)/Math.sqrt(2*Math.PI)/(underlying*iv*rootT); };
+            const scale=100*underlying*underlying*.01/1e6;
+            return sum + scale*(gamma(ivs[0])*Number(row.call_oi)*signs[index].call + gamma(ivs[1])*Number(row.put_oi)*signs[index].put);
+          },0);
+          const lo=Math.min(...strikes), hi=Math.max(...strikes); let previous=exposureAt(lo), flip=null;
+          for(let i=1;i<=200;i++){ const price=lo+(hi-lo)*i/200, value=exposureAt(price); if((previous<=0&&value>0)||(previous>=0&&value<0)){flip=price;break;} previous=value; }
+          if(flip!=null) refs.push(c.ref('x',flip,'Selected-chain gamma flip','#7c3aed'));
+          else refs.push({name:'Selected-chain gamma flip unavailable',lineStyle:{color:'#7c3aed'},keyOnly:true});
+        } else {
+          refs.push({name:'Selected-chain gamma flip unavailable',lineStyle:{color:'#7c3aed'},keyOnly:true});
         }
-
-        if (crossings.length > 0) {
-          // Find closest to current spot
-          let minDiff = Infinity;
-          crossings.forEach(c => {
-            const diff = Math.abs(c - spot);
-            if (diff < minDiff) {
-              minDiff = diff;
-              flip = c;
-            }
-          });
-        }
+        refs.filter(ref=>ref.xAxis!=null).forEach(ref=>{ref.outsideRange=ref.xAxis<view.bounds.min || ref.xAxis>view.bounds.max;});
+        option.tooltip.formatter = params => {
+          const list=Array.isArray(params)?params:[params], strike=list[0]?.axisValue;
+          const point=view.visible.find(item=>item.strike===Number(strike)); if(!point)return '';
+          return [`Strike $${point.strike.toFixed(2)}`,`Calls: ${point.call==null?'Unavailable':`${point.call>=0?'+':'−'}$${Math.abs(point.call).toFixed(3)}M`}`,`Puts: ${point.put==null?'Unavailable':`${point.put>=0?'+':'−'}$${Math.abs(point.put).toFixed(3)}M`}`,`Net GEX: ${point.net==null?'Unavailable':`${point.net>=0?'+':'−'}$${Math.abs(point.net).toFixed(3)}M`}`].join('\n');
+        };
+      } else {
+        option.series = [c.bar('Calls',x,call,colors.call,{barMaxWidth:16,barGap:'20%',barCategoryGap:'45%',itemStyle:{color:colors.call,opacity:.8}}),c.bar('Puts',x,put,colors.put,{barMaxWidth:16,barGap:'20%',barCategoryGap:'45%',itemStyle:{color:colors.put,opacity:.8}})];
+        option.yAxis.name = 'Option price change (%)';
+        option.tooltip.formatter = params => {
+          const list=Array.isArray(params)?params:[params], strike=list[0]?.axisValue;
+          const row=rows.find(item=>Number(item.strike)===Number(strike)); if(!row)return '';
+          const lines=[`Strike $${Number(strike).toFixed(2)}`];
+          for(const [name,available,pct,change,last] of [['Calls','call_change_available','call_pct_change','call_change','call_last'],['Puts','put_change_available','put_pct_change','put_change','put_last']]) {
+            const lastText = Number(row[last]) > 0 ? `last $${Number(row[last]).toFixed(2)}` : 'last unavailable';
+            lines.push(`${name}: ${row[available]===true ? `${row[pct]>=0?'+':''}${Number(row[pct]).toFixed(1)}% · ${Number(row[change])>=0?'+':''}$${Number(row[change]).toFixed(2)} · ${lastText}` : 'Unavailable'}`);
+          }
+          return lines.join('\n');
+        };
       }
-
-      [[callWall,'Call wall','#10b981'],[putWall,'Put wall','#f43f5e'],[flip,'γ-flip','#6366f1']].forEach(([v,label,color])=>{if(v!=null)refs.push(c.ref('x',v,label,color));});
+      const visibleStrikes = view.visible.map(point=>point.strike);
+      const allPrices=(visibleStrikes.length ? visibleStrikes : [spot]).filter(value=>Number.isFinite(value)&&value>0);
+      const xmin=Math.min(...allPrices), xmax=Math.max(...allPrices), xpad=xmax>xmin?(xmax-xmin)*.05:Math.max(xmin*.02,.01);
+      Object.assign(option.xAxis,{min:Math.max(0,xmin-xpad),max:xmax+xpad,scale:true,axisLabel:{fontSize:12,hideOverlap:true,formatter:value=>Number(value).toFixed(2)}});
+      const valuesY=view.visible.flatMap(point=>[point.call,point.put,point.net]).filter(value=>Number.isFinite(value));
+      const ymin=Math.min(0,...valuesY), ymax=Math.max(0,...valuesY), ypad=ymax>ymin?(ymax-ymin)*.08:1;
+      option.yAxis={type:'value',name:currentGreeksChart==='gex'?'GEX ($M / 1% move)':'Option price change (%)',min:ymin-ypad,max:ymax+ypad,axisLabel:{fontSize:12,formatter:value=>currentGreeksChart==='gex'?Number(value).toFixed(1):String(Math.round(value))},splitLine:{lineStyle:{color:colors.zero,opacity:.35}},axisLine:{onZero:true,lineStyle:{color:colors.zero,type:'dashed',width:1.5}}};
+      const loadedStrikes = rows.map(row=>Number(row.strike)).filter(Number.isFinite).sort((a,b)=>a-b).join(',');
+      option.terminalViewKey=`${currentGreeksChart}:${comparisonRange}:${optionsData.selected_expiration||''}:${loadedStrikes}`;
+      option.terminalLegendSelected={Calls:true,Puts:true,'Net GEX':true};
+      refs.push(c.ref('y',0,'Zero baseline',colors.zero));
     } else if (currentGreeksChart === 'voloi') {
       option.series = [c.bar('Call OI',strikes,values('call_oi'),'#10b981'),c.bar('Put OI',strikes,values('put_oi'),'#f43f5e'),
         {name:'Call Vol',type:'scatter',data:c.points(strikes,values('call_volume')),yAxisIndex:1,itemStyle:{color:'#10b981'},symbolSize:5},
@@ -1503,13 +1666,12 @@
       option.yAxis = [{type:'value',name:'Open interest'},{type:'value',name:'Volume',position:'right',splitLine:{show:false}}];
       const wall = key => rows.reduce((best,o)=> (o[key]||0) > (best[key]||0) ? o:best,rows[0]).strike;
       refs.push(c.ref('x',wall('call_oi'),'Call wall','#10b981'),c.ref('x',wall('put_oi'),'Put wall','#f43f5e'));
-    } else if (currentGreeksChart === 'pctchg') {
-      const colors = list=>list.map(v=>v>.1?'#10b981':v<-.1?'#f43f5e':'#a1a1aa');
-      const calls=values('call_pct_change'),puts=values('put_pct_change');
-      option.series = [c.bar('Call Chg%',strikes,calls,colors(calls)),c.bar('Put Chg%',strikes,puts,colors(puts),{yAxisIndex:1})];
-      option.yAxis = [{type:'value',name:'Call change (%)'},{type:'value',name:'Put change (%)',position:'right',splitLine:{show:false}}];
     }
-    if (option.series.length) option.series[0].markLine={symbol:'none',data:refs};
+    if (['gex','pctchg'].includes(currentGreeksChart)) renderComparisonSummary(view);
+    renderChartReferences('greeks-references', refs);
+    if (['gex','pctchg'].includes(currentGreeksChart)) refs.filter(ref=>ref.xAxis!=null).forEach(ref=>{ref.outsideRange=ref.outsideRange || ref.xAxis<view.bounds.min || ref.xAxis>view.bounds.max;});
+    if (option.series.length) option.series[0].markLine={symbol:'none',data:refs.filter(ref=>!ref.keyOnly)};
+    if (!option.terminalViewKey) option.terminalViewKey = currentGreeksChart;
     TerminalCharts.mount('greeks-chart',option);
   }
 
@@ -1547,14 +1709,25 @@
 
     const spot = optionsData.spot_price;
 
+    const breakeven = type === 'call' ? strike + premium : strike - premium;
     const prices = [];
-    const minVal = Math.min(strike, spot) * 0.8;
-    const maxVal = Math.max(strike, spot) * 1.2;
+    let minVal = Math.max(0, Math.min(strike, spot) * 0.8);
+    let maxVal = Math.max(strike, spot) * 1.2;
+    const padding = Math.max((maxVal - minVal) * .05, .01);
+    if (Number.isFinite(breakeven) && breakeven >= 0) {
+      if (breakeven < minVal) minVal = Math.max(0, breakeven - padding);
+      if (breakeven > maxVal) maxVal = breakeven + padding;
+    }
     const steps = 100;
 
     for (let i = 0; i <= steps; i++) {
       prices.push(minVal + (i / steps) * (maxVal - minVal));
     }
+
+    [strike, breakeven].forEach(price => {
+      if (price >= minVal && price <= maxVal && !prices.includes(price)) prices.push(price);
+    });
+    prices.sort((a,b) => a-b);
 
     const pnlValues = prices.map(s => {
       let payoff = 0;
@@ -1576,10 +1749,8 @@
 
     let maxProfit = 0;
     let maxLoss = 0;
-    let breakeven = 0;
 
     if (type === 'call') {
-      breakeven = strike + premium;
       if (position === 'long') {
         maxProfit = 'Unlimited';
         maxLoss = `-$${(premium * qty * 100).toFixed(0)}`;
@@ -1588,7 +1759,6 @@
         maxLoss = 'Unlimited';
       }
     } else {
-      breakeven = strike - premium;
       if (position === 'long') {
         maxProfit = `$${((strike - premium) * qty * 100).toFixed(0)}`;
         maxLoss = `-$${(premium * qty * 100).toFixed(0)}`;
@@ -1602,15 +1772,22 @@
 
     const profitEl = document.getElementById('payoff-stat-profit');
     profitEl.innerText = maxProfit;
-    profitEl.className = (maxProfit.includes('-') || maxProfit === 'Shortage?') ? 'font-mono text-xs font-bold text-rose-500' : 'font-mono text-xs font-bold text-emerald-500';
+    profitEl.className = (maxProfit.includes('-') || maxProfit === 'Shortage?') ? 'font-mono text-base font-bold text-rose-500' : 'font-mono text-base font-bold text-emerald-500';
 
     const lossEl = document.getElementById('payoff-stat-loss');
     lossEl.innerText = maxLoss;
-    lossEl.className = (maxLoss.includes('-') || maxLoss === 'Unlimited') ? 'font-mono text-xs font-bold text-rose-500' : 'font-mono text-xs font-bold text-emerald-500';
+    lossEl.className = (maxLoss.includes('-') || maxLoss === 'Unlimited') ? 'font-mono text-base font-bold text-rose-500' : 'font-mono text-base font-bold text-emerald-500';
 
     const series = [TerminalCharts.line('P&L ($)',prices,pnlValues,'#6366f1')];
-    series[0].markLine={symbol:'none',data:[TerminalCharts.ref('y',0,'Break-even','#71717a'),TerminalCharts.ref('x',spot,'Spot'),TerminalCharts.ref('x',breakeven,'Break-even price','#10b981')]};
-    TerminalCharts.mount('payoff-chart',TerminalCharts.cartesian(series,'Underlying price ($)','P&L ($)'));
+    const refs = [TerminalCharts.ref('y',0,'$0 P&L','#71717a'),TerminalCharts.ref('x',spot,'Current price'),TerminalCharts.ref('x',breakeven,'Breakeven price','#10b981')];
+    renderChartReferences('payoff-references', refs);
+    series[0].markLine={symbol:'none',data:refs.filter(ref => ref.xAxis == null || ref.xAxis >= 0)};
+    const option = TerminalCharts.cartesian(series,'Underlying price at expiration ($)','Total P&L ($)');
+    Object.assign(option.xAxis, {scale:true,min:minVal,max:maxVal,axisLabel:{fontSize:12,hideOverlap:true}});
+    option.yAxis.axisLabel = {fontSize:12,hideOverlap:true};
+    option.yAxis.nameGap = 55;
+    option.grid = {left:26,right:22,top:58,bottom:62,containLabel:true};
+    TerminalCharts.mount('payoff-chart',option);
   }
 
   // Options greeks poll — refreshes the chain every 60s while the chain tab
@@ -1620,15 +1797,18 @@
     const select = document.getElementById('expiration-select');
     if (!select || !select.value) return;
     const date = select.value;
+    const requestGeneration = optionsRequestGeneration;
     const rfRate = document.getElementById('rf-rate-input')?.value || '0.045';
     try {
       const res = await fetch(`/api/options-greeks/${ticker}?expiration=${date}&rf_rate=${rfRate}${strikeCountParam()}`);
       if (!res.ok) return;
       const fresh = await res.json();
-      // Only re-render if the data actually changed (avoid flicker on identical data)
-      if (JSON.stringify(fresh.options) !== JSON.stringify(optionsData.options)) {
+      if (requestGeneration !== optionsRequestGeneration || select.value !== date) return;
+      // Refresh source/snapshot context even when the numeric rows are unchanged.
+      if (JSON.stringify(fresh) !== JSON.stringify(optionsData)) {
+        const observationsChanged = JSON.stringify(fresh.options) !== JSON.stringify(optionsData.options);
         optionsData = fresh;
-        renderOptionChainTable();
+        if (observationsChanged) renderOptionChainTable();
         renderGreeksChart();
       }
     } catch (e) { /* network blip — ignore, next tick retries */ }

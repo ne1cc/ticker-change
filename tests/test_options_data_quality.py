@@ -330,3 +330,23 @@ def test_genuine_zero_bid_can_price_a_straddle(payload, analysis):
 def test_absent_bid_field_does_not_become_a_valid_zero_bid(payload, analysis):
     payload['calls'][0].pop('bid')
     assert analysis()['expected_move_straddle'] is None
+
+
+def test_greeks_rows_preserve_missing_vs_known_zero_availability(monkeypatch):
+    expiration = '2099-01-16'
+    calls = pd.DataFrame([{'strike': 100.0, 'impliedVolatility': .25, 'openInterest': None,
+                           'change': 1.0, 'percentChange': np.nan, 'bid': 0, 'ask': 0}])
+    puts = pd.DataFrame([{'strike': 100.0, 'impliedVolatility': .25, 'openInterest': 0,
+                          'change': 0, 'percentChange': 0, 'bid': 0, 'ask': 0}])
+    monkeypatch.setattr(app_module, '_get_yf_ticker', lambda symbol: object())
+    monkeypatch.setattr(app_module, 'get_cached_expirations', lambda *args: [expiration])
+    monkeypatch.setattr(app_module, 'get_cached_chain', lambda *args, **kwargs: (calls, puts, 100.0))
+
+    row = app_module.get_options_greeks_data('SPY', expiration)['options'][0]
+
+    assert row['call_oi_available'] is False
+    assert row['call_change_available'] is False
+    assert row['put_oi_available'] is True
+    assert row['put_change_available'] is True
+    assert row['call_oi'] == 0 and row['put_oi'] == 0
+    assert row['put_change'] == 0 and row['put_pct_change'] == 0

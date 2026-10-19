@@ -5,6 +5,10 @@
 
 {% block head_extra %}
 <style>
+  .analytics-section > summary::-webkit-details-marker { display: none; }
+  .analytics-section[open] .analytics-section-indicator { transform: rotate(45deg); }
+  .analytics-section-indicator { transition: transform 150ms ease; font-size: 1.25rem; line-height: 1; }
+  @media (prefers-reduced-motion: reduce) { .analytics-section-indicator { transition: none; } }
   .ai-report h3 { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin: 0.9rem 0 0.3rem; color: #a1a1aa; }
   .ai-report h3:first-child { margin-top: 0; }
   .ai-report ul { list-style: disc; padding-left: 1.1rem; margin: 0.25rem 0; }
@@ -78,174 +82,7 @@
 
 {{ stat_grid(stats, 'Risk Stats') }}
 
-<!-- Fundamentals panel -->
-{% if data.fundamentals %}
-{% call panel('Fundamentals & Valuation') %}
-  <div class="grid xl-kv grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-6 gap-y-3">
-    {% set multiples = [
-      ('Trailing P/E',   data.fundamentals.get('Trailing P/E'), 'trailing_pe'),
-      ('Forward P/E',    data.fundamentals.get('Forward P/E'), 'forward_pe'),
-      ('PEG Ratio',      data.fundamentals.get('PEG Ratio'), 'peg'),
-      ('EV / EBITDA',    data.fundamentals.get('EV / EBITDA'), 'ev_ebitda'),
-      ('EV / Revenue',   data.fundamentals.get('EV / Revenue'), none),
-      ('Price / Book',   data.fundamentals.get('Price / Book'), 'price_book'),
-      ('Price / Sales',  data.fundamentals.get('Price / Sales'), none),
-      ('EPS (TTM)',       data.fundamentals.get('EPS (TTM)'), none),
-      ('Forward EPS',    data.fundamentals.get('Forward EPS'), none),
-      ('Revenue Growth', data.fundamentals.get('Revenue Growth'), 'growth'),
-      ('Earnings Growth',data.fundamentals.get('Earnings Growth'), 'growth'),
-      ('Target Mean',    data.fundamentals.get('Target Mean'), 'price_target'),
-      ('Analyst Rating', data.fundamentals.get('Analyst Rating'), none),
-      ('Short % Float',  data.fundamentals.get('Short % Float'), 'short_float'),
-      ('Short Ratio',    data.fundamentals.get('Short Ratio'), 'short_ratio'),
-      ('Div Yield',      data.fundamentals.get('Dividend Yield'), 'dividend_yield'),
-    ] %}
-    {% for label, val, key in multiples %}
-    {% if val is not none %}
-    <div>
-      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">{% if key %}{{ metric(label, key) }}{% else %}{{ label }}{% endif %}</p>
-      <p class="text-sm font-mono font-semibold mt-0.5
-        {% if label in ['Revenue Growth', 'Earnings Growth'] %}
-          {{ 'text-emerald-500' if val >= 0 else 'text-rose-500' }}
-        {% else %}text-zinc-900 dark:text-zinc-100{% endif %}">
-        {% if label == 'Analyst Rating' %}
-          {{ val | replace('_', ' ') | title }}
-        {% elif label in ['Revenue Growth', 'Earnings Growth'] %}
-          {{ "%+.1f"|format(val * 100) }}%
-        {% elif label == 'Short % Float' %}
-          {{ "%.2f"|format(val * 100) }}%
-        {% elif label == 'Div Yield' %}
-          {{ "%.2f"|format(val) }}%
-        {% elif label == 'Target Mean' %}
-          ${{ "%.2f"|format(val) }}
-        {% else %}
-          {{ "%.2f"|format(val) }}
-        {% endif %}
-      </p>
-    </div>
-    {% endif %}
-    {% endfor %}
-    {% if data.fundamentals.get('Sector') %}
-    <div class="col-span-2 sm:col-span-1">
-      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Sector</p>
-      <p class="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mt-0.5">{{ data.fundamentals['Sector'] }}</p>
-    </div>
-    {% endif %}
-    {% if data.fundamentals.get('Industry') %}
-    <div class="col-span-2 sm:col-span-2">
-      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Industry</p>
-      <p class="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5">{{ data.fundamentals['Industry'] }}</p>
-    </div>
-    {% endif %}
-  </div>
-  {% if data.ai_sections and data.ai_sections.valuation %}
-  <div class="mt-4 pt-4 border-t border-zinc-100 dark:border-zinc-800">
-    <div class="flex items-center gap-1.5 font-semibold text-xs text-indigo-500 dark:text-indigo-400 mb-1.5">
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-      <span>AI Fundamental Analysis & Multiples Valuation</span>
-    </div>
-    <div class="ai-inline-summary text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
-      {{ data.ai_sections.valuation | safe }}
-    </div>
-  </div>
-  {% endif %}
-{% endcall %}
-{% endif %}
-
-<!-- Forecasts & Guidance panel -->
-{% if data.fundamentals and (data.fundamentals.get('Next Earnings') or data.fundamentals.get('PEG Ratio') or data.fundamentals.get('Earnings Growth') or data.fundamentals.get('Revenue Growth')) %}
-{% call panel('Consensus Forecasts & Guidance') %}
-  <div class="grid xl-kv grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-6 gap-y-3">
-    
-    {% if data.fundamentals.get('Next Earnings') %}
-    <div>
-      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Next Earnings Date</p>
-      <p class="text-sm font-mono font-semibold text-zinc-900 dark:text-zinc-100 mt-0.5">
-        {{ data.fundamentals['Next Earnings'] }}
-      </p>
-    </div>
-    {% endif %}
-
-    {% if data.fundamentals.get('Consensus EPS') is not none %}
-    <div>
-      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Consensus EPS Est.</p>
-      <p class="text-sm font-mono font-semibold text-zinc-900 dark:text-zinc-100 mt-0.5">
-        ${{ "%.2f"|format(data.fundamentals['Consensus EPS']) }}
-      </p>
-    </div>
-    {% endif %}
-
-    {% if data.fundamentals.get('Consensus Revenue') is not none %}
-    {% set rev = data.fundamentals['Consensus Revenue'] %}
-    <div>
-      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Consensus Revenue Est.</p>
-      <p class="text-sm font-mono font-semibold text-zinc-900 dark:text-zinc-100 mt-0.5">
-        {% if rev >= 1e12 %}
-          ${{ "%.2f"|format(rev / 1e12) }}T
-        {% elif rev >= 1e9 %}
-          ${{ "%.2f"|format(rev / 1e9) }}B
-        {% elif rev >= 1e6 %}
-          ${{ "%.2f"|format(rev / 1e6) }}M
-        {% else %}
-          ${{ "%.2f"|format(rev) }}
-        {% endif %}
-      </p>
-    </div>
-    {% endif %}
-
-    {% if data.fundamentals.get('PEG Ratio') is not none %}
-    <div>
-      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">PEG Ratio</p>
-      <p class="text-sm font-mono font-semibold text-zinc-900 dark:text-zinc-100 mt-0.5">
-        {{ "%.2f"|format(data.fundamentals['PEG Ratio']) }}
-      </p>
-    </div>
-    {% endif %}
-
-    {% if data.fundamentals.get('Earnings Growth') is not none %}
-    {% set eg = data.fundamentals['Earnings Growth'] %}
-    <div>
-      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Projected EPS Growth</p>
-      <p class="text-sm font-mono font-semibold {% if eg >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %} mt-0.5">
-        {% if eg >= 0 %}+{% endif %}{{ "%.1f"|format(eg * 100) }}%
-      </p>
-    </div>
-    {% endif %}
-
-    {% if data.fundamentals.get('Revenue Growth') is not none %}
-    {% set rg = data.fundamentals['Revenue Growth'] %}
-    <div>
-      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Projected Rev Growth</p>
-      <p class="text-sm font-mono font-semibold {% if rg >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %} mt-0.5">
-        {% if rg >= 0 %}+{% endif %}{{ "%.1f"|format(rg * 100) }}%
-      </p>
-    </div>
-    {% endif %}
-
-  </div>
-{% endcall %}
-{% endif %}
-
-<!-- Charts grid -->
-<div class="space-y-8">
-
-  <!-- Row 1: Distribution + Beta -->
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">Return Distribution</h2>
-      <p class="text-xs text-zinc-400 mb-3">Skew {{ data.stats.skewness }} &middot; Excess kurtosis {{ data.stats.kurtosis }} &middot; Fat tails = higher tail risk than a normal distribution implies.</p>
-      {{ data.charts.distribution | safe }}
-    </div>
-
-    {% if data.charts.beta %}
-    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Beta vs SPY', 'beta') }}</h2>
-      <p class="text-xs text-zinc-400 mb-3">β {{ data.stats.beta }} — each 1 % SPY move implies ~{{ data.stats.beta }}% move in {{ data.ticker }}. β > 1 = amplified market exposure.</p>
-      {{ data.charts.beta | safe }}
-    </div>
-    {% endif %}
-  </div>
-
+<!-- Primary benchmark context -->
   <!-- Row 2: Cumulative Return vs Benchmarks (full width) -->
   {% if data.charts.cumulative_return %}
   <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
@@ -260,6 +97,31 @@
     {{ data.charts.cumulative_return | safe }}
   </div>
   {% endif %}
+
+
+<details class="analytics-section rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 mb-4" data-analytics-section="risk">
+  <summary class="flex min-h-[44px] cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 text-sm font-semibold text-zinc-800 dark:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500">
+    <span class="min-w-0">Risk detail<span class="mt-0.5 block text-xs font-normal text-zinc-500 dark:text-zinc-400">Returns, volatility, drawdowns, and model estimates</span></span>
+    <span class="analytics-section-indicator shrink-0 text-zinc-500" aria-hidden="true">+</span>
+  </summary>
+  <div class="space-y-8 border-t border-zinc-200 p-4 dark:border-zinc-800 sm:p-5">
+  <div class="space-y-8">
+  <!-- Row 1: Distribution + Beta -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 {% if not data.charts.beta %}lg:col-span-2{% endif %}">
+      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">Return Distribution</h2>
+      <p class="text-xs text-zinc-400 mb-3">Skew {{ data.stats.skewness }} &middot; Excess kurtosis {{ data.stats.kurtosis }} &middot; Fat tails = higher tail risk than a normal distribution implies.</p>
+      {{ data.charts.distribution | safe }}
+    </div>
+
+    {% if data.charts.beta %}
+    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Beta vs SPY', 'beta') }}</h2>
+      <p class="text-xs text-zinc-400 mb-3">β {{ data.stats.beta }} — each 1 % SPY move implies ~{{ data.stats.beta }}% move in {{ data.ticker }}. β > 1 = amplified market exposure.</p>
+      {{ data.charts.beta | safe }}
+    </div>
+    {% endif %}
+  </div>
 
   <!-- Row 3: VaR & ES (full width) -->
   {% if data.charts.var %}
@@ -344,22 +206,7 @@
   </div>
   {% endif %}
 
-  <!-- Row 5b: Volume Profile + Options Smile -->
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-    {% if data.charts.volume_profile %}
-    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Volume Profile (2 yr)', 'poc') }}</h2>
-      <p class="text-xs text-zinc-400 mb-3">
-        Cumulative volume traded at each price level over the past two years.
-        High-volume nodes act as institutional support/resistance.
-        <span class="text-indigo-400 font-mono">POC ${{ data.stats.poc_price }}</span> = Point of Control (highest-volume price).
-      </p>
-      {{ data.charts.volume_profile | safe }}
-    </div>
-    {% endif %}
-
-    {% if data.charts.monte_carlo %}
+{% if data.charts.monte_carlo %}
     <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
       <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Monte Carlo Forward Projection', 'monte_carlo') }}</h2>
       <p class="text-xs text-zinc-400 mb-3">
@@ -376,6 +223,317 @@
       {{ data.charts.monte_carlo | safe }}
     </div>
     {% endif %}
+
+  <!-- Row 6: Sharpe + Seasonality -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Rolling Sharpe Ratio', 'sharpe') }}</h2>
+      <p class="text-xs text-zinc-400 mb-3">1-year rolling Sharpe (risk-free ≈ 0). Above 1 is generally considered strong risk-adjusted return.</p>
+      {{ data.charts.sharpe | safe }}
+    </div>
+
+    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Seasonality', 'seasonality') }}</h2>
+      <p class="text-xs text-zinc-400 mb-3">Average daily return by calendar month over the full history. Identifies recurring seasonal patterns and the strongest/weakest calendar periods.</p>
+      {{ data.charts.seasonality | safe }}
+    </div>
+  </div>
+
+  </div>
+  </div>
+</details>
+
+{% if data.fundamentals or data.charts.price_target or data.ai_report or data.charts.insider or data.insider_summary or data.earnings %}
+<details class="analytics-section rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 mb-4" data-analytics-section="company">
+  <summary class="flex min-h-[44px] cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 text-sm font-semibold text-zinc-800 dark:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500">
+    <span class="min-w-0">Company and forecasts<span class="mt-0.5 block text-xs font-normal text-zinc-500 dark:text-zinc-400">Valuation, expectations, ownership activity, and earnings</span></span>
+    <span class="analytics-section-indicator shrink-0 text-zinc-500" aria-hidden="true">+</span>
+  </summary>
+  <div class="space-y-8 border-t border-zinc-200 p-4 dark:border-zinc-800 sm:p-5">
+  <div class="space-y-8">
+<!-- Fundamentals panel -->
+{% if data.fundamentals %}
+{% call panel('Fundamentals & Valuation') %}
+  <div class="grid xl-kv grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5 gap-x-6 gap-y-3">
+    {% set multiples = [
+      ('Trailing P/E',   data.fundamentals.get('Trailing P/E'), 'trailing_pe'),
+      ('Forward P/E',    data.fundamentals.get('Forward P/E'), 'forward_pe'),
+      ('PEG Ratio',      data.fundamentals.get('PEG Ratio'), 'peg'),
+      ('EV / EBITDA',    data.fundamentals.get('EV / EBITDA'), 'ev_ebitda'),
+      ('EV / Revenue',   data.fundamentals.get('EV / Revenue'), none),
+      ('Price / Book',   data.fundamentals.get('Price / Book'), 'price_book'),
+      ('Price / Sales',  data.fundamentals.get('Price / Sales'), none),
+      ('EPS (TTM)',       data.fundamentals.get('EPS (TTM)'), none),
+      ('Forward EPS',    data.fundamentals.get('Forward EPS'), none),
+      ('Revenue Growth', data.fundamentals.get('Revenue Growth'), 'growth'),
+      ('Earnings Growth',data.fundamentals.get('Earnings Growth'), 'growth'),
+      ('Target Mean',    data.fundamentals.get('Target Mean'), 'price_target'),
+      ('Analyst Rating', data.fundamentals.get('Analyst Rating'), none),
+      ('Short % Float',  data.fundamentals.get('Short % Float'), 'short_float'),
+      ('Short Ratio',    data.fundamentals.get('Short Ratio'), 'short_ratio'),
+      ('Div Yield',      data.fundamentals.get('Dividend Yield'), 'dividend_yield'),
+    ] %}
+    {% for label, val, key in multiples %}
+    {% if val is not none %}
+    <div>
+      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">{% if key %}{{ metric(label, key) }}{% else %}{{ label }}{% endif %}</p>
+      <p class="text-sm font-mono font-semibold mt-0.5
+        {% if label in ['Revenue Growth', 'Earnings Growth'] %}
+          {{ 'text-emerald-500' if val >= 0 else 'text-rose-500' }}
+        {% else %}text-zinc-900 dark:text-zinc-100{% endif %}">
+        {% if label == 'Analyst Rating' %}
+          {{ val | replace('_', ' ') | title }}
+        {% elif label in ['Revenue Growth', 'Earnings Growth'] %}
+          {{ "%+.1f"|format(val * 100) }}%
+        {% elif label == 'Short % Float' %}
+          {{ "%.2f"|format(val * 100) }}%
+        {% elif label == 'Div Yield' %}
+          {{ "%.2f"|format(val) }}%
+        {% elif label == 'Target Mean' %}
+          ${{ "%.2f"|format(val) }}
+        {% else %}
+          {{ "%.2f"|format(val) }}
+        {% endif %}
+      </p>
+    </div>
+    {% endif %}
+    {% endfor %}
+    {% if data.fundamentals.get('Sector') %}
+    <div class="col-span-2 sm:col-span-1">
+      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Sector</p>
+      <p class="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mt-0.5">{{ data.fundamentals['Sector'] }}</p>
+    </div>
+    {% endif %}
+    {% if data.fundamentals.get('Industry') %}
+    <div class="col-span-2 sm:col-span-2">
+      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Industry</p>
+      <p class="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5">{{ data.fundamentals['Industry'] }}</p>
+    </div>
+    {% endif %}
+  </div>
+  {% if data.ai_sections and data.ai_sections.valuation %}
+  <div class="mt-4 pt-4 border-t border-zinc-100 dark:border-zinc-800">
+    <div class="flex items-center gap-1.5 font-semibold text-xs text-indigo-500 dark:text-indigo-400 mb-1.5">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+      <span>AI Fundamental Analysis & Multiples Valuation</span>
+    </div>
+    <div class="ai-inline-summary text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+      {{ data.ai_sections.valuation | safe }}
+    </div>
+  </div>
+  {% endif %}
+{% endcall %}
+{% endif %}
+
+<!-- Forecasts & Guidance panel -->
+{% if data.fundamentals and (data.fundamentals.get('Next Earnings') or data.fundamentals.get('PEG Ratio') or data.fundamentals.get('Earnings Growth') or data.fundamentals.get('Revenue Growth')) %}
+{% call panel('Consensus Forecasts & Guidance') %}
+  <div class="grid xl-kv analytics-forecast-grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3">
+    
+    {% if data.fundamentals.get('Next Earnings') %}
+    <div>
+      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Next Earnings Date</p>
+      <p class="text-sm font-mono font-semibold text-zinc-900 dark:text-zinc-100 mt-0.5">
+        {{ data.fundamentals['Next Earnings'] }}
+      </p>
+    </div>
+    {% endif %}
+
+    {% if data.fundamentals.get('Consensus EPS') is not none %}
+    <div>
+      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Consensus EPS Est.</p>
+      <p class="text-sm font-mono font-semibold text-zinc-900 dark:text-zinc-100 mt-0.5">
+        ${{ "%.2f"|format(data.fundamentals['Consensus EPS']) }}
+      </p>
+    </div>
+    {% endif %}
+
+    {% if data.fundamentals.get('Consensus Revenue') is not none %}
+    {% set rev = data.fundamentals['Consensus Revenue'] %}
+    <div>
+      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Consensus Revenue Est.</p>
+      <p class="text-sm font-mono font-semibold text-zinc-900 dark:text-zinc-100 mt-0.5">
+        {% if rev >= 1e12 %}
+          ${{ "%.2f"|format(rev / 1e12) }}T
+        {% elif rev >= 1e9 %}
+          ${{ "%.2f"|format(rev / 1e9) }}B
+        {% elif rev >= 1e6 %}
+          ${{ "%.2f"|format(rev / 1e6) }}M
+        {% else %}
+          ${{ "%.2f"|format(rev) }}
+        {% endif %}
+      </p>
+    </div>
+    {% endif %}
+
+    {% if data.fundamentals.get('PEG Ratio') is not none %}
+    <div>
+      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">PEG Ratio</p>
+      <p class="text-sm font-mono font-semibold text-zinc-900 dark:text-zinc-100 mt-0.5">
+        {{ "%.2f"|format(data.fundamentals['PEG Ratio']) }}
+      </p>
+    </div>
+    {% endif %}
+
+    {% if data.fundamentals.get('Earnings Growth') is not none %}
+    {% set eg = data.fundamentals['Earnings Growth'] %}
+    <div>
+      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Projected EPS Growth</p>
+      <p class="text-sm font-mono font-semibold {% if eg >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %} mt-0.5">
+        {% if eg >= 0 %}+{% endif %}{{ "%.1f"|format(eg * 100) }}%
+      </p>
+    </div>
+    {% endif %}
+
+    {% if data.fundamentals.get('Revenue Growth') is not none %}
+    {% set rg = data.fundamentals['Revenue Growth'] %}
+    <div>
+      <p class="text-[11px] text-zinc-400 uppercase tracking-wider">Projected Rev Growth</p>
+      <p class="text-sm font-mono font-semibold {% if rg >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %} mt-0.5">
+        {% if rg >= 0 %}+{% endif %}{{ "%.1f"|format(rg * 100) }}%
+      </p>
+    </div>
+    {% endif %}
+
+  </div>
+{% endcall %}
+{% endif %}
+
+  <!-- Row 5d: Analyst price target + AI analyst report -->
+  {% if data.charts.price_target or data.ai_report %}
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    {% if data.charts.price_target %}
+    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 {% if not data.ai_report %}lg:col-span-3{% endif %}">
+      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Analyst Price Target', 'price_target') }}</h2>
+      <p class="text-xs text-zinc-400 mb-3">
+        Wall Street consensus — low, mean, and high 12-month price targets from covering analysts.
+        <span class="text-amber-500 font-mono">◆</span> mean target &nbsp;
+        <span class="font-mono">●</span> current price.
+      </p>
+      {{ data.charts.price_target | safe }}
+    </div>
+    {% endif %}
+    {% if data.ai_report %}
+    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 {% if data.charts.price_target %}lg:col-span-2{% else %}lg:col-span-3{% endif %}">
+      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-2">AI Analyst Report</h2>
+      <div class="ai-report text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed space-y-2">
+        {{ data.ai_report | safe }}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Row 7: Insider Transactions (full width) -->
+  {% if data.charts.insider or data.insider_summary %}
+  <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+    <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Insider Transaction Activity', 'insider_transactions') }}</h2>
+
+    {% if data.insider_summary %}
+    <!-- Summary stats row -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+      <div class="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50 px-3 py-2">
+        <div class="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">Total Bought</div>
+        <div class="font-mono text-sm font-bold text-emerald-600 dark:text-emerald-400">{{ '{:+,}'.format(data.insider_summary.total_buy) }} sh</div>
+        <div class="text-[10px] text-zinc-400">{{ data.insider_summary.n_buys }} transactions</div>
+      </div>
+      <div class="rounded-lg bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800/50 px-3 py-2">
+        <div class="text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wider">Total Sold</div>
+        <div class="font-mono text-sm font-bold text-rose-600 dark:text-rose-400">-{{ '{:,}'.format(data.insider_summary.total_sell) }} sh</div>
+        <div class="text-[10px] text-zinc-400">{{ data.insider_summary.n_sells }} transactions</div>
+      </div>
+      <div class="rounded-lg {{ 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800/50' if data.insider_summary.net >= 0 else 'bg-sky-50 dark:bg-sky-900/20 border-sky-200 dark:border-sky-800/50' }} border px-3 py-2">
+        <div class="text-[10px] font-bold {{ 'text-amber-600 dark:text-amber-400' if data.insider_summary.net >= 0 else 'text-sky-600 dark:text-sky-400' }} uppercase tracking-wider">Net Activity</div>
+        <div class="font-mono text-sm font-bold {{ 'text-amber-600 dark:text-amber-400' if data.insider_summary.net >= 0 else 'text-sky-600 dark:text-sky-400' }}">{{ '{:+,}'.format(data.insider_summary.net) }} sh</div>
+        <div class="text-[10px] text-zinc-400">{{ data.insider_summary.n_insiders }} insider{{ 's' if data.insider_summary.n_insiders != 1 else '' }}</div>
+      </div>
+      <div class="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 px-3 py-2">
+        <div class="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Sentiment</div>
+        <div class="font-mono text-sm font-bold {{ 'text-emerald-600 dark:text-emerald-400' if data.insider_summary.net > 0 else ('text-rose-500' if data.insider_summary.net < 0 else 'text-zinc-400') }}">
+          {% if data.insider_summary.net > 0 %}Bullish{% elif data.insider_summary.net < 0 %}Bearish{% else %}Neutral{% endif %}
+        </div>
+        <div class="text-[10px] text-zinc-400">{{ 'Insiders accumulating' if data.insider_summary.net > 0 else ('Insiders distributing' if data.insider_summary.net < 0 else 'Balanced flow') }}</div>
+      </div>
+    </div>
+    {% endif %}
+
+    <p class="text-xs text-zinc-400 mb-3">
+      Monthly net shares bought (green) or sold (red) by company insiders, overlaid on price.
+      Gifts and grants are excluded from the net calculation. Sustained net buying — especially by executives — is a historically bullish signal.
+    </p>
+    {% if data.charts.insider %}
+    {{ data.charts.insider | safe }}
+    {% endif %}
+
+    {% if data.insider_summary and data.insider_summary.transactions %}
+    <!-- Recent transactions table -->
+    <div class="mt-5 overflow-x-auto">
+      <h3 class="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">Recent Transactions</h3>
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-[10px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+            <th class="py-2 pr-4">Insider</th>
+            <th class="py-2 pr-4">Role</th>
+            <th class="py-2 pr-4 text-right">Shares</th>
+            <th class="py-2 pr-4 text-right">Value</th>
+            <th class="py-2 pr-4">Type</th>
+            <th class="py-2 pr-4 text-right">Date</th>
+          </tr>
+        </thead>
+        <tbody class="font-mono text-xs">
+          {% for t in data.insider_summary.transactions %}
+          <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
+            <td class="py-1.5 pr-4 font-sans">{{ t.name or '—' }}</td>
+            <td class="py-1.5 pr-4 text-zinc-400">{{ t.position or '—' }}</td>
+            <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if t.is_buy else 'text-rose-500' }}">
+              {{ '{:+,}'.format(t.shares) }}
+            </td>
+            <td class="py-1.5 pr-4 text-right text-zinc-500">
+              {% if t.value > 0 %}${{ '{:,.0f}'.format(t.value) }}{% else %}—{% endif %}
+            </td>
+            <td class="py-1.5 pr-4 text-zinc-400">{{ t.text[:40] if t.text else '—' }}</td>
+            <td class="py-1.5 pr-4 text-right text-zinc-400">{{ t.date }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Row 9: Earnings Event Study -->
+  {% include "_earnings.html" %}
+
+  </div>
+  </div>
+</details>
+{% endif %}
+
+{% if data.charts.volume_profile or data.charts.options_smile or data.ml or data.charts.gex or data.institutional %}
+<details class="analytics-section rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 mb-4" data-analytics-section="options">
+  <summary class="flex min-h-[44px] cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 text-sm font-semibold text-zinc-800 dark:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500">
+    <span class="min-w-0">Options and positioning<span class="mt-0.5 block text-xs font-normal text-zinc-500 dark:text-zinc-400">Volume, options pricing, gamma exposure, and institutional context</span></span>
+    <span class="analytics-section-indicator shrink-0 text-zinc-500" aria-hidden="true">+</span>
+  </summary>
+  <div class="space-y-8 border-t border-zinc-200 p-4 dark:border-zinc-800 sm:p-5">
+  <div class="space-y-8">
+  <!-- Row 5b: Volume Profile + Options Smile -->
+  <div>
+
+    {% if data.charts.volume_profile %}
+    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Volume Profile (2 yr)', 'poc') }}</h2>
+      <p class="text-xs text-zinc-400 mb-3">
+        Cumulative volume traded at each price level over the past two years.
+        High-volume nodes act as institutional support/resistance.
+        <span class="text-indigo-400 font-mono">POC ${{ data.stats.poc_price }}</span> = Point of Control (highest-volume price).
+      </p>
+      {{ data.charts.volume_profile | safe }}
+    </div>
+    {% endif %}
+
+
 
   </div>
 
@@ -532,131 +690,13 @@
   </div>
   {% endif %}
 
-  <!-- Row 5d: Analyst price target + AI analyst report -->
-  {% if data.charts.price_target or data.ai_report %}
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-    {% if data.charts.price_target %}
-    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 {% if not data.ai_report %}lg:col-span-3{% endif %}">
-      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Analyst Price Target', 'price_target') }}</h2>
-      <p class="text-xs text-zinc-400 mb-3">
-        Wall Street consensus — low, mean, and high 12-month price targets from covering analysts.
-        <span class="text-amber-500 font-mono">◆</span> mean target &nbsp;
-        <span class="font-mono">●</span> current price.
-      </p>
-      {{ data.charts.price_target | safe }}
-    </div>
-    {% endif %}
-    {% if data.ai_report %}
-    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 {% if data.charts.price_target %}lg:col-span-2{% else %}lg:col-span-3{% endif %}">
-      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-2">AI Analyst Report</h2>
-      <div class="ai-report text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed space-y-2">
-        {{ data.ai_report | safe }}
-      </div>
-    </div>
-    {% endif %}
-  </div>
-  {% endif %}
-
-  <!-- Row 6: Sharpe + Seasonality -->
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Rolling Sharpe Ratio', 'sharpe') }}</h2>
-      <p class="text-xs text-zinc-400 mb-3">1-year rolling Sharpe (risk-free ≈ 0). Above 1 is generally considered strong risk-adjusted return.</p>
-      {{ data.charts.sharpe | safe }}
-    </div>
-
-    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Seasonality', 'seasonality') }}</h2>
-      <p class="text-xs text-zinc-400 mb-3">Average daily return by calendar month over the full history. Identifies recurring seasonal patterns and the strongest/weakest calendar periods.</p>
-      {{ data.charts.seasonality | safe }}
-    </div>
-  </div>
-
-  <!-- Row 7: Insider Transactions (full width) -->
-  {% if data.charts.insider or data.insider_summary %}
-  <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-    <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Insider Transaction Activity', 'insider_transactions') }}</h2>
-
-    {% if data.insider_summary %}
-    <!-- Summary stats row -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-      <div class="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50 px-3 py-2">
-        <div class="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">Total Bought</div>
-        <div class="font-mono text-sm font-bold text-emerald-600 dark:text-emerald-400">{{ '{:+,}'.format(data.insider_summary.total_buy) }} sh</div>
-        <div class="text-[10px] text-zinc-400">{{ data.insider_summary.n_buys }} transactions</div>
-      </div>
-      <div class="rounded-lg bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800/50 px-3 py-2">
-        <div class="text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wider">Total Sold</div>
-        <div class="font-mono text-sm font-bold text-rose-600 dark:text-rose-400">-{{ '{:,}'.format(data.insider_summary.total_sell) }} sh</div>
-        <div class="text-[10px] text-zinc-400">{{ data.insider_summary.n_sells }} transactions</div>
-      </div>
-      <div class="rounded-lg {{ 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800/50' if data.insider_summary.net >= 0 else 'bg-sky-50 dark:bg-sky-900/20 border-sky-200 dark:border-sky-800/50' }} border px-3 py-2">
-        <div class="text-[10px] font-bold {{ 'text-amber-600 dark:text-amber-400' if data.insider_summary.net >= 0 else 'text-sky-600 dark:text-sky-400' }} uppercase tracking-wider">Net Activity</div>
-        <div class="font-mono text-sm font-bold {{ 'text-amber-600 dark:text-amber-400' if data.insider_summary.net >= 0 else 'text-sky-600 dark:text-sky-400' }}">{{ '{:+,}'.format(data.insider_summary.net) }} sh</div>
-        <div class="text-[10px] text-zinc-400">{{ data.insider_summary.n_insiders }} insider{{ 's' if data.insider_summary.n_insiders != 1 else '' }}</div>
-      </div>
-      <div class="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 px-3 py-2">
-        <div class="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Sentiment</div>
-        <div class="font-mono text-sm font-bold {{ 'text-emerald-600 dark:text-emerald-400' if data.insider_summary.net > 0 else ('text-rose-500' if data.insider_summary.net < 0 else 'text-zinc-400') }}">
-          {% if data.insider_summary.net > 0 %}Bullish{% elif data.insider_summary.net < 0 %}Bearish{% else %}Neutral{% endif %}
-        </div>
-        <div class="text-[10px] text-zinc-400">{{ 'Insiders accumulating' if data.insider_summary.net > 0 else ('Insiders distributing' if data.insider_summary.net < 0 else 'Balanced flow') }}</div>
-      </div>
-    </div>
-    {% endif %}
-
-    <p class="text-xs text-zinc-400 mb-3">
-      Monthly net shares bought (green) or sold (red) by company insiders, overlaid on price.
-      Gifts and grants are excluded from the net calculation. Sustained net buying — especially by executives — is a historically bullish signal.
-    </p>
-    {% if data.charts.insider %}
-    {{ data.charts.insider | safe }}
-    {% endif %}
-
-    {% if data.insider_summary and data.insider_summary.transactions %}
-    <!-- Recent transactions table -->
-    <div class="mt-5 overflow-x-auto">
-      <h3 class="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">Recent Transactions</h3>
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="text-left text-[10px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
-            <th class="py-2 pr-4">Insider</th>
-            <th class="py-2 pr-4">Role</th>
-            <th class="py-2 pr-4 text-right">Shares</th>
-            <th class="py-2 pr-4 text-right">Value</th>
-            <th class="py-2 pr-4">Type</th>
-            <th class="py-2 pr-4 text-right">Date</th>
-          </tr>
-        </thead>
-        <tbody class="font-mono text-xs">
-          {% for t in data.insider_summary.transactions %}
-          <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
-            <td class="py-1.5 pr-4 font-sans">{{ t.name or '—' }}</td>
-            <td class="py-1.5 pr-4 text-zinc-400">{{ t.position or '—' }}</td>
-            <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if t.is_buy else 'text-rose-500' }}">
-              {{ '{:+,}'.format(t.shares) }}
-            </td>
-            <td class="py-1.5 pr-4 text-right text-zinc-500">
-              {% if t.value > 0 %}${{ '{:,.0f}'.format(t.value) }}{% else %}—{% endif %}
-            </td>
-            <td class="py-1.5 pr-4 text-zinc-400">{{ t.text[:40] if t.text else '—' }}</td>
-            <td class="py-1.5 pr-4 text-right text-zinc-400">{{ t.date }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
-  </div>
-  {% endif %}
-
   <!-- Row 8: Institutional Quantitative Analytics (Microstructure, Macro, Higher-Order Greeks, 8-K) -->
   {% include "_institutional.html" %}
 
-  <!-- Row 9: Earnings Event Study -->
-  {% include "_earnings.html" %}
-
-</div>
+  </div>
+  </div>
+</details>
+{% endif %}
 
 {% else %}
 <!-- Empty state -->

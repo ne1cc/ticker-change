@@ -1178,6 +1178,16 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
                                     (call_wall, 'Call Wall', '#10b981'), (put_wall, 'Put Wall', '#f43f5e'), (hvl, 'HVL', '#71717a')]:
             if value is not None:
                 levels.append(charts.reference('y', value, f'{label} ${value:g}', color))
+        # Keep nearby strike labels legible when several key levels cluster together.
+        label_groups = []
+        for level in sorted(levels, key=lambda item: item['yAxis']):
+            if not label_groups or level['yAxis'] - label_groups[-1][-1]['yAxis'] > current_price * 0.01:
+                label_groups.append([level])
+            else:
+                label_groups[-1].append(level)
+        for group in label_groups:
+            for index, level in enumerate(group):
+                level['label']['offset'] = [0, (index - (len(group) - 1) / 2) * 18]
         def _gex_view(seq, calls, puts, nets, cumulative, split):
             bars = ([charts.bar('Call GEX', calls, seq, '#10b981'), charts.bar('Put GEX', puts, seq, '#f43f5e')]
                     if split else [charts.bar('Net GEX', nets, seq, ['#10b981' if v >= 0 else '#f43f5e' for v in nets])])
@@ -2123,11 +2133,19 @@ def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045, strike_
             p_change = p_opt.get('change', 0)
             p_pct_change = p_opt.get('percentChange', 0)
 
+            def _available(row, field, allow_zero=False):
+                value = finite_number(row.get(field)) if field in row else None
+                return value is not None and (allow_zero or value >= 0)
+
             def _safe_num(v):
                 return finite_number(v) or 0
 
             rows.append({
                 'strike': strike,
+                'call_oi_available': bool(c_opt and _available(c_opt, 'openInterest')),
+                'put_oi_available': bool(p_opt and _available(p_opt, 'openInterest')),
+                'call_change_available': bool(c_opt and _available(c_opt, 'change', True) and _available(c_opt, 'percentChange', True)),
+                'put_change_available': bool(p_opt and _available(p_opt, 'change', True) and _available(p_opt, 'percentChange', True)),
                 'call_quote_valid': valid_quote(c_opt.get('bid'), c_opt.get('ask')),
                 'call_bid': _safe_num(c_bid),
                 'call_ask': _safe_num(c_ask),

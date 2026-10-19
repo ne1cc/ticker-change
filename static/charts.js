@@ -48,11 +48,34 @@
       grid: { left: 18, right: 22, top: 58, bottom: 62, containLabel: true },
       tooltip: { trigger: 'axis', renderMode: 'richText', confine: true, backgroundColor: p.bg, textStyle: { color: p.text }, axisPointer: { type: 'cross' } },
       aria: { enabled: true }, dataZoom: [{ type: 'inside', filterMode: 'none' }, { type: 'slider', height: 15, bottom: 10, borderColor: p.grid }], ...option };
-    result.legend = {type:'scroll',top:5,...option.legend,textStyle:{color:p.text,fontSize:10}};
+    result.legend = {type:'scroll',top:5,...option.legend,textStyle:{color:p.text,fontSize:option.terminalLegendFontSize || 10}};
     for (const key of ['xAxis', 'yAxis', 'xAxis3D', 'yAxis3D', 'zAxis3D']) {
       if (option[key]) result[key] = Array.isArray(option[key]) ? option[key].map(axis) : axis(option[key]);
     }
     if (option.title) result.title = { ...option.title, top: 28, textStyle: { color: p.text, fontSize: 11, fontWeight: 400 } };
+    if (option.terminalComparison) {
+      const excel = document.documentElement.classList.contains('excel');
+      const colors = document.documentElement.classList.contains('dark') && !excel
+        ? {calls:'#60a5fa',puts:'#fb923c',net:'#fafafa',zero:'#a1a1aa'}
+        : {calls:'#2563eb',puts:'#c2410c',net:'#18181b',zero:'#71717a'};
+      result.series = option.series.map(series => {
+        const color = series.name === 'Calls' ? colors.calls : series.name === 'Puts' ? colors.puts : series.name === 'Net GEX' ? colors.net : null;
+        if (!color) return series;
+        return {...series,itemStyle:{...series.itemStyle,color},lineStyle:{...series.lineStyle,color}};
+      });
+      result.series = result.series.map(series => series.markLine ? {...series,markLine:{...series.markLine,data:series.markLine.data.map(ref => {
+        const color = ref.name === 'Largest call contribution' ? colors.calls : ref.name === 'Largest put contribution' ? colors.puts : ref.name === 'Current price' ? '#f59e0b' : ref.name === 'Zero baseline' ? colors.zero : ref.lineStyle?.color;
+        return {...ref,lineStyle:{...ref.lineStyle,color}};
+      })}} : series);
+      if (result.yAxis && !Array.isArray(result.yAxis)) {
+        result.yAxis = {...result.yAxis,splitLine:{...result.yAxis.splitLine,lineStyle:{...result.yAxis.splitLine?.lineStyle,color:colors.zero}},
+          axisLine:{...result.yAxis.axisLine,lineStyle:{...result.yAxis.axisLine?.lineStyle,color:colors.zero}}};
+      }
+      delete result.terminalComparison;
+      delete result.terminalLegendFontSize;
+      delete result.terminalLegendSelected;
+      delete result.terminalViewKey;
+    }
     if (option.series?.some(s => s.type === 'treemap' || s.type === 'surface')) {
       delete result.dataZoom; delete result.xAxis; delete result.yAxis;
       result.tooltip.trigger = 'item';
@@ -117,12 +140,15 @@
       state.chart.on('treemapRootToNode', event => state.onTreemapNavigate?.(event));
     }
     if (reset) state.rootId = '';
-    const existing = !reset ? state.chart.getOption() : null;
+    const viewChanged = state.viewKey !== option.terminalViewKey;
+    const existing = !reset && !viewChanged ? state.chart.getOption() : null;
     const styled = themed(option, state);
     if (existing?.dataZoom) styled.dataZoom = existing.dataZoom;
     if (existing?.grid3D?.[0]?.viewControl && styled.grid3D) styled.grid3D.viewControl = existing.grid3D[0].viewControl;
     if (existing?.legend?.[0]?.selected) styled.legend = { ...styled.legend, selected: existing.legend[0].selected };
+    else if (option.terminalLegendSelected) styled.legend = {...styled.legend, selected: {...option.terminalLegendSelected}};
     state.chart.setOption(styled, { notMerge: true });
+    state.viewKey = option.terminalViewKey;
     state.chart.resize();
     // notMerge drops the treemap zoom; restore it so theme/period changes keep the sector in view.
     if (state.rootId) state.chart.dispatchAction({ type: 'treemapRootToNode', targetNodeId: state.rootId });
