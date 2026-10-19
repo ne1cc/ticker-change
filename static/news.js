@@ -18,7 +18,7 @@
   fetch('/api/news?' + query, { credentials: 'same-origin' })
     .then(response => response.json())
     .then(feed => {
-      const articles = Array.isArray(feed.articles) ? feed.articles.slice(0, 3) : [];
+      const articles = Array.isArray(feed.articles) ? feed.articles : [];
       if (!articles.length) {
         showMessage(feed.message || feed.detail || 'No recent headlines available.');
         return;

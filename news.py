@@ -91,12 +91,14 @@ def _listing(item):
 
 
 def _resolve(ticker, listing_id, deadline):
-    key = "entity:" + ticker
-    cached = db.cache_get(_PROVIDER, key, 24 * 7)
+    key = "entity:equity,etf:" + ticker
+    cached, stored_at = db.cache_get_with_age(_PROVIDER, key, 24 * 7)
+    if cached is not None and not cached["candidates"] and _now() - _date(stored_at) >= timedelta(hours=1):
+        cached = None
     if cached is None:
         if not db.try_claim_lock("news:" + key, 2 / 60):
             return None, [], "unavailable"
-        params = {"symbols": ticker, "types": "equity"}
+        params = {"symbols": ticker, "types": "equity,etf"}
         if "." not in ticker:
             params["countries"] = "us"
         items, error = _request("/entity/search", params, deadline)
