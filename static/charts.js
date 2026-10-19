@@ -96,7 +96,7 @@
       delete result.legend;
       const dollars = v => v >= 1e9 ? `$${(v / 1e9).toFixed(1)}B` : `$${(v / 1e6).toFixed(0)}M`;
       result.tooltip.formatter = params => params.data?.leaf
-        ? `${params.data.company} (${params.data.symbol})\n${params.treePathInfo[1]?.name || ''}\n$${params.data.price.toFixed(2)} · ${params.data.change}\n20d avg $ volume ${dollars(params.data.value[0])}\nClick to open price table`
+        ? `${params.data.company} (${params.data.symbol})\n${params.treePathInfo[1]?.name || ''}\n$${params.data.price.toFixed(2)} · ${params.data.change}\n20d avg $ volume ${dollars(params.data.value[0])}\n${state?.rootId ? 'Click to open price table' : 'Click to zoom into ' + (params.treePathInfo[1]?.name || 'sector')}`
         : params.name + '\n' + (params.data?.change || '') + (params.data?.children ? '\nClick to zoom in' : '');
     }
     if (option.series?.some(s => s.type === 'surface')) {
@@ -110,8 +110,10 @@
     if (!state.chart) {
       state.chart = echarts.init(element);
       state.chart.on('click', event => {
-        if (event.data?.symbol && event.data?.leaf) location.href = '/stock?ticker=' + encodeURIComponent(event.data.symbol);
-        else if (event.data?.id?.startsWith('sector::')) state.chart.dispatchAction({ type: 'treemapRootToNode', targetNodeId: event.data.id });
+        // Full map: a click anywhere in a sector zooms into it. Zoomed in: a ticker opens its price table.
+        const sector = event.data?.id?.startsWith('sector::') ? event.data.id : (event.data?.leaf && !state.rootId ? 'sector::' + event.treePathInfo?.[1]?.name : null);
+        if (sector) state.chart.dispatchAction({ type: 'treemapRootToNode', targetNodeId: sector });
+        else if (event.data?.symbol && event.data?.leaf) location.href = '/stock?ticker=' + encodeURIComponent(event.data.symbol);
       });
       state.chart.on('treemapRootToNode', event => state.onTreemapNavigate?.(event));
     }
