@@ -513,5 +513,17 @@ GLOSSARY: dict[str, dict] = {
         "short": "How many index constituents closed higher versus lower versus flat on the latest session.",
         "long": "Breadth reads the market's internal health beyond what a cap-weighted index shows: when a handful of mega-caps lift the index while most constituents fall, advancers/decliners expose the divergence. A heatmap makes the same point visually — breadth is its numeric summary.",
     },
+    "heatmap_period_change": {
+        "term": "Heatmap Period Change (1D / 5D / 1M)",
+        "section": "Markets",
+        "short": "Percent change of the latest close versus the close 1, 5 or 21 trading sessions earlier.",
+        "long": "The 1D / 5D / 1M toggle recolours the heatmap by close-to-close change over that many sessions (1, 5 or 21 — a month of trading days, not calendar days). Longer windows move further, so the colour scale widens with the window: fully saturated at ±3% for 1D, ±6% for 5D and ±10% for 1M. A ticker without enough cached history for the chosen window is drawn neutral and labelled n/a rather than flat.",
+    },
+    "heatmap_sector_change": {
+        "term": "Heatmap Sector Change",
+        "section": "Markets",
+        "short": "A sector's change, weighting each ticker by its 20-day average dollar volume.",
+        "long": "Tile area and sector weighting both use trailing 20-session average dollar volume (close × volume), a free liquidity proxy rather than market cap — so this will not match a cap-weighted sector index exactly. Tickers with no value for the selected period are left out of the weighted average.",
+    },
 }
 

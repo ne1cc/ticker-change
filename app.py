@@ -2314,10 +2314,11 @@ def heatmap_page():
     first-ever load renders instantly with partial coverage and fills in as
     the background warmer downloads history."""
     data = heatmap.get_heatmap_payload()
-    chart = None
+    chart, periods = None, []
     if data:
         chart = heatmap.render_treemap(data, dark=request.cookies.get('ui_mode') == 'dark')
-    return render_template('heatmap.html', data=data, heatmap_chart=chart)
+        periods = heatmap.period_views(data)
+    return render_template('heatmap.html', data=data, heatmap_chart=chart, periods=periods)
 
 
 @app.route('/api/heatmap')
