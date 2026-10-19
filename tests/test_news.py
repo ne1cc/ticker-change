@@ -43,6 +43,8 @@ def upstream(monkeypatch, service, pages=None, entities=None):
         calls.append((url, dict(params)))
         if url.endswith("/entity/search"):
             data = [entity()] if entities is None else entities
+            if isinstance(data, list):
+                data = [item for item in data if item["type"] in params["types"].split(",")]
         else:
             page = params["page"] - 1
             data = pages[page] if page < len(pages) else []
@@ -93,6 +95,61 @@ def test_bare_us_ticker_resolves_exact_marketaux_listing(service, monkeypatch):
     assert feed["listing"]["name"] == "Micron Technology, Inc."
     assert calls[0][1]["symbols"] == "MU"
     assert calls[0][1]["countries"] == "us"
+
+
+def test_us_etf_returns_matching_headlines(service, monkeypatch):
+    listing = {**entity("SPY", name="SPDR S&P 500 ETF Trust"), "type": "etf"}
+    calls = upstream(monkeypatch, service, entities=[listing],
+                     pages=[[article(entities=[listing])]])
+
+    feed = service.get_feed("SPY")
+
+    assert feed["status"] == "ok"
+    assert feed["listing"]["symbol"] == "SPY"
+    assert [item["id"] for item in feed["articles"]] == ["id-0"]
+    assert calls[0][1]["countries"] == "us"
+
+
+def test_legacy_negative_lookup_is_bypassed(service, monkeypatch):
+    db.cache_set("marketaux_news", "entity:AAPL", {"candidates": []})
+    upstream(monkeypatch, service)
+
+    feed = service.get_feed("AAPL")
+
+    assert feed["status"] == "ok"
+    assert [item["id"] for item in feed["articles"]] == ["id-0"]
+
+
+def test_negative_lookup_retries_after_one_hour(service, monkeypatch):
+    entities = []
+    calls = upstream(monkeypatch, service, entities=entities)
+    assert service.get_feed("AAPL")["status"] == "unsupported"
+
+    entities.append(entity())
+    expire_cache(hours=59 / 60)
+    assert service.get_feed("AAPL")["status"] == "unsupported"
+    assert len(calls) == 1
+
+    expire_cache(hours=61 / 60)
+    feed = service.get_feed("AAPL")
+
+    assert feed["status"] == "ok"
+    assert [item["id"] for item in feed["articles"]] == ["id-0"]
+    assert len(calls) == 3  # original lookup, new lookup, headlines
+
+
+@pytest.mark.parametrize("days,expected_calls", [(6, 1), (8, 2)])
+def test_positive_listing_cache_lasts_seven_days(service, monkeypatch, days, expected_calls):
+    calls = upstream(monkeypatch, service)
+    listing, _, error = service._resolve("AAPL", None, float("inf"))
+    assert error is None
+
+    expire_cache(hours=days * 24)
+    refreshed, _, error = service._resolve("AAPL", None, float("inf"))
+
+    assert error is None
+    assert refreshed == listing
+    assert len(calls) == expected_calls
 
 
 def test_filters_unsafe_wrong_language_old_future_and_wrong_entity(service, monkeypatch):
