@@ -38,7 +38,7 @@
     const dark = document.documentElement.classList.contains('dark') && !document.documentElement.classList.contains('excel');
     return { text: dark ? '#d4d4d8' : '#3f3f46', grid: dark ? '#27272a' : '#e4e4e7', bg: dark ? '#18181b' : '#ffffff' };
   }
-  function themed(option) {
+  function themed(option, state) {
     const p = palette();
     const axis = a => ({ ...a, nameLocation: 'middle', nameGap: a.nameGap ?? (a.position === 'top' ? 28 : 35),
       nameTextStyle: { color: p.text, fontSize: 10 }, axisLabel: { color: p.text, fontSize: 10, hideOverlap: true, ...a.axisLabel },
@@ -75,14 +75,29 @@
     }
     if (option.series?.some(s => s.type === 'treemap')) {
       result.series = option.series.map(series => ({...series,
+        // Treemaps animate updates for 900ms by default, smearing old labels over a re-zoomed or re-coloured map.
+        // Keep it non-zero: at 0 the re-root path stops drawing tiles.
+        animationDurationUpdate:150,
         color:['#7a0c22','#d9534f',p.grid,'#3f9d63','#0b6e4f'],
-        data:series.data.map(sector => ({...sector,children:sector.children.map(leaf => ({...leaf,label:{color:Math.abs(leaf.value[1])>=.9?'#ffffff':p.text}}))})),
-        label:{show:true,color:p.text,formatter:params => params.data.leaf ? params.name + '\n' + params.data.change : params.name},
-        upperLabel:{show:true,height:24,color:p.text},
+        // White text once a tile is past ~30% of the scale (scale width varies by period).
+        data:series.data.map(sector => ({...sector,children:sector.children.map(leaf => ({...leaf,label:{color:Math.abs(leaf.value[1])>=.3*series.visualMax?'#ffffff':p.text}}))})),
+        label:{show:true,color:p.text,formatter:params => {
+          if (!params.data?.leaf) return params.name;
+          // Labels follow the laid-out tile size: blank when too small to read, name only when short or narrow.
+          const box = state?.chart?.getModel().getSeriesByIndex(0).getData().getItemLayout(params.dataIndex);
+          if (box?.width < 30 || box?.height < 16) return '';
+          return box?.height < 30 || box?.width < 46 ? params.name : params.name + '\n' + params.data.change;
+        }},
+        upperLabel:{show:true,height:24,color:p.text,formatter:params => params.name + (params.data?.change ? '  ' + params.data.change : '')},
+        breadcrumb:{...series.breadcrumb,itemStyle:{...series.breadcrumb?.itemStyle,color:p.grid,borderColor:p.bg,textStyle:{color:p.text}},emphasis:{itemStyle:{color:p.bg}}},
         itemStyle:{borderColor:p.bg},
         levels:series.levels.map(level => ({...level,itemStyle:{...level.itemStyle,borderColor:p.bg}}))
       }));
-      result.tooltip.formatter = params => params.data.leaf ? `${params.data.company} (${params.data.symbol})\n$${params.data.price.toFixed(2)} · ${params.data.change}` : params.name + '\n' + (params.data.change || '');
+      delete result.legend;
+      const dollars = v => v >= 1e9 ? `$${(v / 1e9).toFixed(1)}B` : `$${(v / 1e6).toFixed(0)}M`;
+      result.tooltip.formatter = params => params.data?.leaf
+        ? `${params.data.company} (${params.data.symbol})\n${params.treePathInfo[1]?.name || ''}\n$${params.data.price.toFixed(2)} · ${params.data.change}\n20d avg $ volume ${dollars(params.data.value[0])}\nClick to open price table`
+        : params.name + '\n' + (params.data?.change || '') + (params.data?.children ? '\nClick to zoom in' : '');
     }
     if (option.series?.some(s => s.type === 'surface')) {
       result.grid3D = { ...option.grid3D, axisPointer: { lineStyle: { color: p.text } } };
@@ -96,15 +111,21 @@
       state.chart = echarts.init(element);
       state.chart.on('click', event => {
         if (event.data?.symbol && event.data?.leaf) location.href = '/stock?ticker=' + encodeURIComponent(event.data.symbol);
+        else if (event.data?.id?.startsWith('sector::')) state.chart.dispatchAction({ type: 'treemapRootToNode', targetNodeId: event.data.id });
       });
+      state.chart.on('treemapRootToNode', event => state.onTreemapNavigate?.(event));
     }
+    if (reset) state.rootId = '';
     const existing = !reset ? state.chart.getOption() : null;
-    const styled = themed(option);
+    const styled = themed(option, state);
     if (existing?.dataZoom) styled.dataZoom = existing.dataZoom;
     if (existing?.grid3D?.[0]?.viewControl && styled.grid3D) styled.grid3D.viewControl = existing.grid3D[0].viewControl;
     if (existing?.legend?.[0]?.selected) styled.legend = { ...styled.legend, selected: existing.legend[0].selected };
     state.chart.setOption(styled, { notMerge: true });
     state.chart.resize();
+    // notMerge drops the treemap zoom; restore it so theme/period changes keep the sector in view.
+    if (state.rootId) state.chart.dispatchAction({ type: 'treemapRootToNode', targetNodeId: state.rootId });
+    state.syncControls?.();
   }
   async function initialize(state) {
     if (state.loading || !state.element.clientWidth || !state.element.clientHeight) return;
@@ -140,6 +161,44 @@
       option.terminalViews.labels.forEach((label,i) => select.add(new Option(label,i)));
       select.onchange = () => { state.option = option.terminalViews.options[Number(select.value)]; if(state.chart) apply(state,true); };
       controls.append(select);
+    }
+    const treemap = option.series?.find(s => s.type === 'treemap');
+    if (treemap) {
+      // Keyboard-reachable twin of clicking a sector header; kept in sync with clicks and the breadcrumb.
+      const select = document.createElement('select'); select.setAttribute('aria-label', 'Zoom to sector');
+      select.add(new Option('All sectors', ''));
+      treemap.data.forEach(sector => select.add(new Option(sector.name, sector.id)));
+      select.onchange = () => {
+        if (!state.chart) return;
+        if (select.value) state.chart.dispatchAction({ type: 'treemapRootToNode', targetNodeId: select.value });
+        else apply(state, true);
+      };
+      state.onTreemapNavigate = event => {
+        const id = event.targetNode?.getId?.() ?? event.targetNodeId;
+        state.rootId = [...select.options].some(o => o.value === id) ? id : '';
+        select.value = state.rootId;
+      };
+      state.syncControls = () => { select.value = state.rootId || ''; };
+      controls.append(select);
+    }
+    if (option.terminalPeriods) {
+      const group = document.createElement('div'); group.setAttribute('role', 'group'); group.setAttribute('aria-label', 'Colour by period');
+      group.style.display = 'contents';
+      const buttons = option.terminalPeriods.map((period, i) => {
+        const button = document.createElement('button'); button.type = 'button'; button.textContent = period.key;
+        button.title = 'Colour by ' + period.label + ' change (scale ±' + period.span + '%)';
+        button.setAttribute('aria-pressed', String(i === 0));
+        button.onclick = () => {
+          buttons.forEach(b => b.setAttribute('aria-pressed', String(b === button)));
+          const base = option.series[0];
+          state.option = { ...option, series: [{ ...base, data: period.data, visualMin: -period.span, visualMax: period.span }] };
+          if (state.chart) apply(state);
+          element.dispatchEvent(new CustomEvent('terminal-period', { detail: { key: period.key, span: period.span } }));
+        };
+        group.append(button);
+        return button;
+      });
+      controls.append(group);
     }
     if (option.terminalRanges) {
       option.terminalRanges.forEach(range => {

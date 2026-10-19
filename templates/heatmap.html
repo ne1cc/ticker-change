@@ -18,9 +18,9 @@
         </span>
       </div>
       <div class="flex items-center gap-2 text-[10px] font-mono text-zinc-500 dark:text-zinc-400">
-        <span>−3%</span>
+        <span id="heatmap-legend-min">−{{ periods[0].span | int if periods else 3 }}%</span>
         <div class="h-2 w-32 sm:w-44 rounded-full" style="background: linear-gradient(90deg, #7a0c22, #d9534f, #b0b0b6, #3f9d63, #0b6e4f);"></div>
-        <span>+3%</span>
+        <span id="heatmap-legend-max">+{{ periods[0].span | int if periods else 3 }}%</span>
       </div>
     </div>
 
@@ -30,15 +30,15 @@
         <span class="text-zinc-900 dark:text-zinc-100 font-semibold">{{ data.coverage if data else 0 }} / {{ data.universe if data else '—' }}</span>
       </span>
       <span class="text-zinc-500 dark:text-zinc-400">
-        {{ metric('Advancers', 'market_breadth') }}
+        {{ metric('Advancers', 'market_breadth') }} <span class="text-zinc-400">1D</span>
         <span class="text-emerald-600 font-semibold">{{ data.advancers if data else 0 }}</span>
       </span>
       <span class="text-zinc-500 dark:text-zinc-400">
-        {{ metric('Decliners', 'market_breadth') }}
+        {{ metric('Decliners', 'market_breadth') }} <span class="text-zinc-400">1D</span>
         <span class="text-red-500 font-semibold">{{ data.decliners if data else 0 }}</span>
       </span>
       <span class="text-zinc-500 dark:text-zinc-400">
-        {{ metric('Unchanged', 'market_breadth') }}
+        {{ metric('Unchanged', 'market_breadth') }} <span class="text-zinc-400">1D</span>
         <span class="text-zinc-900 dark:text-zinc-100 font-semibold">{{ data.unchanged if data else 0 }}</span>
       </span>
     </div>
@@ -48,6 +48,50 @@
   {% if heatmap_chart %}
   <section class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-2 sm:p-3 shadow-sm">
     {{ heatmap_chart | safe }}
+  </section>
+  {% endif %}
+
+  <!-- Movers + sector table: HTML twin of the map, one panel per period (toggle shows the matching one) -->
+  {% if periods %}
+  <section aria-label="Top movers and sector summary" class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 sm:p-5 shadow-sm">
+    {% for p in periods %}
+    {# `hidden` lives on the wrapper: Tailwind's .grid would otherwise override the attribute. #}
+    <div data-period-panel="{{ p.key }}" {% if not loop.first %}hidden{% endif %}>
+    <div class="grid gap-6 md:grid-cols-3">
+      {% for title, rows, tone in (('Top gainers', p.movers.gainers, 'text-emerald-600'), ('Top losers', p.movers.losers, 'text-red-500')) %}
+      <div>
+        <h2 class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-2">{{ title }} · {{ p.label }}</h2>
+        <ul class="space-y-1 text-xs font-mono">
+          {% for t in rows %}
+          <li class="flex justify-between gap-3">
+            <a href="/stock?ticker={{ t.symbol | urlencode }}" class="text-zinc-900 dark:text-zinc-100 hover:underline">{{ t.symbol }} <span class="text-zinc-400 font-sans">{{ t.name | truncate(22, True) }}</span></a>
+            <span class="{{ tone }} font-semibold">{{ '%+.2f' | format(t[{'1D': 'change_pct', '5D': 'change_5d', '1M': 'change_1m'}[p.key]]) }}%</span>
+          </li>
+          {% else %}
+          <li class="text-zinc-400">None</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
+      <div>
+        <h2 class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-2">{{ metric('Sectors', 'heatmap_sector_change') }} · {{ p.label }}</h2>
+        <table class="w-full text-xs font-mono">
+          <caption class="sr-only">Sector change over {{ p.label }}, with advancer and decliner counts</caption>
+          <thead class="text-zinc-400"><tr><th scope="col" class="text-left font-normal">Sector</th><th scope="col" class="text-right font-normal">Chg</th><th scope="col" class="text-right font-normal">↑/↓</th></tr></thead>
+          <tbody>
+            {% for r in p.sectors | sort(attribute='change', reverse=True) %}
+            <tr>
+              <th scope="row" class="text-left font-normal text-zinc-700 dark:text-zinc-300">{{ r.sector }}</th>
+              <td class="text-right font-semibold {{ 'text-emerald-600' if r.change > 0 else ('text-red-500' if r.change < 0 else 'text-zinc-500') }}">{{ '%+.2f' | format(r.change) }}%</td>
+              <td class="text-right text-zinc-500">{{ r.advancers }}/{{ r.decliners }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    </div>
+    {% endfor %}
   </section>
   {% endif %}
 
@@ -71,6 +115,20 @@
 
 {% block scripts %}
 <script>
+  // The chart's 1D/5D/1M buttons fire `terminal-period`; mirror it in the legend and the movers/sector panels.
+  (function () {
+    const chart = document.getElementById('heatmap-treemap');
+    if (!chart) return;
+    chart.addEventListener('terminal-period', function (e) {
+      const span = Math.round(e.detail.span);
+      document.getElementById('heatmap-legend-min').textContent = '\u2212' + span + '%';
+      document.getElementById('heatmap-legend-max').textContent = '+' + span + '%';
+      document.querySelectorAll('[data-period-panel]').forEach(function (panel) {
+        panel.hidden = panel.dataset.periodPanel !== e.detail.key;
+      });
+    });
+  })();
+
   // Poll while the universe is warming; reload once coverage is (nearly) complete.
   (function () {
     const banner = document.getElementById('heatmap-warming');

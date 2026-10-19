@@ -30,6 +30,17 @@ SIZING_WINDOW = 20
 # % change drives colour, clamped to +/-MOVE_SPAN so one wild ticker can't
 # wash out the scale for everyone else.
 MOVE_SPAN = 3.0
+# Colour-period toggle. `sessions` is how far back the comparison close sits;
+# `span` is the +/- % that saturates the colour scale (a month on the 1D scale
+# would be solid red/green, so longer windows get wider scales).
+PERIODS = (
+    {"key": "1D", "label": "1 day", "field": "change_pct", "sessions": 1, "span": MOVE_SPAN},
+    {"key": "5D", "label": "5 days", "field": "change_5d", "sessions": 5, "span": 6.0},
+    {"key": "1M", "label": "1 month", "field": "change_1m", "sessions": 21, "span": 10.0},
+)
+MOVERS_SHOWN = 5
+# Bump when the payload shape changes so pages never read a stale old shape.
+PAYLOAD_KEY = "sp500_payload_v2"
 
 
 def get_constituents() -> list[dict]:
@@ -104,6 +115,17 @@ def _recent_rows(symbols: list[str], lookback: int = RECENT_ROWS) -> pd.DataFram
     return df
 
 
+def _change_over(closes: pd.Series, sessions: int) -> float | None:
+    """% change of the last close vs `sessions` closes earlier; None when the
+    history is too short or the base close is unusable."""
+    if len(closes) <= sessions:
+        return None
+    base = float(closes.iloc[-1 - sessions])
+    if base <= 0:
+        return None
+    return round((float(closes.iloc[-1]) / base - 1.0) * 100.0, 2)
+
+
 def build_heatmap_data() -> dict | None:
     """Assemble heatmap tiles from SQLite. None when there's nothing to show.
 
@@ -132,15 +154,18 @@ def build_heatmap_data() -> dict | None:
         dollar_volume = float(
             (g["close"] * g["volume"]).tail(SIZING_WINDOW).mean()
         )
-        tiles.append({
+        tile = {
             "symbol": symbol,
             "name": meta.get("name") or symbol,
             "sector": meta.get("sector") or "Other",
             "price": round(last_close, 2),
             "change_pct": round((last_close / prev_close - 1.0) * 100.0, 2),
+            "change_5d": _change_over(g["close"], 5),
+            "change_1m": _change_over(g["close"], 21),
             "dollar_volume": round(dollar_volume),
             "as_of": g["date"].iloc[-1].strftime("%Y-%m-%d"),
-        })
+        }
+        tiles.append(tile)
     if not tiles:
         return None
 
@@ -160,13 +185,13 @@ def build_heatmap_data() -> dict | None:
 
 def get_heatmap_payload() -> dict | None:
     """Cached assembled payload (api_cache), rebuilt only when stale."""
-    cached = db.cache_get("heatmap", "sp500_payload", ttl_hours=PAYLOAD_TTL_HOURS)
+    cached = db.cache_get("heatmap", PAYLOAD_KEY, ttl_hours=PAYLOAD_TTL_HOURS)
     if cached is not None:
         return cached
     data = build_heatmap_data()
     if data is None:
         return None
-    db.cache_set("heatmap", "sp500_payload", data)
+    db.cache_set("heatmap", PAYLOAD_KEY, data)
     return data
 
 
@@ -179,13 +204,14 @@ def invalidate_payload() -> None:
     try:
         with db.get_conn() as conn:
             conn.execute(
-                "DELETE FROM api_cache WHERE provider = 'heatmap' AND key = 'sp500_payload'"
+                "DELETE FROM api_cache WHERE provider = 'heatmap' AND key = ?",
+                (PAYLOAD_KEY,),
             )
     except Exception as e:
         print(f"[heatmap] payload invalidation failed: {e}")
 
 
-def refresh_universe(symbols: list[str], period: str = "10d") -> dict:
+def refresh_universe(symbols: list[str], period: str = "2mo") -> dict:
     """Bulk-refresh daily bars for `symbols` via threaded yf.download.
 
     Chunks the universe so one bad request can't lose everything, writes each
@@ -237,24 +263,99 @@ def _colorscale(mid: str) -> list:
     ]
 
 
-def render_treemap(data: dict, dark: bool = False) -> str:
-    """Native sector treemap; request path remains entirely cache-only."""
-    by_sector = {}
-    for tile in data['tiles']:
-        by_sector.setdefault(tile['sector'], []).append(tile)
+def _weight(tile: dict) -> int:
+    return max(tile["dollar_volume"], 1)
+
+
+def sector_summary(tiles: list[dict], field: str = "change_pct") -> list[dict]:
+    """Per-sector dollar-volume-weighted change plus advancer/decliner counts
+    for one period `field`. Tiles with no value for the period are skipped.
+    Shared by the treemap headers and the sector table so they can't drift."""
+    by_sector: dict[str, list[dict]] = {}
+    for tile in tiles:
+        if tile.get(field) is not None:
+            by_sector.setdefault(tile["sector"], []).append(tile)
+    rows = []
+    for sector, members in sorted(by_sector.items()):
+        total = sum(_weight(m) for m in members)
+        rows.append({
+            "sector": sector,
+            "change": sum(m[field] * _weight(m) for m in members) / total,
+            "weight": total,
+            "count": len(members),
+            "advancers": sum(1 for m in members if m[field] > 0),
+            "decliners": sum(1 for m in members if m[field] < 0),
+        })
+    return rows
+
+
+def movers(tiles: list[dict], field: str = "change_pct", n: int = MOVERS_SHOWN) -> dict:
+    """Top-`n` gainers and losers for a period (tiles missing it are skipped)."""
+    ranked = sorted((t for t in tiles if t.get(field) is not None),
+                    key=lambda t: t[field], reverse=True)
+    gainers = [t for t in ranked if t[field] > 0][:n]
+    losers = [t for t in reversed(ranked) if t[field] < 0][:n]
+    return {"gainers": gainers, "losers": losers}
+
+
+def period_views(data: dict) -> list[dict]:
+    """Server-rendered, screen-reader-friendly view of each period."""
+    return [{
+        "key": p["key"], "label": p["label"], "span": p["span"],
+        "movers": movers(data["tiles"], p["field"]),
+        "sectors": sector_summary(data["tiles"], p["field"]),
+    } for p in PERIODS]
+
+
+def _series_data(tiles: list[dict], period: dict) -> list[dict]:
+    """Treemap nodes (sector -> ticker leaves) coloured by one period."""
+    field, span = period["field"], period["span"]
+    clamp = lambda v: max(-span, min(span, v))
+    summary = {r["sector"]: r for r in sector_summary(tiles, field)}
+    by_sector: dict[str, list[dict]] = {}
+    for tile in tiles:
+        by_sector.setdefault(tile["sector"], []).append(tile)
     sectors = []
     for sector, members in sorted(by_sector.items()):
-        total = sum(max(m['dollar_volume'], 1) for m in members)
-        change = sum(m['change_pct'] * max(m['dollar_volume'], 1) for m in members) / total
-        leaves = [{'name': t['symbol'], 'symbol': t['symbol'], 'leaf': True,
-                   'value': [max(t['dollar_volume'], 1), max(-MOVE_SPAN, min(MOVE_SPAN, t['change_pct']))],
-                   'change': f"{t['change_pct']:+.2f}%", 'company': t['name'], 'price': t['price']}
-                  for t in members]
-        sectors.append({'id': 'sector::' + sector, 'name': sector, 'change': f'{change:+.2f}%', 'value': [total, max(-MOVE_SPAN, min(MOVE_SPAN, change))], 'children': leaves})
-    option = {'series': [{'type': 'treemap', 'name': 'S&P 500', 'data': sectors,
+        leaves = []
+        for t in members:
+            value = t.get(field)
+            leaves.append({
+                'name': t['symbol'], 'symbol': t['symbol'], 'leaf': True,
+                # A ticker without enough history for this period sits on the
+                # neutral midpoint and says so, rather than reading as flat.
+                'value': [_weight(t), 0 if value is None else clamp(value)],
+                'change': 'n/a' if value is None else f"{value:+.2f}%",
+                'company': t['name'], 'price': t['price'],
+            })
+        row = summary.get(sector)
+        sectors.append({
+            'id': 'sector::' + sector, 'name': sector,
+            'change': 'n/a' if row is None else f"{row['change']:+.2f}%",
+            'value': [sum(_weight(m) for m in members), 0 if row is None else clamp(row['change'])],
+            'children': leaves,
+        })
+    return sectors
+
+
+def render_treemap(data: dict, dark: bool = False) -> str:
+    """Native sector treemap; request path remains entirely cache-only.
+
+    Clicking a sector zooms into it (breadcrumb returns to the full map);
+    clicking a ticker opens its price table (wired in static/charts.js).
+    The 1D view is the base option; `terminalPeriods` carries the data for
+    each period so the toggle swaps views client-side without a round trip.
+    """
+    first, *_ = PERIODS
+    periods = [{'key': p['key'], 'label': p['label'], 'span': p['span'],
+                'data': _series_data(data['tiles'], p)} for p in PERIODS]
+    option = {'terminalPeriods': periods,
+              'series': [{'type': 'treemap', 'name': 'S&P 500', 'data': periods[0]['data'],
                          'roam': False, 'nodeClick': False, 'leafDepth': 2,
-                         'breadcrumb': {'show': False}, 'visualDimension': 1,
-                         'visualMin': -MOVE_SPAN, 'visualMax': MOVE_SPAN,
+                         'breadcrumb': {'show': True, 'bottom': 0, 'height': 24, 'emptyItemWidth': 28,
+                                        'itemStyle': {'gapWidth': 10}},
+                         'visualDimension': 1,
+                         'visualMin': -first['span'], 'visualMax': first['span'],
                          'color': [stop[1] for stop in _colorscale('#3f3f46' if dark else '#e4e4e7')],
                          'colorMappingBy': 'value', 'upperLabel': {'show': True, 'height': 24},
                          'label': {'show': True}, 'levels': [{'itemStyle': {'borderWidth': 0, 'gapWidth': 3}},

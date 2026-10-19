@@ -77,6 +77,21 @@ class TestBuildHeatmapData(TempDBCase):
         self.assertEqual("Technology", by_symbol["AAPL"]["sector"])
         self.assertEqual("Apple Inc.", by_symbol["AAPL"]["name"])
 
+    def test_period_changes_need_enough_history(self):
+        # 2 closes: 1D exists, 5D and 1M have no base close and are None.
+        data = heatmap.build_heatmap_data()
+        aapl = next(t for t in data["tiles"] if t["symbol"] == "AAPL")
+        self.assertIsNone(aapl["change_5d"])
+        self.assertIsNone(aapl["change_1m"])
+
+    def test_period_changes_measure_back_5_and_21_sessions(self):
+        closes = [100.0 + i for i in range(30)]   # 100..129
+        db.store_prices("AAPL", _frame(closes))
+        data = heatmap.build_heatmap_data()
+        aapl = next(t for t in data["tiles"] if t["symbol"] == "AAPL")
+        self.assertAlmostEqual((129 / 124 - 1) * 100, aapl["change_5d"], places=2)
+        self.assertAlmostEqual((129 / 108 - 1) * 100, aapl["change_1m"], places=2)
+
     def test_tile_size_is_trailing_dollar_volume(self):
         data = heatmap.build_heatmap_data()
         aapl = next(t for t in data["tiles"] if t["symbol"] == "AAPL")
@@ -169,6 +184,15 @@ class TestRenderTreemap(TempDBCase):
         self.assertEqual('-1.00%', leaves['MSFT']['change'])
         self.assertEqual('+0.01%', sector['change'])
 
+    def test_sector_drill_down_is_enabled(self):
+        html = heatmap.render_treemap(self._data())
+        option = json.loads(html.split('type="application/json"', 1)[1].split('>', 1)[1].split('</script>', 1)[0])
+        series = option['series'][0]
+        # Sector clicks re-root via charts.js (treemapRootToNode); the breadcrumb is the way back.
+        self.assertFalse(series['nodeClick'])
+        self.assertTrue(series['breadcrumb']['show'])
+        self.assertEqual('sector::Technology', series['data'][0]['id'])
+
     def test_sector_tooltip_omits_ticker_and_price(self):
         html = heatmap.render_treemap(self._data())
         option = json.loads(html.split('type="application/json"', 1)[1].split('>', 1)[1].split('</script>', 1)[0])
@@ -176,6 +200,64 @@ class TestRenderTreemap(TempDBCase):
         self.assertNotIn('symbol', sector)
         self.assertNotIn('price', sector)
         self.assertIn('price', sector['children'][0])
+
+
+def _tile(symbol, sector, change, volume=1_000_000, **extra):
+    return {"symbol": symbol, "name": symbol + " Inc.", "sector": sector, "price": 10.0,
+            "change_pct": change, "change_5d": extra.get("change_5d"),
+            "change_1m": extra.get("change_1m"), "dollar_volume": volume, "as_of": "2026-09-02"}
+
+
+class TestSectorSummaryAndMovers(unittest.TestCase):
+    def test_sector_change_is_dollar_volume_weighted(self):
+        tiles = [_tile("A", "Tech", 2.0, volume=300), _tile("B", "Tech", -2.0, volume=100)]
+        (row,) = heatmap.sector_summary(tiles)
+        self.assertAlmostEqual(1.0, row["change"])    # (2*300 - 2*100) / 400
+        self.assertEqual((1, 1, 2), (row["advancers"], row["decliners"], row["count"]))
+
+    def test_tiles_missing_the_period_are_left_out(self):
+        tiles = [_tile("A", "Tech", 1.0, change_5d=4.0), _tile("B", "Tech", 1.0)]
+        (row,) = heatmap.sector_summary(tiles, "change_5d")
+        self.assertEqual(1, row["count"])
+        self.assertAlmostEqual(4.0, row["change"])
+        self.assertEqual([], heatmap.sector_summary([_tile("B", "Tech", 1.0)], "change_5d"))
+
+    def test_movers_are_ranked_and_exclude_flat_and_missing(self):
+        tiles = [_tile("UP2", "X", 2.0), _tile("UP1", "X", 1.0), _tile("FLAT", "X", 0.0),
+                 _tile("DN1", "X", -1.0), _tile("DN3", "X", -3.0)]
+        m = heatmap.movers(tiles, n=2)
+        self.assertEqual(["UP2", "UP1"], [t["symbol"] for t in m["gainers"]])
+        self.assertEqual(["DN3", "DN1"], [t["symbol"] for t in m["losers"]])
+        self.assertEqual({"gainers": [], "losers": []}, heatmap.movers(tiles, "change_5d"))
+
+    def test_period_views_cover_each_period_in_order(self):
+        views = heatmap.period_views({"tiles": [_tile("A", "Tech", 1.0)]})
+        self.assertEqual(["1D", "5D", "1M"], [v["key"] for v in views])
+        self.assertEqual([3.0, 6.0, 10.0], [v["span"] for v in views])
+
+
+class TestPeriodTreemap(unittest.TestCase):
+    def _option(self, tiles):
+        html = heatmap.render_treemap({"tiles": tiles})
+        return json.loads(html.split('type="application/json"', 1)[1].split('>', 1)[1].split('</script>', 1)[0])
+
+    def test_option_carries_every_period_and_widens_the_scale(self):
+        option = self._option([_tile("A", "Tech", 1.0, change_5d=5.0, change_1m=-12.0)])
+        self.assertEqual(["1D", "5D", "1M"], [p["key"] for p in option["terminalPeriods"]])
+        self.assertEqual(3.0, option["series"][0]["visualMax"])
+        leaves = {p["key"]: p["data"][0]["children"][0] for p in option["terminalPeriods"]}
+        self.assertEqual("+1.00%", leaves["1D"]["change"])
+        self.assertEqual("+5.00%", leaves["5D"]["change"])
+        self.assertEqual("-12.00%", leaves["1M"]["change"])
+        self.assertEqual(-10.0, leaves["1M"]["value"][1])   # clamped to the 1M span
+
+    def test_missing_period_is_neutral_and_labelled_na(self):
+        option = self._option([_tile("A", "Tech", 1.0)])
+        by_key = {p["key"]: p for p in option["terminalPeriods"]}
+        leaf = by_key["5D"]["data"][0]["children"][0]
+        self.assertEqual("n/a", leaf["change"])
+        self.assertEqual(0, leaf["value"][1])
+        self.assertEqual("n/a", by_key["5D"]["data"][0]["change"])
 
 
 class TestRefreshUniverse(TempDBCase):
@@ -279,6 +361,17 @@ class TestHeatmapRoutes(TempDBCase):
         self.assertEqual("ok", payload["status"])
         self.assertEqual(2, payload["coverage"])
         self.assertEqual(1, payload["advancers"])
+
+    def test_page_renders_movers_and_sector_panels_for_each_period(self):
+        db.store_prices("AAPL", _frame([100.0, 101.0]))
+        db.store_prices("MSFT", _frame([200.0, 198.0]))
+        with mock.patch.object(heatmap, "get_constituents", return_value=CONSTITUENTS):
+            html = self.client.get("/heatmap").get_data(as_text=True)
+        for key in ("1D", "5D", "1M"):
+            self.assertIn(f'data-period-panel="{key}"', html)
+        self.assertIn('/stock?ticker=AAPL', html)                  # gainer links to its price table
+        self.assertIn('hidden', html.split('data-period-panel="5D"', 1)[1].split('>', 1)[0])  # only 1D shows first
+        self.assertIn('id="heatmap-legend-max"', html)
 
 
 if __name__ == "__main__":
