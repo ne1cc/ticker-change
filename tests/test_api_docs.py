@@ -85,7 +85,7 @@ class TestApiDocs(unittest.TestCase):
         self.assertEqual(set(endpoint["responses"]), {"200", "400", "503"})
         schema = endpoint["responses"]["200"]["content"]["application/json"]["schema"]
         self.assertTrue({"articles", "status", "stale", "partial", "fetched_at", "candidates"}.issubset(schema["properties"]))
-        self.assertEqual(schema["properties"]["articles"]["maxItems"], 15)
+        self.assertEqual(schema["properties"]["articles"]["maxItems"], 500)
 
     def test_api_docs_swagger_ui_route(self):
         """Verify GET /api/docs returns 200 and rendered HTML."""

@@ -35,7 +35,7 @@ def article(number=0, **overrides):
     return item
 
 
-def upstream(monkeypatch, service, pages=None, entities=None):
+def upstream(monkeypatch, service, pages=None, entities=None, page_limit=3):
     calls = []
     pages = pages if pages is not None else [[article()]]
 
@@ -48,11 +48,14 @@ def upstream(monkeypatch, service, pages=None, entities=None):
         else:
             page = params["page"] - 1
             data = pages[page] if page < len(pages) else []
+            if isinstance(data, list):
+                data = data[:params.get("limit", page_limit)]
         if isinstance(data, Exception):
             raise data
         if isinstance(data, int):
             return SimpleNamespace(status_code=data, headers={"Retry-After": "600"}, json=lambda: {})
-        return SimpleNamespace(status_code=200, headers={}, json=lambda: {"data": data})
+        return SimpleNamespace(status_code=200, headers={},
+                               json=lambda: {"data": data, "meta": {"limit": page_limit}})
 
     monkeypatch.setattr(service._SESSION, "get", get)
     return calls
@@ -77,11 +80,50 @@ def test_five_pages_supply_fifteen_sorted_articles_and_cache(service, monkeypatc
     assert len(calls) == 6  # one entity lookup, five news pages
     assert calls[0][1]["countries"] == "us"
     params = calls[1][1]
-    assert params["language"] == "en" and params["limit"] == 3
+    assert params["language"] == "en"
+    assert "limit" not in params
     assert params["symbols"] == "AAPL"
     assert "private-news-token" not in str(feed)
     assert service.get_feed("AAPL") == feed
     assert len(calls) == 6
+
+
+@pytest.mark.parametrize("page_limit", [20, 50, 100])
+def test_uses_full_provider_plan_pages_and_caches_all_articles(service, monkeypatch, page_limit):
+    pages = [[article(i) for i in range(start, start + page_limit)]
+             for start in range(0, page_limit * 5, page_limit)]
+    calls = upstream(monkeypatch, service, pages=pages, page_limit=page_limit)
+
+    feed = service.get_feed("AAPL")
+
+    assert feed["status"] == "ok"
+    assert len(feed["articles"]) == page_limit * 5
+    assert feed["articles"][-1]["id"] == f"id-{page_limit * 5 - 1}"
+    assert len(calls) == 6
+    assert service.get_feed("AAPL") == feed
+    assert len(calls) == 6
+
+
+def test_stops_at_short_provider_plan_page(service, monkeypatch):
+    calls = upstream(monkeypatch, service, pages=[[article(i) for i in range(3)]], page_limit=20)
+
+    feed = service.get_feed("AAPL")
+
+    assert len(feed["articles"]) == 3
+    assert len(calls) == 2  # entity lookup and a short news page
+
+
+def test_plan_max_feed_bypasses_legacy_fifteen_article_snapshot(service, monkeypatch):
+    listing = service._listing(entity())
+    legacy = service._result("AAPL", "ok", listing)
+    legacy.update(articles=service._articles([article(i) for i in range(15)], listing),
+                  fetched_at=service._iso(service._now()), limit=15)
+    db.cache_set("marketaux_news", "feed:" + listing["id"] + ":en:7d", legacy)
+    upstream(monkeypatch, service, pages=[[article(i) for i in range(20)]], page_limit=20)
+
+    feed = service.get_feed("AAPL")
+
+    assert len(feed["articles"]) == 20
 
 
 def test_bare_us_ticker_resolves_exact_marketaux_listing(service, monkeypatch):

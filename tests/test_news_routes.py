@@ -1,4 +1,4 @@
-"""News routes, settings, and price-independent preview integration."""
+"""News routes, settings, and stock page isolation."""
 from unittest.mock import patch
 
 import pytest
@@ -60,8 +60,21 @@ def test_stock_document_does_not_fetch_news(client):
          patch("news.get_feed", side_effect=AssertionError("blocking news fetch")):
         response = client.get("/stock?ticker=AAPL")
     assert response.status_code == 200
-    assert b'id="news-preview"' in response.data
-    assert b"/static/news.js" in response.data
+    assert b'id="news-preview"' not in response.data
+    assert b"/static/news.js" not in response.data
+
+
+@pytest.mark.parametrize("ui_mode", ["excel", "light"])
+def test_news_page_renders_every_returned_article(client, ui_mode):
+    client.set_cookie("ui_mode", ui_mode)
+    feed = news._result("SPY", "ok")
+    feed["articles"] = [dict(title=f"Headline {i}", source="publisher.example",
+                             url=f"https://publisher.example/story/{i}",
+                             published_at="2026-10-19T08:00:00Z") for i in range(100)]
+    with patch("news.get_feed", return_value=feed):
+        response = client.get("/news?ticker=SPY")
+    assert response.status_code == 200
+    assert response.data.count(b'https://publisher.example/story/') == 100
 
 
 def test_news_is_same_origin_but_existing_api_cors_is_preserved(client):
