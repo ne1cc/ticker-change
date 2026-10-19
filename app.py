@@ -1196,8 +1196,8 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
                 bar['encode'] = {'x': 0, 'y': 1}
             cumulative_line = charts.line('Cumulative net γ', cumulative, seq, '#6366f1', xAxisIndex=1)
             opt = charts.cartesian(bars + [cumulative_line], xtype='value', yname='Strike ($)', refs=levels)
-            opt['xAxis'] = [{'type': 'value', 'name': 'Gamma exposure ($M / 1% move)', 'min': -bar_max, 'max': bar_max},
-                            {'type': 'value', 'name': 'Cumulative ($M)', 'min': -cum_max, 'max': cum_max, 'position': 'top', 'splitLine': {'show': False}}]
+            opt['xAxis'] = [{'type': 'value', 'name': 'Gamma exposure ($M / 1% move)', 'min': -bar_max, 'max': bar_max, 'terminalCompactTicks': True},
+                            {'type': 'value', 'name': 'Cumulative ($M)', 'min': -cum_max, 'max': cum_max, 'terminalCompactTicks': True, 'position': 'top', 'splitLine': {'show': False}}]
             opt['terminalHorizontalBars'] = True
             if gamma_flip is not None:
                 bars[0]['markArea'] = {'silent': True, 'data': [
@@ -1609,6 +1609,7 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
 
             vp_option = charts.cartesian([charts.bar('Volume at Price', vol_by_price.values, bin_centers, vp_colors)], xtype='value', xname='Cumulative Volume (2 yr)', yname='Price ($)', refs=[charts.reference('y', current_price, 'Current', '#f59e0b'), charts.reference('y', poc_price, f'POC ${poc_price}', '#6366f1')])
             vp_option['terminalHorizontalBars'] = True
+            vp_option['xAxis']['scale'] = False
             vp_chart = charts.render_chart(vp_option, height=420)
     else:
         poc_price = None
@@ -3075,8 +3076,8 @@ def _strategies_ticker_charts(symbol, series, strategy_id) -> dict:
                              charts.line(f'Buy & Hold {symbol} ($10k)', dates, cum_hold, '#94a3b8', dash=True, xAxisIndex=1, yAxisIndex=1)]
     canvas_series += [{**line, 'xAxisIndex': 1, 'yAxisIndex': 2} for line in drawdown]
     canvas = {'series': canvas_series,
-              'grid': [{'left': 55, 'right': 65, 'top': 60, 'height': '43%', 'containLabel': True},
-                       {'left': 55, 'right': 65, 'top': '61%', 'height': '27%', 'containLabel': True}],
+              'grid': [{'left': 80, 'right': 80, 'top': 60, 'height': '43%', 'containLabel': False},
+                       {'left': 80, 'right': 80, 'top': '61%', 'height': '27%', 'containLabel': False}],
               'xAxis': [{'type': 'time', 'gridIndex': 0}, {'type': 'time', 'gridIndex': 1}],
               'yAxis': [{'type': 'value', 'name': f'{symbol} Price ($)', 'scale': True, 'gridIndex': 0},
                         {'type': 'value', 'name': 'Portfolio ($10k)', 'nameGap': 55, 'scale': True, 'gridIndex': 1},

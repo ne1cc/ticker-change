@@ -89,7 +89,26 @@ def test_merged_strategy_canvas_keeps_signal_units_and_shared_time_axes(strategy
     result = app._strategies_ticker_charts('AAA', series, strategy)
     canvas = payload(result['canvas_chart_html'])
     assert len(canvas['grid']) == 2
+    assert all(grid['left'] == grid['right'] == 80 and grid['containLabel'] is False for grid in canvas['grid'])
     assert canvas['dataZoom'][0]['xAxisIndex'] == [0, 1]
     assert canvas['series'][0]['data'][0][1] == 100.
     refs = payload(result['roll_chart_html'])['series'][0]['markLine']['data']
     assert [r['yAxis'] for r in refs] == [threshold, exit_level]
+
+
+def test_numeric_coordinates_fit_data_without_changing_time_or_category_axes():
+    import charts
+    for kind in ('line', 'scatter'):
+        option = charts.cartesian([{'type': kind, 'data': [[.7, 30], [1.5, 60]]}], xtype='value')
+        assert option['xAxis']['scale'] is True
+    for xtype in ('time', 'category'):
+        assert 'scale' not in charts.cartesian([], xtype=xtype)['xAxis']
+
+
+def test_iv_smile_fits_moneyness_and_keeps_all_selected_observations():
+    import app
+    calls = pd.DataFrame({'strike': [70., 100., 150.], 'impliedVolatility': [.4, .25, .5]})
+    with patch.object(app, '_get_yf_ticker', return_value=object()), patch.object(app, 'get_cached_expirations', return_value=['2026-11-20']), patch.object(app, 'get_cached_chain', return_value=(calls, calls.copy(), 100.)):
+        option = payload(app.get_options_smile('AAA', 100.))
+    assert option['xAxis']['scale'] is True
+    assert option['series'][0]['data'] == [[.7, 40.], [1., 25.], [1.5, 50.]]

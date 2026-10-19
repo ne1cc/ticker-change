@@ -24,7 +24,7 @@
     return { [axis + 'Axis']: value, name, label: { formatter: name, position: 'insideEnd' }, lineStyle: { color, type: 'dashed' } };
   }
   function cartesian(series, xname = '', yname = '', xtype = 'value') {
-    return { series, xAxis: { type: xtype, name: xname }, yAxis: { type: 'value', name: yname, scale: true } };
+    return { series, xAxis: { type: xtype, name: xname, ...(xtype === 'value' ? {scale: true} : {}) }, yAxis: { type: 'value', name: yname, scale: true } };
   }
   function load(url) {
     if (!libraries.has(url)) libraries.set(url, new Promise((resolve, reject) => {
@@ -40,17 +40,19 @@
   }
   function themed(option, state) {
     const p = palette();
-    const axis = a => ({ ...a, nameLocation: 'middle', nameGap: a.nameGap ?? (a.position === 'top' ? 28 : 35),
-      nameTextStyle: { color: p.text, fontSize: 10 }, axisLabel: { color: p.text, fontSize: 10, hideOverlap: true, ...a.axisLabel },
+    const axis = ({terminalCompactTicks, ...a}, vertical = false) => ({ ...a, nameLocation: 'middle', nameGap: a.nameGap ?? (a.position === 'top' ? 28 : 35),
+      nameTextStyle: { color: p.text, fontSize: 10 }, axisLabel: { color: p.text, fontSize: 10, hideOverlap: true,
+        ...(vertical && a.type === 'category' ? {width:Math.min(120, (state.element.clientWidth || 480) / 4), overflow:'truncate'} : {}),
+        ...(terminalCompactTicks ? {formatter: value => new Intl.NumberFormat('en-US', {notation:'compact', maximumFractionDigits:1}).format(value)} : {}), ...a.axisLabel },
       axisLine: { lineStyle: { color: p.grid } }, splitLine: { lineStyle: { color: p.grid }, ...a.splitLine } });
     const result = { animation: false, backgroundColor: 'transparent',
       textStyle: { fontFamily: 'JetBrains Mono, ui-monospace, monospace', color: p.text },
-      grid: { left: 18, right: 22, top: 58, bottom: 62, containLabel: true },
+      grid: { left: 24, right: 24, top: 58, bottom: 62, containLabel: true },
       tooltip: { trigger: 'axis', renderMode: 'richText', confine: true, backgroundColor: p.bg, textStyle: { color: p.text }, axisPointer: { type: 'cross' } },
       aria: { enabled: true }, dataZoom: [{ type: 'inside', filterMode: 'none' }, { type: 'slider', height: 15, bottom: 10, borderColor: p.grid }], ...option };
     result.legend = {type:'scroll',top:5,...option.legend,textStyle:{color:p.text,fontSize:option.terminalLegendFontSize || 10}};
     for (const key of ['xAxis', 'yAxis', 'xAxis3D', 'yAxis3D', 'zAxis3D']) {
-      if (option[key]) result[key] = Array.isArray(option[key]) ? option[key].map(axis) : axis(option[key]);
+      if (option[key]) result[key] = Array.isArray(option[key]) ? option[key].map(a => axis(a, key === 'yAxis')) : axis(option[key], key === 'yAxis');
     }
     if (option.title) result.title = { ...option.title, top: 28, textStyle: { color: p.text, fontSize: 11, fontWeight: 400 } };
     if (option.terminalComparison) {
@@ -81,6 +83,8 @@
       result.tooltip.trigger = 'item';
     }
     if (option.terminalHorizontalBars) {
+      const magnitudeAxis = a => a.min == null && a.max == null ? {...a, scale:false} : a;
+      result.xAxis = Array.isArray(result.xAxis) ? result.xAxis.map(magnitudeAxis) : magnitudeAxis(result.xAxis);
       result.series = option.series.map(series => {
         if (series.type !== 'bar') return series;
         const ys = series.data.map(p => (p.value || p)[1]).sort((a,b) => a-b);
@@ -126,6 +130,19 @@
     }
     return result;
   }
+  function centerPlot(state) {
+    // Custom/multi-panel grids own their geometry. Measure only shared Cartesian layouts.
+    if (state.option.grid || !state.option.xAxis || !state.option.yAxis || !state.element.clientWidth || !state.element.clientHeight) return;
+    const chart = state.chart;
+    chart.setOption({grid:{left:24,right:24}}, {silent:true});
+    const rect = chart.getModel().getComponent('grid')?.coordinateSystem?.getRect();
+    if (!rect) return;
+    const left = rect.x, right = chart.getWidth() - rect.x - rect.width;
+    const axes = Array.isArray(state.option.yAxis) ? state.option.yAxis : [state.option.yAxis];
+    const nameSpace = Math.max(0, ...axes.filter(a => a.name && a.show !== false).map(a => (a.nameGap ?? 35) + 10));
+    const gutter = Math.max(left, right, nameSpace);
+    chart.setOption({grid:{left:24 + gutter - left,right:24 + gutter - right}}, {silent:true});
+  }
   function apply(state, reset = false) {
     const { element, option } = state;
     if (!element.clientWidth || !element.clientHeight) return;
@@ -138,6 +155,8 @@
         else if (event.data?.symbol && event.data?.leaf) location.href = '/stock?ticker=' + encodeURIComponent(event.data.symbol);
       });
       state.chart.on('treemapRootToNode', event => state.onTreemapNavigate?.(event));
+      state.chart.on('datazoom', () => centerPlot(state));
+      state.chart.on('legendselectchanged', () => centerPlot(state));
     }
     if (reset) state.rootId = '';
     const viewChanged = state.viewKey !== option.terminalViewKey;
@@ -150,6 +169,7 @@
     state.chart.setOption(styled, { notMerge: true });
     state.viewKey = option.terminalViewKey;
     state.chart.resize();
+    centerPlot(state);
     // notMerge drops the treemap zoom; restore it so theme/period changes keep the sector in view.
     if (state.rootId) state.chart.dispatchAction({ type: 'treemapRootToNode', targetNodeId: state.rootId });
     state.syncControls?.();
@@ -255,14 +275,14 @@
     }
     element.before(controls);
     const resize = new ResizeObserver(() => {
-      if (state.chart) state.chart.resize();
+      if (state.chart) { state.chart.resize(); centerPlot(state); }
       else if (state.visible && element.clientWidth && element.clientHeight) initialize(state);
     });
     resize.observe(element);
     visibleObserver.observe(element);
   }
   window.TerminalCharts = { mount, points, surfaceData, line, bar, ref, cartesian,
-    resize(id) { states.get(document.getElementById(id))?.chart?.resize(); } };
+    resize(id) { const state = states.get(document.getElementById(id)); if (state?.chart) { state.chart.resize(); centerPlot(state); } } };
   if (typeof document === 'undefined') return;
   visibleObserver = new IntersectionObserver(entries => entries.forEach(entry => {
     const state = states.get(entry.target); state.visible = entry.isIntersecting;
