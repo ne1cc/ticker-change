@@ -112,6 +112,43 @@ test('graph and heatgrid render the same expiry values with exact dates and focu
   assert.ok(cell&&cell.title&&cell.getAttribute('aria-label'));
   h.controller.state.view='graph';h.controller.render();
   assert.equal(h.charts.last.id,'payoff-chart');
-  assert.deepEqual(h.charts.last.option.series.map(s=>s.name),['P&L at expiration','P&L on Expiration']);
+  assert.deepEqual(h.charts.last.option.series.map(s=>s.name),['P&L at expiration','Modeled P&L · Now']);
   h.controller.resize();assert.equal(h.charts.resized,'payoff-chart');
+});
+
+
+test('positions are compact by default and expand when a leg is added or the editor is opened',()=>{
+  const h=harness();h.controller.setChain(chain());
+  assert.equal(h.root.querySelector('.payoff-leg-editor').hidden,true);
+  const toggle=h.root.querySelector('.payoff-positions-toggle');
+  assert.match(toggle.textContent,/Positions \(1\)/);
+  toggle.onclick();
+  assert.equal(h.root.querySelector('.payoff-leg-editor').hidden,false);
+  h.controller.addLeg('put');
+  assert.equal(h.root.querySelector('.payoff-leg-editor').hidden,false);
+  assert.ok(h.root.querySelector('.payoff-leg-chip'));
+});
+
+test('matrix uses grouped date headers and a highlighted spot row',()=>{
+  const h=harness();h.controller.setChain(chain());
+  const table=h.root.querySelector('#payoff-grid');
+  assert.equal(table.children[0].children.length,2);
+  assert.ok(h.root.querySelector('.payoff-spot-row'));
+  assert.ok(h.root.querySelector('.payoff-month-header'));
+  assert.ok(h.root.querySelector('.payoff-cell').getAttribute('aria-label').includes('underlying'));
+});
+
+test('automatic range stays narrow, updates for a new expiry, and preserves a user adjustment',()=>{
+  const h=harness();h.controller.setChain(chain());
+  assert.ok(h.controller.state.rangePct<=8);
+  const input=h.root.querySelector('#payoff-rangePct');input.value='4';input.oninput();input.onchange();
+  h.controller.setChain(chain('2026-12-18',50));
+  assert.equal(h.controller.state.rangePct,4);
+});
+
+test('expired chains explain the single-date matrix instead of stretching it into a timeline',()=>{
+  const h=harness();h.controller.setChain({...chain(),time_to_expiration_years:0});
+  assert.ok(h.root.querySelector('.payoff-expiry-note'));
+  assert.ok(h.root.querySelector('.payoff-grid-single-date'));
+  assert.match(h.root.querySelector('.payoff-expiry-note').textContent,/expiration payoff/i);
 });

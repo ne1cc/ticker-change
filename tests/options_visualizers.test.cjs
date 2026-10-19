@@ -31,7 +31,7 @@ function harness() {
     call_oi_available:true, put_oi_available:true, call_change_available:true, put_change_available:true
   }))};
   const functions = ['bsD1D2', 'bsVanna', 'bsCharm', 'bsVomma', 'renderChartReferences',
-    'switchGreeksChart', 'prepareComparisonView', 'setComparisonRange', 'comparisonConvention',
+    'chooseDefaultExpiration', 'prepareGreeksView', 'switchGreeksChart', 'prepareComparisonView', 'setComparisonRange', 'comparisonConvention',
     'comparisonColors', 'renderComparisonSummary', 'renderGreeksChart', 'renderGexPlot'];
   for (const name of functions) {
     const start = template.indexOf(`  function ${name}(`);
@@ -215,4 +215,26 @@ test('dealer GEX retains the taller chart and vertical navigation after merging 
   assert.equal(h.last.option.dataZoom[1].orient,'vertical');
   assert.equal(h.last.option.dataZoom[1].yAxisIndex,0);
   assert.equal(h.last.option.dataZoom[1].filterMode,'none');
+});
+
+
+test('default expiry starts at least two weeks out and falls back to the latest future date', () => {
+  const h = harness();
+  assert.equal(h.chooseDefaultExpiration(['2026-10-19','2026-10-20','2026-10-30','2026-11-06','2026-11-20'],'2026-10-19'),'2026-11-06');
+  assert.equal(h.chooseDefaultExpiration(['2026-10-19','2026-10-20','2026-10-30'],'2026-10-19'),'2026-10-30');
+  assert.equal(h.chooseDefaultExpiration(['2026-10-16','2026-10-19'],'2026-10-19'),'2026-10-19');
+});
+
+test('near-spot Greeks exclude distant strikes while retaining exact observations and an all-loaded view', () => {
+  const h = harness();
+  const middle = h.optionsData.options;
+  h.optionsData.options = [{...middle[0],strike:400,call_delta:1},...middle,{...middle[2],strike:1000,call_delta:0}];
+  h.renderGreeksChart();
+  assert.ok(h.last.option.xAxis.min > 400 && h.last.option.xAxis.max < 1000);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.last.option.series[0].data)),middle.map(row=>[row.strike,row.call_delta]));
+  const nearKey = h.last.option.terminalViewKey;
+  h.setComparisonRange('loaded');
+  assert.notEqual(h.last.option.terminalViewKey, nearKey);
+  assert.ok(h.last.option.xAxis.min <= 400 && h.last.option.xAxis.max >= 1000);
+  assert.equal(h.last.option.series[0].data.length,5);
 });

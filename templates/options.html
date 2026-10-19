@@ -16,7 +16,7 @@
   .options-metric-button[aria-pressed="true"] { background: #ffffff; color: #b45309; box-shadow: 0 1px 3px #0002; }
   html.excel .options-metric-button[aria-pressed="true"] { color: #217346; }
   html.dark .options-metric-button[aria-pressed="true"] { background: #3f3f46; color: #fbbf24; }
-  .options-metric-button:focus-visible,
+  .options-metric-button:focus-visible { outline: 2px solid #b45309; outline-offset: 2px; }
   .options-comparison-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
   .options-comparison-button { min-height: 34px; padding: 6px 10px; border: 1px solid #d4d4d8; border-radius: 6px; font-weight: 600; }
   .options-comparison-button[aria-pressed="true"] { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; }
@@ -448,7 +448,7 @@
       <div class="grid grid-cols-1 gap-6 items-start">
 
         <!-- Greeks Charts Viewer -->
-        <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm min-w-0 flex flex-col">
+        <div class="options-greeks-card bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm min-w-0 flex flex-col">
           <div class="flex flex-col gap-3 mb-3">
             <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-50">Greeks Visualizer</h3>
             <div class="flex flex-wrap gap-1 bg-zinc-100 dark:bg-zinc-800 p-1 rounded-lg text-zinc-600 dark:text-zinc-300">
@@ -467,7 +467,7 @@
           <p id="greeks-description" class="text-sm text-zinc-600 dark:text-zinc-300 mb-3" aria-live="polite">{{ GLOSSARY.delta.short }}</p>
           <div id="greeks-comparison-context" class="hidden text-sm text-zinc-600 dark:text-zinc-300 mb-2" aria-live="polite"></div>
           <div id="greeks-gex-totals" class="hidden grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2 text-base"></div>
-          <div id="greeks-range-controls" class="hidden options-comparison-controls mb-2">
+          <div id="greeks-range-controls" class="options-comparison-controls mb-2">
             <button id="greeks-range-near" class="options-comparison-button" type="button" onclick="setComparisonRange('near')" aria-pressed="true">Near spot (20)</button>
             <button id="greeks-range-loaded" class="options-comparison-button" type="button" onclick="setComparisonRange('loaded')" aria-pressed="false">All loaded strikes</button>
             <span id="greeks-range-summary" class="text-zinc-600 dark:text-zinc-300"></span>
@@ -477,9 +477,9 @@
         </div>
 
         <!-- Payoff Simulator -->
-        <section class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm min-w-0 flex flex-col">
+        <section class="options-payoff-card bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm min-w-0 flex flex-col">
           <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-50 mb-1">{{ metric('Options Payoff Simulator', 'payoff') }}</h3>
-          <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-3">Build an options strategy and explore profit or loss across underlying prices and dates.</p>
+          <p class="text-xs text-zinc-500 dark:text-zinc-400 mb-3">Modeled profit or loss across underlying prices and dates.</p>
           <div id="payoff-simulator-content"></div>
         </section>
       </div>
@@ -1271,6 +1271,12 @@
     return v ? `&strikes=${encodeURIComponent(v)}` : '';
   }
 
+  function chooseDefaultExpiration(expirations, today) {
+    const dates = [...expirations].sort();
+    const cutoff = new Date(Date.parse(today + 'T00:00:00Z') + 14 * 86400000).toISOString().slice(0,10);
+    return dates.find(date => date >= cutoff) || dates.filter(date => date > today).at(-1) || dates.at(-1);
+  }
+
   async function loadExpirationDates() {
     const res = await fetch(`/api/options-greeks/${ticker}`);
     if (!res.ok) return;
@@ -1286,7 +1292,8 @@
       const dte = Math.round((expDate - today) / 86400000);
       return `<option value="${d}">${d} (${dte}d)</option>`;
     }).join('');
-    document.getElementById('dte-val').innerText = `${data.days_to_expiration} days`;
+    const marketDate = new Intl.DateTimeFormat('en-CA', {timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    select.value = chooseDefaultExpiration(data.expirations, marketDate);
   }
 
   async function loadOptionsGreeks() {
@@ -1347,6 +1354,7 @@
     if (requestGeneration !== optionsRequestGeneration) return;
     optionsData = fresh;
     optionsLoadStatus = optionsData.options?.length ? 'ready' : 'empty';
+    document.getElementById('dte-val').innerText = `${optionsData.days_to_expiration ?? '—'} days`;
     renderOptionChainTable();
     renderGreeksChart();
     ensurePayoffSimulator()?.setChain(optionsData, optionsLoadStatus);
@@ -1468,6 +1476,19 @@
     renderGreeksChart();
   }
 
+  function prepareGreeksView(data, range) {
+    const all = data.options.filter(row => Number.isFinite(row.strike)).slice().sort((a,b) => a.strike-b.strike);
+    if (range === 'loaded' || !all.length) return all;
+    const spot = Number(data.spot_price);
+    const nearest = all.reduce((best,row) => Math.abs(row.strike-spot) < Math.abs(best.strike-spot) ? row : best, all[0]);
+    const ivs = [nearest.call_iv, nearest.put_iv].filter(value => Number.isFinite(value) && value > 0);
+    const iv = ivs.length ? ivs.reduce((sum,value) => sum+value,0)/ivs.length/100 : 0;
+    const years = Math.max(0, Number(data.time_to_expiration_years) || 0);
+    const width = Math.max(spot*.015, spot*iv*Math.sqrt(years)*1.5);
+    const near = all.filter(row => Math.abs(row.strike-spot) <= width);
+    return near.length ? near : [nearest];
+  }
+
   function prepareComparisonView(data, mode, range, convention) {
     const rows = data?.options || [];
     const spot = Number(data?.spot_price);
@@ -1551,8 +1572,10 @@
       }
       return;
     }
-    const rows = optionsData.options, strikes = rows.map(o=>o.strike), spot = optionsData.spot_price;
-    const t_years = Math.max(1e-5,(optionsData.days_to_expiration || 30)/365);
+    const comparison = ['gex','pctchg'].includes(currentGreeksChart);
+    const rows = comparison ? optionsData.options : prepareGreeksView(optionsData, comparisonRange);
+    const strikes = rows.map(o=>o.strike), spot = optionsData.spot_price;
+    const t_years = Math.max(0, Number(optionsData.time_to_expiration_years) || 0);
     const parsedRate = parseFloat(document.getElementById('rf-rate-input')?.value ?? '0.045');
     const rf_rate = Number.isFinite(parsedRate) ? parsedRate : .045;
     const option = c.cartesian([], 'Strike ($)', '');
@@ -1561,6 +1584,16 @@
     const padding = high > low ? (high - low) * .04 : Math.max(high * .02, .01);
     Object.assign(option.xAxis, {scale:true, min:Math.max(0,low-padding), max:high+padding, axisLabel:{fontSize:12,hideOverlap:true}});
     document.getElementById('greeks-description').textContent = document.getElementById(`chart-tab-${currentGreeksChart}`).title;
+    if (!comparison) {
+      document.getElementById('greeks-comparison-context').classList.toggle('hidden', true);
+      document.getElementById('greeks-gex-totals').classList.toggle('hidden', true);
+      document.getElementById('greeks-range-controls').classList.toggle('hidden', false);
+      document.getElementById('greeks-range-near').textContent = 'Near spot';
+      document.getElementById('greeks-range-near').setAttribute('aria-pressed', String(comparisonRange === 'near'));
+      document.getElementById('greeks-range-loaded').setAttribute('aria-pressed', String(comparisonRange === 'loaded'));
+      document.getElementById('greeks-range-loaded').textContent = `All loaded strikes (${optionsData.options.length})`;
+      document.getElementById('greeks-range-summary').textContent = `${optionsData.selected_expiration || ''} · ${rows.length} of ${optionsData.options.length} strikes${t_years === 0 ? ' · Expired: Greeks converge to their expiration limits.' : ''}`;
+    }
     const refs = [c.ref('x',spot,'Current price')];
     const values = key => rows.map(o=>typeof o[key] === 'number' ? o[key] : null);
     let view = null;
@@ -1670,7 +1703,7 @@
     renderChartReferences('greeks-references', refs);
     if (['gex','pctchg'].includes(currentGreeksChart)) refs.filter(ref=>ref.xAxis!=null).forEach(ref=>{ref.outsideRange=ref.outsideRange || ref.xAxis<view.bounds.min || ref.xAxis>view.bounds.max;});
     if (option.series.length) option.series[0].markLine={symbol:'none',data:refs.filter(ref=>!ref.keyOnly)};
-    if (!option.terminalViewKey) option.terminalViewKey = currentGreeksChart;
+    if (!option.terminalViewKey) option.terminalViewKey = `${currentGreeksChart}:${comparisonRange}:${optionsData.selected_expiration || ''}`;
     TerminalCharts.mount('greeks-chart',option);
   }
 
