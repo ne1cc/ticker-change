@@ -504,7 +504,7 @@ GLOSSARY: dict[str, dict] = {
     "heatmap_coverage": {
         "term": "Heatmap Coverage",
         "section": "Markets",
-        "short": "How many S&P 500 constituents have cached price history and appear as tiles on the heatmap.",
+        "short": "How many of the selected index's constituents have cached price history and appear as tiles on the heatmap.",
         "long": "The heatmap renders from price history cached in the app's SQLite store, refreshed in the background a few times an hour. While the universe is still downloading, the grid shows the names it already has and fills in automatically — coverage below the full ~503 names means the warm-up is still in flight (or some tickers failed to download).",
     },
     "market_breadth": {

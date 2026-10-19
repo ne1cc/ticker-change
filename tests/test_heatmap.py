@@ -8,6 +8,7 @@ import pandas as pd
 
 import db
 import heatmap
+import indices
 import sp500
 from app import app
 
@@ -258,6 +259,109 @@ class TestPeriodTreemap(unittest.TestCase):
         self.assertEqual("n/a", leaf["change"])
         self.assertEqual(0, leaf["value"][1])
         self.assertEqual("n/a", by_key["5D"]["data"][0]["change"])
+
+
+class TestIndices(TempDBCase):
+    SP = [{"symbol": "AAPL", "name": "Apple", "sector": "Information Technology"}]
+    NDX_ROWS = [{"symbol": "AAPL", "name": "Apple", "sector": ""},        # S&P member -> GICS
+                {"symbol": "ARM", "name": "Arm", "sector": "Technology"},   # not in S&P -> source text
+                {"symbol": "ZZZ", "name": "Zed", "sector": ""}]             # nothing known -> Other
+
+    def _fetchers(self, ndx=None):
+        return mock.patch.dict(indices.INDICES, {
+            "sp500": {"label": "S&P 500", "fetch": mock.Mock(return_value=self.SP)},
+            "ndx": {"label": "Nasdaq-100", "fetch": mock.Mock(return_value=ndx or self.NDX_ROWS)},
+            "dow": {"label": "Dow 30", "fetch": mock.Mock(return_value=[])},
+        })
+
+    def test_non_sp500_sectors_prefer_gics_then_source_then_other(self):
+        with self._fetchers():
+            heatmap.get_constituents("sp500")
+            rows = heatmap.get_constituents("ndx")
+        self.assertEqual(["Information Technology", "Technology", "Other"], [r["sector"] for r in rows])
+
+    def test_each_index_caches_under_its_own_key(self):
+        with self._fetchers():
+            heatmap.get_constituents("sp500")
+            heatmap.get_constituents("ndx")
+            self.assertEqual(1, indices.INDICES["ndx"]["fetch"].call_count)
+            heatmap.get_constituents("ndx")                      # cache hit
+            self.assertEqual(1, indices.INDICES["ndx"]["fetch"].call_count)
+        self.assertEqual(self.SP, db.cache_get("sp500", "constituents", ttl_hours=1))
+        self.assertEqual(3, len(db.cache_get("ndx", "constituents", ttl_hours=1)))
+
+    def test_request_path_never_fetches(self):
+        with self._fetchers():
+            self.assertEqual([], heatmap.get_constituents("ndx", fetch=False))
+            indices.INDICES["ndx"]["fetch"].assert_not_called()
+            heatmap.get_constituents("sp500")
+            heatmap.get_constituents("ndx")
+            self.assertEqual(3, len(heatmap.get_constituents("ndx", fetch=False)))
+
+    def test_fetch_failure_serves_the_stale_list(self):
+        with self._fetchers():
+            heatmap.get_constituents("sp500")
+            heatmap.get_constituents("ndx")
+            with mock.patch.object(db, "cache_get", return_value=None):   # expired
+                indices.INDICES["ndx"]["fetch"].side_effect = RuntimeError("down")
+                rows = heatmap.get_constituents("ndx")
+        self.assertEqual(3, len(rows))
+
+    def test_universe_symbols_is_the_union(self):
+        with self._fetchers():
+            self.assertEqual(["AAPL", "ARM", "ZZZ"], heatmap.universe_symbols())
+
+    def test_payloads_are_per_index_and_invalidate_clears_all(self):
+        with mock.patch.object(heatmap, "build_heatmap_data", side_effect=lambda i: {"index": i}) as build:
+            self.assertEqual({"index": "ndx"}, heatmap.get_heatmap_payload("ndx"))
+            self.assertEqual({"index": "sp500"}, heatmap.get_heatmap_payload())
+            heatmap.get_heatmap_payload("ndx")
+            self.assertEqual(2, build.call_count)
+            heatmap.invalidate_payload()
+            heatmap.get_heatmap_payload("ndx")
+            heatmap.get_heatmap_payload()
+            self.assertEqual(4, build.call_count)
+
+    def test_build_labels_the_index(self):
+        db.store_prices("AAPL", _frame([100.0, 101.0]))
+        with self._fetchers():
+            heatmap.get_constituents("sp500")
+            heatmap.get_constituents("ndx")
+            data = heatmap.build_heatmap_data("ndx")
+        self.assertEqual(("ndx", "Nasdaq-100", 3), (data["index"], data["label"], data["universe"]))
+        self.assertEqual(["AAPL"], [t["symbol"] for t in data["tiles"]])
+
+
+class TestIndexRoutes(TempDBCase):
+    def setUp(self):
+        super().setUp()
+        self.client = app.test_client()
+        self.client.testing = True
+
+    def test_default_is_sp500_and_the_picker_lists_every_index(self):
+        html = self.client.get("/heatmap").get_data(as_text=True)
+        self.assertIn("S&amp;P 500 Heatmap", html)
+        for label in ("S&amp;P 500", "Nasdaq-100", "Dow 30"):
+            self.assertIn(label, html)
+        self.assertIn('href="/heatmap?index=ndx"', html)
+        self.assertEqual(1, html.count('aria-current="page"'))
+
+    def test_index_param_selects_the_universe(self):
+        html = self.client.get("/heatmap?index=ndx").get_data(as_text=True)
+        self.assertIn("Nasdaq-100 Heatmap", html)
+        self.assertIn("Warming the Nasdaq-100 universe", html)   # nothing cached yet
+        self.assertIn("/api/heatmap?index=ndx", html)
+
+    def test_unknown_index_is_404_on_page_and_api(self):
+        self.assertEqual(404, self.client.get("/heatmap?index=bogus").status_code)
+        self.assertEqual(404, self.client.get("/api/heatmap?index=bogus").status_code)
+
+    def test_api_serves_the_requested_index(self):
+        db.store_prices("AAPL", _frame([100.0, 101.0]))
+        cons = [{"symbol": "AAPL", "name": "Apple", "sector": "Technology"}]
+        with mock.patch.object(heatmap, "get_constituents", return_value=cons):
+            payload = self.client.get("/api/heatmap?index=dow").get_json()
+        self.assertEqual(("dow", "Dow 30"), (payload["index"], payload["label"]))
 
 
 class TestRefreshUniverse(TempDBCase):
