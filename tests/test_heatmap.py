@@ -169,6 +169,15 @@ class TestRenderTreemap(TempDBCase):
         self.assertEqual('-1.00%', leaves['MSFT']['change'])
         self.assertEqual('+0.01%', sector['change'])
 
+    def test_sector_drill_down_is_enabled(self):
+        html = heatmap.render_treemap(self._data())
+        option = json.loads(html.split('type="application/json"', 1)[1].split('>', 1)[1].split('</script>', 1)[0])
+        series = option['series'][0]
+        # Sector clicks re-root via charts.js (treemapRootToNode); the breadcrumb is the way back.
+        self.assertFalse(series['nodeClick'])
+        self.assertTrue(series['breadcrumb']['show'])
+        self.assertEqual('sector::Technology', series['data'][0]['id'])
+
     def test_sector_tooltip_omits_ticker_and_price(self):
         html = heatmap.render_treemap(self._data())
         option = json.loads(html.split('type="application/json"', 1)[1].split('>', 1)[1].split('</script>', 1)[0])

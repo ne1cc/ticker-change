@@ -79,10 +79,15 @@
         data:series.data.map(sector => ({...sector,children:sector.children.map(leaf => ({...leaf,label:{color:Math.abs(leaf.value[1])>=.9?'#ffffff':p.text}}))})),
         label:{show:true,color:p.text,formatter:params => params.data.leaf ? params.name + '\n' + params.data.change : params.name},
         upperLabel:{show:true,height:24,color:p.text},
+        breadcrumb:{...series.breadcrumb,itemStyle:{color:p.grid,borderColor:p.bg,textStyle:{color:p.text}},emphasis:{itemStyle:{color:p.bg}}},
         itemStyle:{borderColor:p.bg},
         levels:series.levels.map(level => ({...level,itemStyle:{...level.itemStyle,borderColor:p.bg}}))
       }));
-      result.tooltip.formatter = params => params.data.leaf ? `${params.data.company} (${params.data.symbol})\n$${params.data.price.toFixed(2)} · ${params.data.change}` : params.name + '\n' + (params.data.change || '');
+      delete result.legend;
+      const dollars = v => v >= 1e9 ? `$${(v / 1e9).toFixed(1)}B` : `$${(v / 1e6).toFixed(0)}M`;
+      result.tooltip.formatter = params => params.data?.leaf
+        ? `${params.data.company} (${params.data.symbol})\n${params.treePathInfo[1]?.name || ''}\n$${params.data.price.toFixed(2)} · ${params.data.change}\n20d avg $ volume ${dollars(params.data.value[0])}\nClick to open price table`
+        : params.name + '\n' + (params.data?.change || '') + (params.data?.children ? '\nClick to zoom in' : '');
     }
     if (option.series?.some(s => s.type === 'surface')) {
       result.grid3D = { ...option.grid3D, axisPointer: { lineStyle: { color: p.text } } };
@@ -96,8 +101,11 @@
       state.chart = echarts.init(element);
       state.chart.on('click', event => {
         if (event.data?.symbol && event.data?.leaf) location.href = '/stock?ticker=' + encodeURIComponent(event.data.symbol);
+        else if (event.data?.id?.startsWith('sector::')) state.chart.dispatchAction({ type: 'treemapRootToNode', targetNodeId: event.data.id });
       });
+      state.chart.on('treemapRootToNode', event => state.onTreemapNavigate?.(event));
     }
+    state.onReset?.(); // notMerge below drops any treemap zoom, so mirror that in the controls
     const existing = !reset ? state.chart.getOption() : null;
     const styled = themed(option);
     if (existing?.dataZoom) styled.dataZoom = existing.dataZoom;
@@ -139,6 +147,24 @@
       const select = document.createElement('select'); select.setAttribute('aria-label', 'Gamma exposure view');
       option.terminalViews.labels.forEach((label,i) => select.add(new Option(label,i)));
       select.onchange = () => { state.option = option.terminalViews.options[Number(select.value)]; if(state.chart) apply(state,true); };
+      controls.append(select);
+    }
+    const treemap = option.series?.find(s => s.type === 'treemap');
+    if (treemap) {
+      // Keyboard-reachable twin of clicking a sector header; kept in sync with clicks and the breadcrumb.
+      const select = document.createElement('select'); select.setAttribute('aria-label', 'Zoom to sector');
+      select.add(new Option('All sectors', ''));
+      treemap.data.forEach(sector => select.add(new Option(sector.name, sector.id)));
+      select.onchange = () => {
+        if (!state.chart) return;
+        if (select.value) state.chart.dispatchAction({ type: 'treemapRootToNode', targetNodeId: select.value });
+        else apply(state, true);
+      };
+      state.onTreemapNavigate = event => {
+        const id = event.targetNode?.getId?.() ?? event.targetNodeId;
+        select.value = [...select.options].some(o => o.value === id) ? id : '';
+      };
+      state.onReset = () => { select.value = ''; };
       controls.append(select);
     }
     if (option.terminalRanges) {

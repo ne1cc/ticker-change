@@ -238,7 +238,11 @@ def _colorscale(mid: str) -> list:
 
 
 def render_treemap(data: dict, dark: bool = False) -> str:
-    """Native sector treemap; request path remains entirely cache-only."""
+    """Native sector treemap; request path remains entirely cache-only.
+
+    Clicking a sector zooms into it (breadcrumb returns to the full map);
+    clicking a ticker opens its price table (wired in static/charts.js).
+    """
     by_sector = {}
     for tile in data['tiles']:
         by_sector.setdefault(tile['sector'], []).append(tile)
@@ -253,7 +257,7 @@ def render_treemap(data: dict, dark: bool = False) -> str:
         sectors.append({'id': 'sector::' + sector, 'name': sector, 'change': f'{change:+.2f}%', 'value': [total, max(-MOVE_SPAN, min(MOVE_SPAN, change))], 'children': leaves})
     option = {'series': [{'type': 'treemap', 'name': 'S&P 500', 'data': sectors,
                          'roam': False, 'nodeClick': False, 'leafDepth': 2,
-                         'breadcrumb': {'show': False}, 'visualDimension': 1,
+                         'breadcrumb': {'show': True, 'bottom': 0}, 'visualDimension': 1,
                          'visualMin': -MOVE_SPAN, 'visualMax': MOVE_SPAN,
                          'color': [stop[1] for stop in _colorscale('#3f3f46' if dark else '#e4e4e7')],
                          'colorMappingBy': 'value', 'upperLabel': {'show': True, 'height': 24},
