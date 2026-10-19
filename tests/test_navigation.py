@@ -71,6 +71,18 @@ class TestNavigation(unittest.TestCase):
             f"Route /settings returned unexpected status {settings_resp.status_code}",
         )
 
+    def test_stock_without_ticker_defaults_to_spy(self):
+        with mock.patch.object(
+            app_module,
+            "get_stock_data",
+            return_value={"ticker": "SPY", "error": "Prices unavailable"},
+        ) as get_stock_data:
+            resp = self.client.get("/stock")
+
+        self.assertEqual(resp.status_code, 200)
+        get_stock_data.assert_called_once_with("SPY")
+        self.assertIn('value="SPY"', resp.get_data(as_text=True))
+
     def test_strategies_handles_ticker_parameter(self):
         """Verify that /strategies and /momentum accept ?ticker=AAPL without error and retain query params."""
         for path in ["/momentum?ticker=AAPL", "/strategies?ticker=AAPL"]:

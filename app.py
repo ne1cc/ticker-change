@@ -608,7 +608,7 @@ def news_api():
 
 @app.route('/stock')
 def stock_page():
-    ticker = request.args.get('ticker', '')
+    ticker = request.args.get('ticker', '') or 'SPY'
     weekdays = request.args.get('weekdays', '')
     days = request.args.get('days', '')
     
