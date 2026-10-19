@@ -1,4 +1,5 @@
-"""S&P 500 heatmap: sector-grouped treemap data assembly + rendering.
+"""Index heatmaps (S&P 500, Nasdaq-100, Dow 30): sector-grouped treemap data
+assembly + rendering.
 
 Latency contract: the request path (`get_heatmap_payload` -> `render_treemap`)
 only ever reads SQLite and the api_cache -- it never talks to the network.
@@ -12,7 +13,7 @@ import pandas as pd
 import charts
 
 import db
-import sp500
+import indices
 
 # Assembled-tile snapshot freshness (api_cache). The warmer refreshes the
 # underlying prices about every 45 min; this caps re-assembly work per hour.
@@ -40,25 +41,46 @@ PERIODS = (
 )
 MOVERS_SHOWN = 5
 # Bump when the payload shape changes so pages never read a stale old shape.
-PAYLOAD_KEY = "sp500_payload_v2"
+PAYLOAD_PREFIX = "payload_v3:"  # + index key
 
 
-def get_constituents() -> list[dict]:
-    """[{symbol, name, sector}] from the cached constituent table.
+def get_constituents(index: str = indices.DEFAULT_INDEX, fetch: bool = True) -> list[dict]:
+    """[{symbol, name, sector}] for `index` from the cached constituent table.
 
-    Falls back to a stale cached copy (TTL ignored) when the live CSV fetch
-    fails, preserving the "always render something" contract.
+    Falls back to a stale cached copy (TTL ignored) when the live fetch
+    fails, preserving the "always render something" contract. `fetch=False`
+    is the request-path mode: cached (fresh or stale) or [], never the network.
     """
-    cached = db.cache_get("sp500", "constituents", ttl_hours=CONSTITUENTS_TTL_HOURS)
+    cached = db.cache_get(index, "constituents", ttl_hours=CONSTITUENTS_TTL_HOURS)
     if cached is not None:
         return cached
+    if not fetch:
+        return _cache_get_stale(index, "constituents") or []
     try:
-        rows = sp500.fetch_sp500_constituents()
+        rows = indices.INDICES[index]["fetch"]()
     except Exception as e:
-        print(f"[heatmap] constituents fetch failed: {e}")
-        return _cache_get_stale("sp500", "constituents") or []
-    db.cache_set("sp500", "constituents", rows)
+        print(f"[heatmap] {index} constituents fetch failed: {e}")
+        return _cache_get_stale(index, "constituents") or []
+    if index != indices.DEFAULT_INDEX:
+        rows = _with_gics_sectors(rows)
+    db.cache_set(index, "constituents", rows)
     return rows
+
+
+def _with_gics_sectors(rows: list[dict]) -> list[dict]:
+    """Prefer the S&P 500's GICS sector for any symbol it contains, so every
+    index groups by the same sector names; else the source's own text, else "Other"."""
+    gics = {c["symbol"]: c["sector"] for c in get_constituents(fetch=False)}
+    return [{**r, "sector": gics.get(r["symbol"]) or r.get("sector") or "Other"} for r in rows]
+
+
+def universe_symbols() -> list[str]:
+    """Every symbol any index needs, for the warmer (S&P 500 first so its
+    list is cached before the other indices borrow its sectors)."""
+    symbols: set[str] = set()
+    for index in indices.INDICES:
+        symbols.update(c["symbol"] for c in get_constituents(index))
+    return sorted(symbols)
 
 
 def _cache_get_stale(provider: str, key: str):
@@ -126,14 +148,14 @@ def _change_over(closes: pd.Series, sessions: int) -> float | None:
     return round((float(closes.iloc[-1]) / base - 1.0) * 100.0, 2)
 
 
-def build_heatmap_data() -> dict | None:
+def build_heatmap_data(index: str = indices.DEFAULT_INDEX) -> dict | None:
     """Assemble heatmap tiles from SQLite. None when there's nothing to show.
 
     Tiles carry the latest close-to-close % change (colour) and trailing
     average dollar volume (area), grouped by GICS sector from the constituent
     table.
     """
-    constituents = get_constituents()
+    constituents = get_constituents(index, fetch=False)
     if not constituents:
         return None
     sym_meta = {c["symbol"]: c for c in constituents}
@@ -172,6 +194,8 @@ def build_heatmap_data() -> dict | None:
     advancers = sum(1 for t in tiles if t["change_pct"] > 0)
     decliners = sum(1 for t in tiles if t["change_pct"] < 0)
     return {
+        "index": index,
+        "label": indices.INDICES[index]["label"],
         "tiles": tiles,
         "sectors": sorted({t["sector"] for t in tiles}),
         "coverage": len(tiles),
@@ -183,20 +207,21 @@ def build_heatmap_data() -> dict | None:
     }
 
 
-def get_heatmap_payload() -> dict | None:
+def get_heatmap_payload(index: str = indices.DEFAULT_INDEX) -> dict | None:
     """Cached assembled payload (api_cache), rebuilt only when stale."""
-    cached = db.cache_get("heatmap", PAYLOAD_KEY, ttl_hours=PAYLOAD_TTL_HOURS)
+    key = PAYLOAD_PREFIX + index
+    cached = db.cache_get("heatmap", key, ttl_hours=PAYLOAD_TTL_HOURS)
     if cached is not None:
         return cached
-    data = build_heatmap_data()
+    data = build_heatmap_data(index)
     if data is None:
         return None
-    db.cache_set("heatmap", PAYLOAD_KEY, data)
+    db.cache_set("heatmap", key, data)
     return data
 
 
 def invalidate_payload() -> None:
-    """Drop the assembled-payload snapshot so the next read rebuilds it.
+    """Drop every index's assembled-payload snapshot so the next read rebuilds it.
 
     Called by the warmer after a successful universe refresh -- otherwise a
     page could keep seeing pre-warm coverage until the TTL runs out.
@@ -204,8 +229,8 @@ def invalidate_payload() -> None:
     try:
         with db.get_conn() as conn:
             conn.execute(
-                "DELETE FROM api_cache WHERE provider = 'heatmap' AND key = ?",
-                (PAYLOAD_KEY,),
+                "DELETE FROM api_cache WHERE provider = 'heatmap' AND key LIKE ?",
+                (PAYLOAD_PREFIX + "%",),
             )
     except Exception as e:
         print(f"[heatmap] payload invalidation failed: {e}")
@@ -350,7 +375,7 @@ def render_treemap(data: dict, dark: bool = False) -> str:
     periods = [{'key': p['key'], 'label': p['label'], 'span': p['span'],
                 'data': _series_data(data['tiles'], p)} for p in PERIODS]
     option = {'terminalPeriods': periods,
-              'series': [{'type': 'treemap', 'name': 'S&P 500', 'data': periods[0]['data'],
+              'series': [{'type': 'treemap', 'name': data.get('label', 'S&P 500'), 'data': periods[0]['data'],
                          'roam': False, 'nodeClick': False, 'leafDepth': 2,
                          'breadcrumb': {'show': True, 'bottom': 0, 'height': 24, 'emptyItemWidth': 28,
                                         'itemStyle': {'gapWidth': 10}},

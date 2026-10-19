@@ -2,7 +2,7 @@ from __future__ import annotations
 from dotenv import load_dotenv
 load_dotenv()
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
+from flask import Flask, render_template, request, jsonify, redirect, url_for, Response, abort
 from flask_cors import CORS
 import yfinance as yf
 import pandas as pd
@@ -47,6 +47,7 @@ import api_docs
 import decide
 import momentum_engine
 import heatmap
+import indices
 from glossary import GLOSSARY
 
 def _get_yf_ticker(symbol: str) -> yf.Ticker:
@@ -2308,17 +2309,28 @@ def live_page():
     return render_template('live.html', ticker=ticker)
 
 
+def _heatmap_index():
+    """Validated `?index=` (default S&P 500); an unknown key is a 404, not a silent fallback."""
+    index = request.args.get('index') or indices.DEFAULT_INDEX
+    if index not in indices.INDICES:
+        abort(404)
+    return index
+
+
 @app.route('/heatmap')
 def heatmap_page():
     """S&P 500 sector treemap. Reads only cached data -- never fetches, so a
     first-ever load renders instantly with partial coverage and fills in as
-    the background warmer downloads history."""
-    data = heatmap.get_heatmap_payload()
+    the background warmer downloads history. `?index=` picks the universe."""
+    index = _heatmap_index()
+    data = heatmap.get_heatmap_payload(index)
     chart, periods = None, []
     if data:
         chart = heatmap.render_treemap(data, dark=request.cookies.get('ui_mode') == 'dark')
         periods = heatmap.period_views(data)
-    return render_template('heatmap.html', data=data, heatmap_chart=chart, periods=periods)
+    return render_template('heatmap.html', data=data, heatmap_chart=chart, periods=periods,
+                           index=index, index_label=indices.INDICES[index]['label'],
+                           index_options=[(k, v['label']) for k, v in indices.INDICES.items()])
 
 
 @app.route('/api/heatmap')
@@ -2327,7 +2339,7 @@ def heatmap_api():
 
     Returns a 200 with `status: "warming"` while the universe is still
     downloading, so the page's poll loop can watch coverage grow."""
-    data = heatmap.get_heatmap_payload()
+    data = heatmap.get_heatmap_payload(_heatmap_index())
     if data is None:
         return jsonify({
             "status": "warming",
@@ -4257,7 +4269,7 @@ def _start_options_cache_warmer():
 
 
 def _warm_heatmap():
-    """Background-refresh the whole S&P 500 universe into daily_prices.
+    """Background-refresh every heatmap index's universe into daily_prices.
 
     Mirrors _warm_options_cache: background thread, cross-worker lock, never
     raises. The /heatmap request path itself only ever reads SQLite, so the
@@ -4267,11 +4279,10 @@ def _warm_heatmap():
         try:
             if not db.try_claim_lock("heatmap_warmer_lock", ttl_hours=1.0):
                 return
-            constituents = heatmap.get_constituents()
-            symbols = [c["symbol"] for c in constituents]
+            symbols = heatmap.universe_symbols()
             if not symbols:
                 return
-            print(f"[heatmap] warming {len(symbols)} S&P 500 tickers ...")
+            print(f"[heatmap] warming {len(symbols)} index tickers ...")
             result = heatmap.refresh_universe(symbols)
             print(f"[heatmap] done ({result['fetched']} fetched, "
                   f"{len(result['failed'])} failed)")
