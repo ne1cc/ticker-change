@@ -89,7 +89,6 @@
           return box?.height < 30 || box?.width < 46 ? params.name : params.name + '\n' + params.data.change;
         }},
         upperLabel:{show:true,height:24,color:p.text,formatter:params => params.name + (params.data?.change ? '  ' + params.data.change : '')},
-        breadcrumb:{...series.breadcrumb,itemStyle:{...series.breadcrumb?.itemStyle,color:p.grid,borderColor:p.bg,textStyle:{color:p.text}},emphasis:{itemStyle:{color:p.bg}}},
         itemStyle:{borderColor:p.bg},
         levels:series.levels.map(level => ({...level,itemStyle:{...level.itemStyle,borderColor:p.bg}}))
       }));
@@ -166,7 +165,7 @@
     }
     const treemap = option.series?.find(s => s.type === 'treemap');
     if (treemap) {
-      // Keyboard-reachable twin of clicking a sector header; kept in sync with clicks and the breadcrumb.
+      // Keyboard-reachable twin of clicking a sector header; kept in sync with clicks and the back button.
       const select = document.createElement('select'); select.setAttribute('aria-label', 'Zoom to sector');
       select.add(new Option('All sectors', ''));
       treemap.data.forEach(sector => select.add(new Option(sector.name, sector.id)));
@@ -178,10 +177,14 @@
       state.onTreemapNavigate = event => {
         const id = event.targetNode?.getId?.() ?? event.targetNodeId;
         state.rootId = [...select.options].some(o => o.value === id) ? id : '';
-        select.value = state.rootId;
+        state.syncControls();
       };
-      state.syncControls = () => { select.value = state.rootId || ''; };
-      controls.append(select);
+      const back = document.createElement('button'); back.type = 'button'; back.textContent = '← All sectors'; back.hidden = true;
+      back.onclick = () => apply(state, true);
+      state.syncControls = () => { select.value = state.rootId || ''; back.hidden = !state.rootId; };
+      element.addEventListener('keydown', e => { if (e.key === 'Escape' && state.rootId) apply(state, true); });
+      element.tabIndex = 0; // lets Esc work after clicking into the map
+      controls.append(back, select);
     }
     if (option.terminalPeriods) {
       const group = document.createElement('div'); group.setAttribute('role', 'group'); group.setAttribute('aria-label', 'Colour by period');
