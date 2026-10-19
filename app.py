@@ -1178,6 +1178,16 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
                                     (call_wall, 'Call Wall', '#10b981'), (put_wall, 'Put Wall', '#f43f5e'), (hvl, 'HVL', '#71717a')]:
             if value is not None:
                 levels.append(charts.reference('y', value, f'{label} ${value:g}', color))
+        # Keep nearby strike labels legible when several key levels cluster together.
+        label_groups = []
+        for level in sorted(levels, key=lambda item: item['yAxis']):
+            if not label_groups or level['yAxis'] - label_groups[-1][-1]['yAxis'] > current_price * 0.01:
+                label_groups.append([level])
+            else:
+                label_groups[-1].append(level)
+        for group in label_groups:
+            for index, level in enumerate(group):
+                level['label']['offset'] = [0, (index - (len(group) - 1) / 2) * 18]
         def _gex_view(seq, calls, puts, nets, cumulative, split):
             bars = ([charts.bar('Call GEX', calls, seq, '#10b981'), charts.bar('Put GEX', puts, seq, '#f43f5e')]
                     if split else [charts.bar('Net GEX', nets, seq, ['#10b981' if v >= 0 else '#f43f5e' for v in nets])])
@@ -1186,8 +1196,8 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
                 bar['encode'] = {'x': 0, 'y': 1}
             cumulative_line = charts.line('Cumulative net γ', cumulative, seq, '#6366f1', xAxisIndex=1)
             opt = charts.cartesian(bars + [cumulative_line], xtype='value', yname='Strike ($)', refs=levels)
-            opt['xAxis'] = [{'type': 'value', 'name': 'Gamma exposure ($M / 1% move)', 'min': -bar_max, 'max': bar_max},
-                            {'type': 'value', 'name': 'Cumulative ($M)', 'min': -cum_max, 'max': cum_max, 'position': 'top', 'splitLine': {'show': False}}]
+            opt['xAxis'] = [{'type': 'value', 'name': 'Gamma exposure ($M / 1% move)', 'min': -bar_max, 'max': bar_max, 'terminalCompactTicks': True},
+                            {'type': 'value', 'name': 'Cumulative ($M)', 'min': -cum_max, 'max': cum_max, 'terminalCompactTicks': True, 'position': 'top', 'splitLine': {'show': False}}]
             opt['terminalHorizontalBars'] = True
             if gamma_flip is not None:
                 bars[0]['markArea'] = {'silent': True, 'data': [
@@ -1599,6 +1609,7 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
 
             vp_option = charts.cartesian([charts.bar('Volume at Price', vol_by_price.values, bin_centers, vp_colors)], xtype='value', xname='Cumulative Volume (2 yr)', yname='Price ($)', refs=[charts.reference('y', current_price, 'Current', '#f59e0b'), charts.reference('y', poc_price, f'POC ${poc_price}', '#6366f1')])
             vp_option['terminalHorizontalBars'] = True
+            vp_option['xAxis']['scale'] = False
             vp_chart = charts.render_chart(vp_option, height=420)
     else:
         poc_price = None
@@ -2123,11 +2134,19 @@ def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045, strike_
             p_change = p_opt.get('change', 0)
             p_pct_change = p_opt.get('percentChange', 0)
 
+            def _available(row, field, allow_zero=False):
+                value = finite_number(row.get(field)) if field in row else None
+                return value is not None and (allow_zero or value >= 0)
+
             def _safe_num(v):
                 return finite_number(v) or 0
 
             rows.append({
                 'strike': strike,
+                'call_oi_available': bool(c_opt and _available(c_opt, 'openInterest')),
+                'put_oi_available': bool(p_opt and _available(p_opt, 'openInterest')),
+                'call_change_available': bool(c_opt and _available(c_opt, 'change', True) and _available(c_opt, 'percentChange', True)),
+                'put_change_available': bool(p_opt and _available(p_opt, 'change', True) and _available(p_opt, 'percentChange', True)),
                 'call_quote_valid': valid_quote(c_opt.get('bid'), c_opt.get('ask')),
                 'call_bid': _safe_num(c_bid),
                 'call_ask': _safe_num(c_ask),
@@ -3057,8 +3076,8 @@ def _strategies_ticker_charts(symbol, series, strategy_id) -> dict:
                              charts.line(f'Buy & Hold {symbol} ($10k)', dates, cum_hold, '#94a3b8', dash=True, xAxisIndex=1, yAxisIndex=1)]
     canvas_series += [{**line, 'xAxisIndex': 1, 'yAxisIndex': 2} for line in drawdown]
     canvas = {'series': canvas_series,
-              'grid': [{'left': 55, 'right': 65, 'top': 60, 'height': '43%', 'containLabel': True},
-                       {'left': 55, 'right': 65, 'top': '61%', 'height': '27%', 'containLabel': True}],
+              'grid': [{'left': 80, 'right': 80, 'top': 60, 'height': '43%', 'containLabel': False},
+                       {'left': 80, 'right': 80, 'top': '61%', 'height': '27%', 'containLabel': False}],
               'xAxis': [{'type': 'time', 'gridIndex': 0}, {'type': 'time', 'gridIndex': 1}],
               'yAxis': [{'type': 'value', 'name': f'{symbol} Price ($)', 'scale': True, 'gridIndex': 0},
                         {'type': 'value', 'name': 'Portfolio ($10k)', 'nameGap': 55, 'scale': True, 'gridIndex': 1},

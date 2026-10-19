@@ -59,6 +59,8 @@ def reference(axis, value, name='', color='#71717a'):
 
 def cartesian(series, *, xname='', yname='', xtype='time', categories=None, title='', refs=None):
     option = {'series': series, 'xAxis': {'type': xtype, 'name': xname}, 'yAxis': {'type': 'value', 'name': yname, 'scale': True}}
+    if xtype == 'value':
+        option['xAxis']['scale'] = True
     if categories is not None:
         option['xAxis']['data'] = list(categories)
     if title:
