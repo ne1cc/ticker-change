@@ -3,9 +3,10 @@ services:
     name: ticker-change
     runtime: python
     buildCommand: pip install -r requirements.txt
-    # --timeout 120: /api/institutional's cold path (100-permutation null
-    # test) can exceed gunicorn's 30s default on a shared-vCPU instance.
-    startCommand: gunicorn app:app --workers 2 --timeout 120 --bind 0.0.0.0:$PORT
+    # --timeout 300: slow cold paths (/api/institutional's 100-permutation
+    # bootstrap test; /ai-summary's multi-minute LLM report) must finish
+    # before gunicorn kills the worker (which nginx reports as 502).
+    startCommand: gunicorn app:app --workers 2 --timeout 300 --bind 0.0.0.0:$PORT
     envVars:
       # --- Market-positioning data providers ---
       # Set these in the Render dashboard (sync: false = value is NOT read from
