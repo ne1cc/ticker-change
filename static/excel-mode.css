@@ -77,6 +77,8 @@ html.excel nav a:hover,
 html.excel nav a:hover span,
 html.excel nav [class*="text-zinc"]:hover { color: #ffffff !important; }
 html.excel nav [class*="border"] { border-color: rgba(255, 255, 255, 0.35) !important; }
+/* Search box keeps a light fill, so its typed text must stay dark (not the pale nav type). */
+html.excel nav input[type="text"] { color: #000000 !important; }
 
 /* Topbar pillar and utility chrome styling */
 html.excel nav a[id^="nav-"] {
