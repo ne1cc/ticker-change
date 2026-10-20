@@ -47,17 +47,29 @@ class TestAlpacaTrades(unittest.TestCase):
         with patch.object(providers, "alpaca_credentials", return_value=None):
             self.assertIsNone(providers.alpaca_option_trades("XYZ", ["XYZ261120C00100000"]))
 
-    def test_request_shape_and_parse(self):
-        payload = {"trades": {"XYZ261120C00100000": [{"t": "t", "p": 1.0, "s": 1}]}}
+    def test_one_request_per_symbol_without_feed_param(self):
+        def fake(url, headers=None, params=None):
+            return {"trades": {params["symbols"]: [{"t": "t", "p": 1.0, "s": 1}]}}
         with patch.object(providers, "alpaca_credentials", return_value=("id", "secret")), \
              patch.object(providers.db, "cache_get", return_value=None), \
              patch.object(providers.db, "cache_set"), \
-             patch.object(providers, "_get_json", return_value=payload) as get:
-            out = providers.alpaca_option_trades("XYZ", ["XYZ261120C00100000"])
-        self.assertEqual(out, payload["trades"])
+             patch.object(providers, "_get_json", side_effect=fake) as get:
+            out = providers.alpaca_option_trades("XYZ", ["A", "B"])
+        self.assertEqual(set(out), {"A", "B"})
+        self.assertEqual(get.call_count, 2)
         kwargs = get.call_args.kwargs
         self.assertEqual(kwargs["headers"]["APCA-API-KEY-ID"], "id")
-        self.assertEqual(kwargs["params"]["feed"], "indicative")
+        self.assertNotIn("feed", kwargs["params"])  # endpoint 400s on it
+
+    def test_partial_failure_keeps_good_symbols(self):
+        def fake(url, headers=None, params=None):
+            s = params["symbols"]
+            return {"trades": {s: [{"t": "t", "p": 1.0, "s": 1}]}} if s == "A" else None
+        with patch.object(providers, "alpaca_credentials", return_value=("id", "secret")), \
+             patch.object(providers.db, "cache_get", return_value=None), \
+             patch.object(providers.db, "cache_set"), \
+             patch.object(providers, "_get_json", side_effect=fake):
+            self.assertEqual(set(providers.alpaca_option_trades("XYZ", ["A", "B"])), {"A"})
 
     def test_failure_returns_none(self):
         with patch.object(providers, "alpaca_credentials", return_value=("id", "secret")), \

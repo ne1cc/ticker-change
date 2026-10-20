@@ -12,6 +12,7 @@ Env vars:
 """
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import requests
 import pandas as pd
@@ -45,6 +46,7 @@ _DEFAULT_SEC_UA = "anonymous@example.com"
 FINNHUB_BASE = "https://finnhub.io/api/v1"
 FMP_BASE = "https://financialmodelingprep.com/api/v3"
 ALPACA_DATA_BASE = "https://data.alpaca.markets"
+ALPACA_MAX_SYMBOLS = 10  # one request each; free plan allows 200 calls/min
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 
@@ -188,25 +190,36 @@ def _get_json(url, headers=None, params=None):
 
 def alpaca_option_trades(ticker: str, symbols: list) -> dict | None:
     """Recent delayed option trades {OCC symbol: [trade]} from Alpaca's free
-    indicative feed, cached 10 min. None when unconfigured or the call fails.
+    Basic plan (indicative feed), cached 10 min. None when unconfigured or every
+    call fails.
 
-    Basic plan refuses the newest 15 minutes, so the window ends 16 min ago and
-    spans 5 days to reach the last session across weekends.
+    One request per symbol: the endpoint's `limit` is shared across symbols, so a
+    busy contract would otherwise starve the rest. Basic refuses the newest 15
+    minutes, so the window ends 16 min ago and spans 5 days to reach the last
+    session across weekends. The trades endpoint rejects a `feed` parameter.
     """
     creds = alpaca_credentials()
     if not creds or not symbols:
         return None
+    headers = {"APCA-API-KEY-ID": creds[0], "APCA-API-SECRET-KEY": creds[1]}
 
     def fetch():
         end = datetime.now(timezone.utc) - timedelta(minutes=16)
-        data = _get_json(
-            f"{ALPACA_DATA_BASE}/v1beta1/options/trades",
-            headers={"APCA-API-KEY-ID": creds[0], "APCA-API-SECRET-KEY": creds[1]},
-            params={"symbols": ",".join(symbols), "feed": "indicative", "sort": "desc",
-                    "limit": 1000, "end": end.isoformat(),
-                    "start": (end - timedelta(days=5)).isoformat()},
-        )
-        return data.get("trades", {}) if isinstance(data, dict) else None
+
+        def one(symbol):
+            data = _get_json(
+                f"{ALPACA_DATA_BASE}/v1beta1/options/trades", headers=headers,
+                params={"symbols": symbol, "sort": "desc", "limit": 50,
+                        "end": end.isoformat(),
+                        "start": (end - timedelta(days=5)).isoformat()},
+            )
+            return symbol, (data.get("trades", {}).get(symbol, []) if isinstance(data, dict) else None)
+
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            results = list(pool.map(one, symbols[:ALPACA_MAX_SYMBOLS]))
+        if all(trades is None for _, trades in results):
+            return None
+        return {symbol: trades for symbol, trades in results if trades}
 
     return _cached("alpaca", f"opttrades:{ticker}", fetch, ttl_hours=10 / 60)
 
