@@ -7,4 +7,6 @@ After=network-online.target docker.service
 Type=oneshot
 # Optional (leading "-"): root-only 0600 file with ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY.
 EnvironmentFile=-/etc/ticker-change/alpaca.env
+# Optional: root-only 0600 file with GEMINI_API_KEY (shared AI provider for all users).
+EnvironmentFile=-/etc/ticker-change/gemini.env
 ExecStart=/usr/local/bin/ticker-change-deploy
