@@ -47,6 +47,7 @@ import api_docs
 import decide
 import momentum_engine
 import heatmap
+import options_flow
 import indices
 from glossary import GLOSSARY
 
@@ -2319,7 +2320,16 @@ def options_page():
     import dataclasses
     data_dict = dataclasses.asdict(terminal_res)
 
-    return render_template('options.html', ticker=ticker, data=data_dict)
+    unusual = options_flow.unusual_activity(chains_df, ticker)
+    trades = providers.alpaca_option_trades(ticker, [u['symbol'] for u in unusual])
+    flow = {
+        'unusual': unusual,
+        'prints': options_flow.largest_prints(trades),
+        'alpaca_configured': providers.alpaca_credentials() is not None,
+        'prints_ok': trades is not None,
+    }
+
+    return render_template('options.html', ticker=ticker, data=data_dict, flow=flow)
 
 
 @app.route('/live')
@@ -3803,6 +3813,7 @@ def compute_dashboard() -> dict:
 # AI provider fallback in ai.py.
 SETTINGS_FIELDS = (
     "finnhub_api_key", "fmp_api_key", "sec_user_agent", "marketaux_api_key",
+    "alpaca_api_key_id", "alpaca_api_secret_key",
 ) + providers.AI_SETTING_KEYS
 
 
