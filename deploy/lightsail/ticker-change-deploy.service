@@ -9,4 +9,6 @@ Type=oneshot
 EnvironmentFile=-/etc/ticker-change/alpaca.env
 # Optional: root-only 0600 file with GEMINI_API_KEY (shared AI provider for all users).
 EnvironmentFile=-/etc/ticker-change/gemini.env
+# Optional: root-only 0600 file with FINNHUB_API_KEY.
+EnvironmentFile=-/etc/ticker-change/finnhub.env
 ExecStart=/usr/local/bin/ticker-change-deploy
