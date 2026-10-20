@@ -44,7 +44,7 @@ if docker run -d --name ticker-change --restart unless-stopped \
      -p 127.0.0.1:8000:8000 -v "$root/data:/data" \
      -e DB_PATH=/data/stocks.db -e MODEL_PATH=/data/model.pkl -e HOME=/tmp \
      -e OPENBLAS_NUM_THREADS=1 -e OMP_NUM_THREADS=1 \
-     -e ALPACA_API_KEY_ID -e ALPACA_API_SECRET_KEY -e GEMINI_API_KEY \
+     -e ALPACA_API_KEY_ID -e ALPACA_API_SECRET_KEY -e GEMINI_API_KEY -e FINNHUB_API_KEY \
      "$image" >/dev/null && healthy; then
   docker rm ticker-change-prev >/dev/null
   rm -f "$failed"
