@@ -51,9 +51,10 @@ python warm_s3_cache.py
 Verify changes by running the app and hitting the relevant route/`/api/*`
 endpoint, plus the test suite.
 
-Deploying (Fly.io is the live target; confirm with the user before running):
-`fly deploy --ha=false` — single-instance only, because SQLite has no
-multi-writer story here.
+Deploying: the live Lightsail demo self-deploys — merging to `main` with green
+CI *is* the deploy (see Deployment below). Never deploy manually. Fly.io
+(`fly deploy --ha=false`) remains an alternate target; confirm with the user
+before running it.
 
 ## Architecture
 
@@ -178,15 +179,24 @@ Adding a brief metric means updating the brief contracts, not `glossary.py`
 
 ## Deployment
 
-Fly.io is the live target (`fly.toml`): a `stocks_data` volume mounted at
-`/data`, single machine (`fly deploy --ha=false`), scale-to-zero
-(`min_machines_running=0`). `fly.toml` sets `DB_PATH=/data/stocks.db` and
+The live demo runs on AWS Lightsail (Nginx, HTTPS, persistent SQLite) and
+self-deploys: a systemd timer on the host runs
+`deploy/lightsail/deploy.sh` every 5 minutes, building the newest `main`
+commit whose Tests workflow passed and swapping containers only once the new
+one answers `/health` (otherwise the previous container is restored). There is
+no deploy command to run from the repo — merge to `main` with green CI. After
+changing anything in `deploy/lightsail/`, reinstall it on the host (commands
+in the README's Deploy section).
+
+Fly.io remains a configured alternate target (`fly.toml`):
+`fly deploy --ha=false` — single-instance only, because SQLite has no
+multi-writer story. `fly.toml` sets `DB_PATH=/data/stocks.db` and
 `MODEL_PATH=/data/model.pkl`; `db.py`/`ml.py` read these from the
 environment, so the volume mount makes both survive redeploys. `model.pkl` is
 excluded from the Docker build context; train it once in place with
 `fly ssh console -C "python ml.py train ..."`.
 
-`render.yaml` exists as an alternative target but has no persistent disk —
+`render.yaml` exists as a further alternative but has no persistent disk —
 SQLite and `model.pkl` are ephemeral there. API keys are optional everywhere
 and can be set via environment, `.env`, or the `/settings` page (which
 requires `SETTINGS_PASSWORD`, HTTP Basic). See `.env.example` for the full
