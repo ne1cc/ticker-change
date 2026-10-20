@@ -1,0 +1,99 @@
+.options-greeks-card { width:100%; max-width:960px; margin-inline:auto; }
+.options-greeks-card #greeks-chart { width:100%; max-width:900px; height:400px !important; margin-inline:auto; }
+.options-payoff-card { width:100%; max-width:1280px; margin-inline:auto; }
+.payoff-shell {
+  --payoff-ink:#0f172a; --payoff-muted:#64748b; --payoff-rule:#cbd5e1;
+  --payoff-surface:#fff; --payoff-header:#e8edf3; --payoff-soft:#f5f7fa;
+  color:var(--payoff-ink); min-width:0; font-size:12px;
+}
+html.dark .payoff-shell { --payoff-ink:#e2e8f0; --payoff-muted:#94a3b8; --payoff-rule:#334155; --payoff-surface:#18181b; --payoff-header:#263244; --payoff-soft:#20262f; }
+.payoff-heading { margin-bottom:10px; }
+.payoff-market { display:flex; align-items:baseline; flex-wrap:wrap; gap:8px 16px; }
+.payoff-market-price { font-size:17px; font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+.payoff-expiration { color:var(--payoff-muted); font-size:12px; }
+.payoff-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.payoff-input,.payoff-button { border:1px solid var(--payoff-rule); border-radius:4px; background:var(--payoff-surface); color:inherit; font:inherit; }
+.payoff-input { padding:5px 8px; max-width:100%; min-width:0; }
+.payoff-preset { min-width:180px; }
+.payoff-button { min-height:30px; padding:5px 10px; cursor:pointer; font-weight:600; white-space:nowrap; }
+.payoff-button:hover { background:var(--payoff-soft); }
+.payoff-input:focus-visible,.payoff-button:focus-visible,.payoff-leg-chip:focus-visible,.payoff-grid-wrap:focus-visible { outline:2px solid #d97706; outline-offset:2px; }
+.payoff-positions-toggle[aria-expanded="true"] { background:var(--payoff-header); }
+.payoff-leg-chips { display:flex; flex-wrap:wrap; gap:6px; margin:9px 0; }
+.payoff-leg-chip { border:1px solid var(--payoff-rule); border-left:3px solid #07834f; border-radius:3px; padding:4px 8px; font:inherit; font-size:11px; background:var(--payoff-soft); color:inherit; cursor:pointer; }
+.payoff-leg-chip-short { border-left-color:#c52649; }
+.payoff-chip-selected { box-shadow:inset 0 0 0 1px var(--payoff-rule); }
+.payoff-leg-editor { overflow:auto; margin:8px 0 12px; border:1px solid var(--payoff-rule); border-radius:4px; }
+.payoff-leg-editor[hidden] { display:none; }
+.payoff-legs-table { width:100%; min-width:740px; border-collapse:collapse; table-layout:fixed; font-size:11px; }
+.payoff-legs-table th,.payoff-legs-table td { padding:6px; text-align:left; border-bottom:1px solid var(--payoff-rule); }
+.payoff-legs-table th { background:var(--payoff-soft); color:var(--payoff-muted); font-weight:600; }
+.payoff-legs-table th:last-child,.payoff-legs-table td:last-child { width:150px; white-space:nowrap; }
+.payoff-legs-table .payoff-input { width:100%; padding:4px 6px; }
+.payoff-legs-table .payoff-button { padding:4px 7px; font-size:10px; }
+.payoff-leg-selected { background:var(--payoff-soft); }
+.payoff-source { display:block; font-size:10px; color:var(--payoff-muted); margin-top:3px; }
+.payoff-summary { display:grid; grid-template-columns:1fr 1fr 1fr 1.5fr; border-block:1px solid var(--payoff-rule); margin:12px 0; }
+.payoff-stat { min-width:0; padding:10px 12px; border-right:1px solid var(--payoff-rule); }
+.payoff-stat:first-child { padding-left:0; }
+.payoff-stat:last-child { border-right:0; }
+.payoff-stat-label { display:block; font-size:10px; font-weight:600; color:var(--payoff-muted); margin-bottom:3px; text-transform:uppercase; letter-spacing:.04em; }
+.payoff-stat-value { display:block; font-family:ui-monospace,monospace; font-size:15px; line-height:1.4; overflow-wrap:anywhere; }
+.payoff-profit { color:#087b48; }.payoff-loss { color:#bd2143; }
+html.dark .payoff-profit { color:#4ade80; } html.dark .payoff-loss { color:#fb7185; }
+.payoff-grid-wrap { max-width:100%; max-height:640px; overflow:auto; border:1px solid var(--payoff-rule); border-radius:3px; overscroll-behavior-x:contain; }
+.payoff-grid-table { width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; font:11px/1.2 ui-monospace,SFMono-Regular,monospace; font-variant-numeric:tabular-nums; }
+.payoff-grid-table th,.payoff-grid-table td { padding:3px 6px; height:24px; text-align:center; white-space:nowrap; }
+.payoff-grid-table thead th { position:sticky; z-index:2; background:var(--payoff-header); color:var(--payoff-ink); font:600 11px/1.1 system-ui,sans-serif; box-shadow:inset 0 -1px 0 var(--payoff-rule); }
+.payoff-grid-table thead tr:first-child th { top:0; height:24px; }
+.payoff-grid-table thead tr:nth-child(2) th { top:24px; height:30px; }
+.payoff-grid-table .payoff-month-header { text-align:center; border-right:1px solid var(--payoff-rule); }
+.payoff-grid-table .payoff-price-sticky { position:sticky; left:0; width:128px; z-index:1; background:var(--payoff-soft); color:var(--payoff-ink); text-align:left; border-right:1px solid var(--payoff-rule); }
+.payoff-grid-table thead .payoff-grid-corner { z-index:4; background:var(--payoff-header); }
+.payoff-date-header span { display:inline-block; }.payoff-date-header small { margin-left:4px; font-size:9px; font-weight:400; color:var(--payoff-muted); }
+.payoff-price-value { display:inline-block; font-size:11px; }
+.payoff-price-move { float:right; color:var(--payoff-muted); font-size:9px; font-weight:400; line-height:14px; }
+.payoff-spot-row > * { box-shadow:inset 0 1px 0 #d97706,inset 0 -1px 0 #d97706; }
+.payoff-grid-table .payoff-spot-row > th { background:#fff4db; }
+html.dark .payoff-grid-table .payoff-spot-row > th { background:#3d2d14; }
+.payoff-cell { font-weight:500; background:var(--payoff-surface); color:var(--payoff-ink); border-right:1px solid rgb(255 255 255 / .12); }
+.payoff-positive { --pnl-1:#b9e8cf; --pnl-2:#88d5ab; --pnl-3:#4ab97f; --pnl-4:#168850; --pnl-5:#08683e; }
+.payoff-negative { --pnl-1:#f9c5cf; --pnl-2:#f397aa; --pnl-3:#e35a79; --pnl-4:#bd284d; --pnl-5:#941b3b; }
+.payoff-level-1 { background:var(--pnl-1); color:#10201a; }.payoff-level-2 { background:var(--pnl-2); color:#10201a; }.payoff-level-3 { background:var(--pnl-3); color:#10201a; }
+.payoff-level-4 { background:var(--pnl-4); color:#fff; }.payoff-level-5 { background:var(--pnl-5); color:#fff; }
+html.dark .payoff-positive { --pnl-1:#123c2e; --pnl-2:#14533b; --pnl-3:#146644; --pnl-4:#147d4f; --pnl-5:#12834d; }
+html.dark .payoff-negative { --pnl-1:#491d2b; --pnl-2:#6b2037; --pnl-3:#852543; --pnl-4:#a12549; --pnl-5:#b7234c; }
+html.dark .payoff-cell { color:#f8fafc; }
+.payoff-cell:hover,.payoff-cell:focus-visible { outline:2px solid var(--payoff-ink); outline-offset:-2px; }
+.payoff-grid-single-date { max-width:360px; }
+.payoff-expiry-note { margin:8px 0; padding:8px 10px; border-left:3px solid #d97706; color:var(--payoff-muted); background:var(--payoff-soft); font-size:12px; }
+.payoff-legend { display:flex; flex-wrap:wrap; align-items:center; gap:0; font-size:10px; color:var(--payoff-muted); margin:6px 0 10px; }
+.payoff-legend-loss,.payoff-legend-zero,.payoff-legend-profit { padding:3px 10px; color:#fff; background:#bd284d; }
+.payoff-legend-zero { background:var(--payoff-header); color:var(--payoff-ink); }.payoff-legend-profit { background:#168850; }
+.payoff-legend-metric { margin-left:10px; }
+.payoff-settings { display:flex; flex-wrap:wrap; align-items:center; gap:12px 24px; margin:10px 0; }
+.payoff-control { flex:1 1 200px; max-width:430px; }
+.payoff-control-label { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+.payoff-label { display:block; font-size:11px; font-weight:600; color:var(--payoff-muted); }
+.payoff-slider-value { font-size:11px; font-variant-numeric:tabular-nums; }
+.payoff-range { display:block; width:100%; height:22px; accent-color:#07834f; cursor:pointer; }
+.payoff-view-controls { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+.payoff-segmented { display:flex; border:1px solid var(--payoff-rule); border-radius:4px; overflow:hidden; }
+.payoff-segmented .payoff-button { border:0; border-radius:0; border-right:1px solid var(--payoff-rule); min-height:30px; }
+.payoff-segmented .payoff-button:last-child { border-right:0; }
+.payoff-segmented .payoff-button[aria-pressed="true"] { background:#087b48; color:#fff; }
+.payoff-assumptions { font-size:10px; color:var(--payoff-muted); margin-top:10px; }.payoff-assumptions summary { cursor:pointer; }.payoff-assumptions p { margin-top:5px; max-width:85ch; }
+.payoff-status,.payoff-empty { padding:8px 0; font-size:12px; color:var(--payoff-muted); }.payoff-error { color:#c52649; font-size:12px; margin:6px 0; }
+.payoff-references { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:10px; margin:8px 0; }.payoff-references:empty { display:none; }
+.payoff-chart { height:400px !important; }
+@media (max-width:639px) {
+  .options-greeks-card #greeks-chart { height:340px !important; }
+  .options-payoff-card { padding:12px; }
+  .payoff-summary { grid-template-columns:1fr 1fr; }
+  .payoff-stat:nth-child(2) { border-right:0; }.payoff-stat:nth-child(n+3) { border-top:1px solid var(--payoff-rule); }.payoff-stat:nth-child(3) { padding-left:0; }
+  .payoff-stat-value { font-size:13px; }.payoff-control { max-width:none; }
+  .payoff-segmented .payoff-button { padding:5px 8px; font-size:10px; }.payoff-metrics { max-width:100%; overflow-x:auto; }
+  .payoff-chart { height:340px !important; }
+  .payoff-grid-table .payoff-price-sticky { width:112px; }
+  .payoff-grid-table .payoff-month-header { text-align:left; }
+}

@@ -263,6 +263,11 @@ class TestOptionsTerminalFlaskRoutes:
             assert 'Options Terminal' in html
             assert 'Dealer Convention' in html
             assert 'AAPL' in html
+            assert '/static/options-payoff.css' in html
+            assert '/static/options-payoff.js' in html
+            assert '/static/options-payoff-simulator.js' in html
+            assert 'payoff-simulator-content' in html
+            assert 'payoff-position' not in html
 
     def test_options_terminal_full_width_layout(self, client):
         """Verify options terminal expands full-width without max-w-7xl constraint,
@@ -297,7 +302,8 @@ class TestOptionsTerminalFlaskRoutes:
         template = (root / 'templates/options.html').read_text()
         assert 'Plotly' not in template
         assert "TerminalCharts.mount('greeks-chart'" in template
-        assert "TerminalCharts.mount('payoff-chart'" in template
+        assert "charts.mount('payoff-chart'" in (root / 'static/options-payoff-simulator.js').read_text()
+        assert "id=\"payoff-simulator-content\"" in template
         assert "['Reset'" in (root / 'static/charts.js').read_text()
 
     def test_get_full_option_chain_df_handles_nan_values(self):
