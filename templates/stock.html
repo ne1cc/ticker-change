@@ -32,6 +32,9 @@
         <div>
             <p class="text-xs font-semibold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 mb-1">Current Price</p>
             <h2 class="font-mono text-xl sm:text-2xl font-semibold text-zinc-900 dark:text-zinc-50 break-words">{{ data.ticker }} <span class="text-amber-600 dark:text-amber-400">${{ "%.2f"|format(data.current_price) }}</span></h2>
+            {% if data.fundamentals and data.fundamentals.get('Name') %}
+            <p class="text-sm sm:text-base font-medium text-zinc-600 dark:text-zinc-400 mt-1 break-words">{{ data.fundamentals['Name'] }}</p>
+            {% endif %}
         </div>
         <div class="flex flex-col items-stretch sm:items-end gap-2">
             <a href="https://finviz.com/quote.ashx?t={{ data.ticker }}" target="_blank" rel="noopener noreferrer"
