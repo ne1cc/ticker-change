@@ -483,6 +483,77 @@
           <div id="payoff-simulator-content"></div>
         </section>
       </div>
+
+      <!-- Delayed Options Flow -->
+      {% if flow %}
+      <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden shadow-sm">
+        <div class="px-4 sm:px-6 py-3 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50">
+          <h2 class="text-sm font-bold text-zinc-900 dark:text-zinc-50">Options Flow <span class="font-normal text-zinc-500">· delayed, direction unknown</span></h2>
+        </div>
+        <div class="p-4 sm:p-6 space-y-6">
+          <div>
+            <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2">Unusual activity — volume above open interest, by premium</h3>
+            {% if flow.unusual %}
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs font-mono">
+                <thead><tr class="text-left text-zinc-400">
+                  <th scope="col" class="py-1 pr-4">Contract</th><th scope="col" class="py-1 pr-4 text-right">Last</th>
+                  <th scope="col" class="py-1 pr-4 text-right">Volume</th><th scope="col" class="py-1 pr-4 text-right">OI</th>
+                  <th scope="col" class="py-1 pr-4 text-right">Vol/OI</th><th scope="col" class="py-1 text-right">Premium</th>
+                </tr></thead>
+                <tbody class="text-zinc-800 dark:text-zinc-200">
+                {% for u in flow.unusual %}
+                  <tr class="border-t border-zinc-100 dark:border-zinc-800">
+                    <td class="py-1 pr-4">{{ u.expiration }} <span class="{{ 'text-emerald-500' if u.cp == 'C' else 'text-rose-500' }}">{{ u.strike|round(2) }}{{ u.cp }}</span></td>
+                    <td class="py-1 pr-4 text-right">{{ '%.2f'|format(u.last) }}</td>
+                    <td class="py-1 pr-4 text-right">{{ '{:,}'.format(u.volume) }}</td>
+                    <td class="py-1 pr-4 text-right">{{ '{:,}'.format(u.open_interest) }}</td>
+                    <td class="py-1 pr-4 text-right">{{ u.vol_oi if u.vol_oi is not none else 'new' }}</td>
+                    <td class="py-1 text-right">${{ '{:,.0f}'.format(u.premium) }}</td>
+                  </tr>
+                {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% else %}
+            <p class="text-xs text-zinc-500">No contracts with volume above open interest and meaningful premium right now.</p>
+            {% endif %}
+          </div>
+          <div>
+            <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2">Largest recent prints on those contracts — Alpaca indicative feed, 15 min delay</h3>
+            {% if flow.prints %}
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs font-mono">
+                <thead><tr class="text-left text-zinc-400">
+                  <th scope="col" class="py-1 pr-4">Time (UTC)</th><th scope="col" class="py-1 pr-4">Contract</th>
+                  <th scope="col" class="py-1 pr-4 text-right">Price</th><th scope="col" class="py-1 pr-4 text-right">Size</th>
+                  <th scope="col" class="py-1 text-right">Premium</th>
+                </tr></thead>
+                <tbody class="text-zinc-800 dark:text-zinc-200">
+                {% for p in flow.prints %}
+                  <tr class="border-t border-zinc-100 dark:border-zinc-800">
+                    <td class="py-1 pr-4">{{ (p.time or '')[:19]|replace('T', ' ') }}</td>
+                    <td class="py-1 pr-4">{{ p.symbol }}</td>
+                    <td class="py-1 pr-4 text-right">{{ '%.2f'|format(p.price) }}</td>
+                    <td class="py-1 pr-4 text-right">{{ '{:,}'.format(p.size) }}</td>
+                    <td class="py-1 text-right">${{ '{:,.0f}'.format(p.premium) }}</td>
+                  </tr>
+                {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% elif not flow.alpaca_configured %}
+            <p class="text-xs text-zinc-500">Add a free Alpaca key on <a href="/settings" class="text-amber-500 hover:underline">/settings</a> to see trade prints.</p>
+            {% elif not flow.prints_ok %}
+            <p class="text-xs text-zinc-500">Alpaca trades are unavailable right now (bad key, rate limit, or outage).</p>
+            {% else %}
+            <p class="text-xs text-zinc-500">No prints returned for these contracts in the last 5 days.</p>
+            {% endif %}
+          </div>
+          <p class="text-[11px] text-zinc-500">Free feeds carry no real bid/ask at trade time, so buy vs. sell is not shown. Unusual activity uses the cached chain's day volume.</p>
+        </div>
+      </div>
+      {% endif %}
     </div>
 
     <!-- Tab 1: Dealer GEX & Greeks Profile -->
@@ -886,76 +957,6 @@
     </div>
   </div>
 
-  <!-- Delayed Options Flow -->
-  {% if flow %}
-  <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden shadow-sm">
-    <div class="px-4 sm:px-6 py-3 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50">
-      <h2 class="text-sm font-bold text-zinc-900 dark:text-zinc-50">Options Flow <span class="font-normal text-zinc-500">· delayed, direction unknown</span></h2>
-    </div>
-    <div class="p-4 sm:p-6 space-y-6">
-      <div>
-        <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2">Unusual activity — volume above open interest, by premium</h3>
-        {% if flow.unusual %}
-        <div class="overflow-x-auto">
-          <table class="w-full text-xs font-mono">
-            <thead><tr class="text-left text-zinc-400">
-              <th scope="col" class="py-1 pr-4">Contract</th><th scope="col" class="py-1 pr-4 text-right">Last</th>
-              <th scope="col" class="py-1 pr-4 text-right">Volume</th><th scope="col" class="py-1 pr-4 text-right">OI</th>
-              <th scope="col" class="py-1 pr-4 text-right">Vol/OI</th><th scope="col" class="py-1 text-right">Premium</th>
-            </tr></thead>
-            <tbody class="text-zinc-800 dark:text-zinc-200">
-            {% for u in flow.unusual %}
-              <tr class="border-t border-zinc-100 dark:border-zinc-800">
-                <td class="py-1 pr-4">{{ u.expiration }} <span class="{{ 'text-emerald-500' if u.cp == 'C' else 'text-rose-500' }}">{{ u.strike|round(2) }}{{ u.cp }}</span></td>
-                <td class="py-1 pr-4 text-right">{{ '%.2f'|format(u.last) }}</td>
-                <td class="py-1 pr-4 text-right">{{ '{:,}'.format(u.volume) }}</td>
-                <td class="py-1 pr-4 text-right">{{ '{:,}'.format(u.open_interest) }}</td>
-                <td class="py-1 pr-4 text-right">{{ u.vol_oi if u.vol_oi is not none else 'new' }}</td>
-                <td class="py-1 text-right">${{ '{:,.0f}'.format(u.premium) }}</td>
-              </tr>
-            {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        {% else %}
-        <p class="text-xs text-zinc-500">No contracts with volume above open interest and meaningful premium right now.</p>
-        {% endif %}
-      </div>
-      <div>
-        <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2">Largest recent prints on those contracts — Alpaca indicative feed, 15 min delay</h3>
-        {% if flow.prints %}
-        <div class="overflow-x-auto">
-          <table class="w-full text-xs font-mono">
-            <thead><tr class="text-left text-zinc-400">
-              <th scope="col" class="py-1 pr-4">Time (UTC)</th><th scope="col" class="py-1 pr-4">Contract</th>
-              <th scope="col" class="py-1 pr-4 text-right">Price</th><th scope="col" class="py-1 pr-4 text-right">Size</th>
-              <th scope="col" class="py-1 text-right">Premium</th>
-            </tr></thead>
-            <tbody class="text-zinc-800 dark:text-zinc-200">
-            {% for p in flow.prints %}
-              <tr class="border-t border-zinc-100 dark:border-zinc-800">
-                <td class="py-1 pr-4">{{ (p.time or '')[:19]|replace('T', ' ') }}</td>
-                <td class="py-1 pr-4">{{ p.symbol }}</td>
-                <td class="py-1 pr-4 text-right">{{ '%.2f'|format(p.price) }}</td>
-                <td class="py-1 pr-4 text-right">{{ '{:,}'.format(p.size) }}</td>
-                <td class="py-1 text-right">${{ '{:,.0f}'.format(p.premium) }}</td>
-              </tr>
-            {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        {% elif not flow.alpaca_configured %}
-        <p class="text-xs text-zinc-500">Add a free Alpaca key on <a href="/settings" class="text-amber-500 hover:underline">/settings</a> to see trade prints.</p>
-        {% elif not flow.prints_ok %}
-        <p class="text-xs text-zinc-500">Alpaca trades are unavailable right now (bad key, rate limit, or outage).</p>
-        {% else %}
-        <p class="text-xs text-zinc-500">No prints returned for these contracts in the last 5 days.</p>
-        {% endif %}
-      </div>
-      <p class="text-[11px] text-zinc-500">Free feeds carry no real bid/ask at trade time, so buy vs. sell is not shown. Unusual activity uses the cached chain's day volume.</p>
-    </div>
-  </div>
-  {% endif %}
 </div>
 
 <!-- Methodology & Assumptions Modal -->
