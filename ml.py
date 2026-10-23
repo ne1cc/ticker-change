@@ -12,9 +12,10 @@ Design (see README → "ML signal"):
   * Model is a gradient-boosted tree (LightGBM if installed, else sklearn's
     HistGradientBoosting). It outputs class *probabilities*, surfaced to the user
     as a confidence-weighted signal — never a hard "BUY".
-  * Validation is **walk-forward with an embargo** (train on the past, test on
-    the next block, gap = HORIZON to remove label overlap) and is scored against
-    buy-and-hold after a cost assumption. Plain shuffled CV would leak.
+   * Validation is **purged k-fold with embargo** (test blocks purged of any
+     training row whose HORIZON-day label window overlaps the block, plus an
+     embargo gap) for the OOS estimates, plus walk-forward with a HORIZON gap
+     for chronological reporting. Plain shuffled CV would leak.
 
 This is a directional, educational signal on delayed end-of-day data — not advice.
 
@@ -274,6 +275,69 @@ def _importances(model, X: pd.DataFrame, y: pd.Series) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Purged k-fold with embargo (López de Prado, Advances in Financial ML, ch. 7) #
+# --------------------------------------------------------------------------- #
+def purged_kfold(dates: pd.Series, n_splits: int = 5, embargo: int | None = None) -> list:
+    """(train_idx, test_idx) splits over contiguous date blocks, purged + embargoed.
+
+    Triple-barrier labels overlap their HORIZON-day window, so a training row
+    whose label window touches the test block leaks the test label into fit.
+    Each split therefore (a) purges training rows within HORIZON day-positions
+    of the test block on either side (their label windows overlap) and
+    (b) embargoes `embargo` further positions after the block (default
+    HORIZON, derived from the label horizon) against serial-correlation leak.
+    """
+    embargo = HORIZON if embargo is None else embargo
+    unique_dates = pd.Series(sorted(dates.unique()))
+    pos = dates.map({d: i for i, d in enumerate(unique_dates)}).to_numpy()
+    n_days = len(unique_dates)
+    edges = np.linspace(0, n_days, n_splits + 1).astype(int)
+    splits = []
+    for k in range(n_splits):
+        lo, hi = edges[k], edges[k + 1]
+        test_idx = np.where((pos >= lo) & (pos < hi))[0]
+        train_idx = np.where((pos < lo - HORIZON) | (pos > hi - 1 + HORIZON + embargo))[0]
+        splits.append((train_idx, test_idx))
+    return splits
+
+
+def purged_oof(X: pd.DataFrame, y: pd.Series, dates: pd.Series, returns: pd.Series,
+               n_splits: int = 5) -> dict | None:
+    """Out-of-fold predictions from purged k-fold with embargo.
+
+    Returns {y, pred, proba, ret} with proba columns ordered [-1, 0, 1]; folds
+    are chronological, so consecutive rows are temporally comparable. Skips
+    folds that are too small or single-class. None when no fold is usable.
+    """
+    classes = [-1, 0, 1]
+    proba = np.full((len(X), len(classes)), np.nan)
+    pred = np.full(len(X), np.nan)
+    for train_idx, test_idx in purged_kfold(dates, n_splits=n_splits):
+        if len(test_idx) == 0 or len(train_idx) < 50:
+            continue
+        ytr = y.iloc[train_idx]
+        if ytr.nunique() < 2:
+            continue
+        m = _new_model()
+        if m is None:
+            return None
+        try:
+            m.fit(X.iloc[train_idx], ytr, sample_weight=_sample_weights(ytr))
+        except TypeError:
+            m.fit(X.iloc[train_idx], ytr)
+        cols = {int(c): j for j, c in enumerate(m.classes_)}
+        for c, j in cols.items():
+            if c in classes:
+                proba[test_idx, classes.index(c)] = m.predict_proba(X.iloc[test_idx])[:, j]
+        pred[test_idx] = m.predict(X.iloc[test_idx])
+    ok = ~np.isnan(pred)
+    if not ok.any():
+        return None
+    return {"y": y.to_numpy()[ok], "pred": pred[ok], "proba": proba[ok],
+            "ret": returns.to_numpy()[ok]}
+
+
+# --------------------------------------------------------------------------- #
 # Walk-forward validation                                                      #
 # --------------------------------------------------------------------------- #
 def walk_forward(X: pd.DataFrame, y: pd.Series, dates: pd.Series, returns: pd.Series, n_folds: int = 5) -> None:
@@ -339,6 +403,14 @@ def train(tickers: list[str]) -> None:
     print(f"Total samples: {len(X)}  class balance: {dict(y.value_counts())}")
     
     walk_forward(X, y, dates, returns)
+
+    # Purged k-fold with embargo: the leakage-controlled OOS estimate (walk-forward
+    # above stays for chronological reporting). Also the source for the model card.
+    oof = purged_oof(X, y, dates, returns)
+    if oof:
+        acc = float((oof["pred"] == oof["y"]).mean())
+        edge = float(np.where(oof["pred"] == 1, oof["ret"] - COST_BPS / 1e4, 0.0).mean())
+        print(f"Purged k-fold (embargo={HORIZON}): oos acc={acc:.3f}  mean buy-edge={edge:+.4f}")
 
     model = _new_model()
     if model is None:
