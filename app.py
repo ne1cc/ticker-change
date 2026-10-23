@@ -1704,7 +1704,9 @@ def get_ml_reliability_chart() -> str | None:
 def _attach_car_to_8k_events(events, stock_df, benchmark_df, ticker):
     """Market-model CAR per 8-K filing dict; routine-only filings
     (event_type None) never trigger an event study and carry car_result
-    None (the table still lists them)."""
+    None (the table still lists them). Windows are per type, with a
+    separate drift leg, and after-close filings shift the event day to
+    the next session."""
     out = []
     for event in events:
         if event.event_type is None:
@@ -1712,9 +1714,12 @@ def _attach_car_to_8k_events(events, stock_df, benchmark_df, ticker):
             event_dict['car_result'] = None
             out.append(event_dict)
             continue
+        ev_win, drift_win = event_study.windows_for(event.event_type)
         car_result = event_study.run_event_study(
             stock_df, benchmark_df, event.filing_date,
             event_type=event.event_type, ticker=ticker,
+            event_window=ev_win, drift_window=drift_win,
+            after_close=event.after_close,
         )
         event_dict = event.__dict__.copy()
         event_dict['car_result'] = car_result.__dict__ if car_result else None

@@ -210,12 +210,14 @@ def compute_earnings_events(stock_df, benchmark_df, events, ticker="UNKNOWN",
     plus session-based reaction/drift metrics (event_metrics; completed windows
     only). Upcoming prints are skipped."""
     out: list[dict] = []
+    ev_win, drift_win = event_study.windows_for("earnings")
     for ev in events or []:
         if ev.get("is_upcoming"):
             continue
         res = event_study.run_event_study(
             stock_df, benchmark_df, ev["date"],
             event_type="EARNINGS", ticker=ticker,
+            event_window=ev_win, drift_window=drift_win,
         )
         metrics = event_metrics(stock_df, ev["date"])
         row = dict(ev)
@@ -233,6 +235,7 @@ def compute_earnings_events(stock_df, benchmark_df, events, ticker="UNKNOWN",
             "car_t_stat": res.car_t_stat if res else None,
             "car_p_value": res.car_p_value if res else None,
             "is_significant_95": bool(res.is_significant_95) if res else False,
+            "drift_car": res.drift_car if res else None,
         })
         out.append(row)
         if len(out) >= max_events:
