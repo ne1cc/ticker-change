@@ -48,13 +48,13 @@
           <span class="text-[10px] font-mono text-zinc-400">High-Low Estimator</span>
         </div>
         <div class="mt-2 flex items-baseline gap-2">
-          <span class="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-50">{{ "%.3f"|format(micro.corwin_schultz_spread_pct * 100) }}%</span>
+          <span class="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-50">{{ "%.3f"|format(micro.corwin_schultz_spread_pct) }}%</span>
         </div>
       </div>
       <div class="mt-3 pt-2 border-t border-zinc-200/60 dark:border-zinc-800/60">
         <div class="flex justify-between text-xs font-mono">
           <span class="text-zinc-400">Roll Spread:</span>
-          <span class="font-semibold text-zinc-700 dark:text-zinc-300">{{ "%.3f"|format(micro.roll_effective_spread_pct * 100) }}%</span>
+          <span class="font-semibold text-zinc-700 dark:text-zinc-300">{{ "%.3f"|format(micro.roll_effective_spread_pct) }}%</span>
         </div>
         <p class="text-[10px] text-zinc-400 mt-1">Effective bid-ask spread derived from 2-day price extremes.</p>
       </div>
@@ -127,12 +127,17 @@
       <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
         <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">Macro Regime State</div>
         <div class="flex items-center gap-2 flex-wrap mb-3">
+          {% if macro.regime %}
           <span class="px-3 py-1 text-xs font-bold font-mono rounded-lg
             {% if 'INVERTED' in macro.regime or 'TIGHTENING' in macro.regime %}bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30
             {% elif 'EASING' in macro.regime or 'STEEP' in macro.regime %}bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30
             {% else %}bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700{% endif %}">
             {{ macro.regime | replace('_', ' ') }}
           </span>
+          {% else %}
+          <span class="px-3 py-1 text-xs font-mono rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-500 border border-zinc-200 dark:border-zinc-700"
+                title="Set FRED_API_KEY (or add it in /settings) for the macro regime">FRED unavailable</span>
+          {% endif %}
           {% if macro.is_inverted %}
           <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30">
             Yield Curve Inverted (2s10s)
@@ -143,17 +148,19 @@
         <div class="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-200/60 dark:border-zinc-800/60 font-mono text-xs">
           <div>
             <span class="text-[10px] text-zinc-400 uppercase block font-sans">Fed Funds Rate</span>
-            <span class="font-bold text-zinc-900 dark:text-zinc-100">{{ "%.2f"|format(macro.fed_funds_rate) }}%</span>
+            <span class="font-bold text-zinc-900 dark:text-zinc-100">{% if macro.fed_funds_rate is not none %}{{ "%.2f"|format(macro.fed_funds_rate) }}%{% else %}—{% endif %}</span>
           </div>
           <div>
             <span class="text-[10px] text-zinc-400 uppercase block font-sans">2s10s Spread</span>
+            {% if macro.yield_curve_2s10s is not none %}
             <span class="font-bold {% if macro.yield_curve_2s10s < 0 %}text-rose-500{% else %}text-emerald-500{% endif %}">
               {{ "%+.2f"|format(macro.yield_curve_2s10s) }}%
             </span>
+            {% else %}<span class="font-bold text-zinc-400">—</span>{% endif %}
           </div>
           <div>
             <span class="text-[10px] text-zinc-400 uppercase block font-sans">CPI YoY</span>
-            <span class="font-bold text-zinc-900 dark:text-zinc-100">{{ "%.1f"|format(macro.cpi_yoy) }}%</span>
+            <span class="font-bold text-zinc-900 dark:text-zinc-100">{% if macro.cpi_yoy is not none %}{{ "%.1f"|format(macro.cpi_yoy) }}%{% else %}—{% endif %}</span>
           </div>
         </div>
       </div>

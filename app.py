@@ -1555,6 +1555,20 @@ def compute_analytics(ticker):
         return None
 
 
+def _monthly_seasonality(close: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """(avg monthly return %, observation count) per calendar month 1-12.
+
+    Compounds closes into true month-over-month returns; the in-progress final
+    month is dropped (a partial month would bias its calendar slot).
+    """
+    month_end = close.resample('ME').last()
+    if close.index[-1] != close.index[-1] + pd.offsets.BMonthEnd(0):
+        month_end = month_end.iloc[:-1]
+    monthly = month_end.pct_change().dropna()
+    by_month = monthly.groupby(monthly.index.month)
+    return by_month.mean() * 100, by_month.size()
+
+
 def _compute_analytics_impl(ticker: str) -> dict | None:
     """Compute all analytics metrics from cached DB prices."""
     df = get_or_fetch_prices(ticker)
@@ -1597,13 +1611,12 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
     ) * np.sqrt(252)
     sharpe_chart = charts.render_chart(charts.cartesian([charts.line('Sharpe', df.index, df['rolling_sharpe'], '#10b981')], yname='Sharpe Ratio', refs=[charts.reference('y', 1, 'Sharpe = 1')]), height=300)
 
-    # --- Seasonality: average monthly return ---
-    df['month'] = df.index.month
-    monthly_avg = df.groupby('month')['returns'].mean() * 100
+    # --- Seasonality: average compounded return by calendar month ---
+    monthly_avg, season_obs = _monthly_seasonality(df['close'])
     month_labels = ['Jan','Feb','Mar','Apr','May','Jun',
                     'Jul','Aug','Sep','Oct','Nov','Dec']
     colors = ['#10b981' if v >= 0 else '#ef4444' for v in monthly_avg.values]
-    season_chart = charts.render_chart(charts.cartesian([{'name': 'Avg Monthly Return', 'type': 'bar', 'data': [{'value': v, 'itemStyle': {'color': c}} for v, c in zip(monthly_avg.values, colors)]}], xtype='category', categories=[month_labels[m - 1] for m in monthly_avg.index], yname='Avg Return (%)'), height=300)
+    season_chart = charts.render_chart(charts.cartesian([{'name': 'Avg Monthly Return', 'type': 'bar', 'data': [{'value': v, 'itemStyle': {'color': c}} for v, c in zip(monthly_avg.values, colors)]}], xtype='category', categories=[month_labels[m - 1] for m in monthly_avg.index], yname='Avg Monthly Return (%)'), height=300)
 
     # --- Beta vs SPY ---
     spy_df = get_or_fetch_prices('SPY')
@@ -1692,6 +1705,7 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
             'var_99': latest_var_99,
             'poc_price': poc_price,
         },
+        'seasonality_obs': [int(season_obs.min()), int(season_obs.max())] if len(season_obs) else None,
         'charts': {
             'distribution': dist_chart,
             'volatility': vol_chart,

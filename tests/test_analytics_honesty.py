@@ -111,3 +111,65 @@ def test_analytics_page_wires_gex_and_real_contract():
         html = app_module.app.test_client().get("/analytics?ticker=TEST").get_data(as_text=True)
     assert seen["is_negative_gex"] is True
     assert "Priced on the real contract" in html and "100.00 call" in html
+
+
+# --- FRED unavailable -> None, never a stale 2024 number ---------------------
+def test_macro_report_has_no_invented_values_without_fred():
+    import macro_engine
+    px = _prices()
+    with patch.object(macro_engine, "fetch_fred_series", return_value=[]):
+        rep = macro_engine.get_macro_financial_report(px, px)
+    assert rep.fed_funds_rate is None and rep.yield_curve_2s10s_spread is None
+    assert rep.cpi_inflation_yoy is None and rep.is_yield_curve_inverted is None
+    assert rep.current_regime is None
+
+
+def test_macro_report_uses_fred_when_present():
+    import macro_engine
+    px = _prices()
+    obs = {"DFF": [{"value": "4.0"}], "T10Y2Y": [{"value": "-0.2"}],
+           "CPIAUCSL": [{"value": str(100 + i)} for i in range(13)][::-1]}
+    with patch.object(macro_engine, "fetch_fred_series", side_effect=lambda sid, limit=0: obs[sid]):
+        rep = macro_engine.get_macro_financial_report(px, px)
+    assert rep.fed_funds_rate == 4.0 and rep.is_yield_curve_inverted is True
+    assert rep.current_regime == "CURVE_INVERTED_EASING"
+    assert rep.cpi_inflation_yoy == 12.0
+
+
+# --- Seasonality is monthly, not daily ---------------------------------------
+def test_seasonality_is_compounded_monthly_return():
+    idx = pd.bdate_range("2020-01-01", "2025-07-15")
+    daily = pd.Series(0.0, index=idx)
+    jan = idx.month == 1
+    daily[jan] = 1.02 ** (1.0 / jan[idx.year == 2021].sum()) - 1  # ~+2% per January
+    close = 100 * (1 + daily).cumprod()
+    avg, counts = app_module._monthly_seasonality(close)
+    assert abs(avg[1] - 2.0) < 0.15          # was ~0.1 when daily returns were averaged
+    assert abs(avg[3]) < 1e-6
+    assert counts[1] == 5          # Jan 2020 has no prior month-end close
+    assert counts[6] == 6          # Jun 2025 is complete
+    assert counts[7] == 5          # Jul 2025 is in progress and excluded
+
+
+# --- Spreads are already in percent; the template must not x100 again --------
+def test_spread_displayed_once_not_times_100():
+    from flask import render_template
+    micro = {"corwin_schultz_spread_pct": 0.42, "roll_effective_spread_pct": 0.31,
+             "amihud_illiquidity": 0.1, "squeeze_risk_score": 10.0, "squeeze_risk_level": "LOW"}
+    data = {"ticker": "T", "current_price": 1.0, "stats": {}, "charts": {},
+            "institutional": {"microstructure": micro}}
+    with app_module.app.test_request_context("/analytics?ticker=T"):
+        html = render_template("analytics.html", data=data, ticker="T")
+    assert "0.420%" in html and "0.310%" in html and "42.000%" not in html
+
+
+def test_macro_panel_flags_fred_unavailable():
+    from flask import render_template
+    macro = {"regime": None, "fed_funds_rate": None, "yield_curve_2s10s": None, "is_inverted": None,
+             "cpi_yoy": None, "betas": {"bull_beta": 1.1, "bear_beta": 0.9}, "upside_capture": 100.0,
+             "downside_capture": 100.0}
+    data = {"ticker": "T", "current_price": 1.0, "stats": {}, "charts": {},
+            "institutional": {"macro_conditioning": macro}}
+    with app_module.app.test_request_context("/analytics?ticker=T"):
+        html = render_template("analytics.html", data=data, ticker="T")
+    assert "FRED unavailable" in html and "5.33" not in html

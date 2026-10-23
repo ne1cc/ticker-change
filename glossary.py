@@ -110,8 +110,8 @@ GLOSSARY: dict[str, dict] = {
     "seasonality": {
         "term": "Seasonality",
         "section": "Risk & Return",
-        "short": "Average return by calendar month over the full history — recurring strong/weak periods.",
-        "long": "The mean daily return grouped by calendar month across all available history. It surfaces recurring patterns (e.g. the historical weakness of September). Treat it as descriptive, not predictive — with limited years of data, monthly averages are noisy and prone to overfitting.",
+        "short": "Average monthly return for each calendar month over the available history — descriptive, not predictive.",
+        "long": "Closes are compounded into month-over-month returns (the in-progress month is excluded) and averaged by calendar month. With about five observations per month the averages are noisy and untested for significance, so treat them as descriptive, not predictive.",
     },
     "cumulative_return": {
         "term": "Cumulative Return",

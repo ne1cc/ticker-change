@@ -170,7 +170,7 @@
 
     <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
       <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Seasonality', 'seasonality') }}</h2>
-      <p class="text-xs text-zinc-400 mb-3">Average daily return by calendar month over the full history. Identifies recurring seasonal patterns and the strongest/weakest calendar periods.</p>
+      <p class="text-xs text-zinc-400 mb-3">Average compounded return by calendar month{% if data.seasonality_obs %} ({% if data.seasonality_obs[0] == data.seasonality_obs[1] %}{{ data.seasonality_obs[0] }}{% else %}{{ data.seasonality_obs[0] }}–{{ data.seasonality_obs[1] }}{% endif %} observations per month){% endif %}. Descriptive only: with this few years per month the averages are noisy and carry no significance test.</p>
       {{ data.charts.seasonality | safe }}
     </div>
   </div>

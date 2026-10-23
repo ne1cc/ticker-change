@@ -153,8 +153,8 @@ class TestAnalyticalModules(unittest.TestCase):
                 'charts': {},
                 'institutional': {
                     'microstructure': {
-                        'corwin_schultz_spread_pct': 0.0012,
-                        'roll_effective_spread_pct': 0.0009,
+                        'corwin_schultz_spread_pct': 0.12,
+                        'roll_effective_spread_pct': 0.09,
                         'squeeze_risk_score': 32.5,
                         'squeeze_risk_level': 'LOW',
                         'amihud_illiquidity': 0.000012,
