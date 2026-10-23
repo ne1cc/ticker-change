@@ -41,6 +41,7 @@ import options
 from option_chain_data import (chain_quality, valid_iv, valid_quote, finite_number,
                                 get_cboe_snapshot, cboe_chain)
 from options import compute_options_terminal, calculate_greeks
+from options.cones import compute_yang_zhang_vol
 import derivatives_alpha
 import backtest_engine
 import api_docs
@@ -975,6 +976,66 @@ def get_options_smile(ticker: str, current_price: float) -> str | None:
         return None
 
 
+def get_atm_contract(ticker: str, spot: float) -> dict | None:
+    """The real ATM contract nearest 30 days out: {expiration, dte, strike, iv}.
+
+    Contract: expiry with DTE >= 7 closest to 30; per side, the nearest-to-spot
+    strike within 5% that has a valid IV; `iv` (decimal) is the call/put mean.
+    Returns None when no chain or no valid IV exists -- callers hide, never default.
+    """
+    stock = _get_yf_ticker(ticker)
+    today = datetime.now().date()
+    dated = []
+    for exp in get_cached_expirations(ticker, stock) or []:
+        try:
+            dte = (datetime.strptime(exp, '%Y-%m-%d').date() - today).days
+        except ValueError:
+            continue
+        if dte >= 7:
+            dated.append((abs(dte - 30), exp, dte))
+    if not dated:
+        return None
+    _, exp, dte = min(dated)
+    cached = get_cached_chain(ticker, exp, stock=stock, spot_hint=spot)
+    if cached is None:
+        return None
+    rows = []
+    for side_df in cached[:2]:
+        if side_df is None or side_df.empty or 'impliedVolatility' not in side_df.columns:
+            continue
+        ok = side_df[((side_df['strike'] - spot).abs() <= spot * 0.05)
+                     & side_df['impliedVolatility'].map(valid_iv)]
+        if not ok.empty:
+            rows.append(ok.loc[(ok['strike'] - spot).abs().idxmin()])
+    if not rows:
+        return None
+    return {'expiration': exp, 'dte': dte,
+            'strike': float(min((r['strike'] for r in rows), key=lambda k: abs(k - spot))),
+            'iv': float(np.mean([r['impliedVolatility'] for r in rows]))}
+
+
+def _atm_derivatives(atm: dict | None, price_df: pd.DataFrame | None) -> dict | None:
+    """VRP and call Greeks for the real ATM contract; None when either input is missing.
+
+    Realized vol is the 21-session Yang-Zhang estimate (~30 calendar days, the
+    tenor of the contract's IV).
+    """
+    if not atm or price_df is None:
+        return None
+    rv = compute_yang_zhang_vol(price_df, 21)
+    if rv <= 0:
+        return None
+    greeks = derivatives_alpha.compute_higher_order_greeks(
+        spot=float(price_df['close'].iloc[-1]), strike=atm['strike'],
+        time_to_exp=max(atm['dte'], 1) / 365.0, volatility=atm['iv'],
+        risk_free_rate=0.045, is_call=True)
+    return {
+        'atm_contract': atm,
+        'higher_order_greeks': greeks.__dict__,
+        'vrp': derivatives_alpha.calculate_variance_risk_premium(atm['iv'], rv / 100.0),
+    }
+
+
 def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -> dict | None:
     """Build a dealer Gamma Exposure (GEX) profile from yfinance option chains.
 
@@ -1494,6 +1555,20 @@ def compute_analytics(ticker):
         return None
 
 
+def _monthly_seasonality(close: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """(avg monthly return %, observation count) per calendar month 1-12.
+
+    Compounds closes into true month-over-month returns; the in-progress final
+    month is dropped (a partial month would bias its calendar slot).
+    """
+    month_end = close.resample('ME').last()
+    if close.index[-1] != close.index[-1] + pd.offsets.BMonthEnd(0):
+        month_end = month_end.iloc[:-1]
+    monthly = month_end.pct_change().dropna()
+    by_month = monthly.groupby(monthly.index.month)
+    return by_month.mean() * 100, by_month.size()
+
+
 def _compute_analytics_impl(ticker: str) -> dict | None:
     """Compute all analytics metrics from cached DB prices."""
     df = get_or_fetch_prices(ticker)
@@ -1536,13 +1611,12 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
     ) * np.sqrt(252)
     sharpe_chart = charts.render_chart(charts.cartesian([charts.line('Sharpe', df.index, df['rolling_sharpe'], '#10b981')], yname='Sharpe Ratio', refs=[charts.reference('y', 1, 'Sharpe = 1')]), height=300)
 
-    # --- Seasonality: average monthly return ---
-    df['month'] = df.index.month
-    monthly_avg = df.groupby('month')['returns'].mean() * 100
+    # --- Seasonality: average compounded return by calendar month ---
+    monthly_avg, season_obs = _monthly_seasonality(df['close'])
     month_labels = ['Jan','Feb','Mar','Apr','May','Jun',
                     'Jul','Aug','Sep','Oct','Nov','Dec']
     colors = ['#10b981' if v >= 0 else '#ef4444' for v in monthly_avg.values]
-    season_chart = charts.render_chart(charts.cartesian([{'name': 'Avg Monthly Return', 'type': 'bar', 'data': [{'value': v, 'itemStyle': {'color': c}} for v, c in zip(monthly_avg.values, colors)]}], xtype='category', categories=[month_labels[m - 1] for m in monthly_avg.index], yname='Avg Return (%)'), height=300)
+    season_chart = charts.render_chart(charts.cartesian([{'name': 'Avg Monthly Return', 'type': 'bar', 'data': [{'value': v, 'itemStyle': {'color': c}} for v, c in zip(monthly_avg.values, colors)]}], xtype='category', categories=[month_labels[m - 1] for m in monthly_avg.index], yname='Avg Monthly Return (%)'), height=300)
 
     # --- Beta vs SPY ---
     spy_df = get_or_fetch_prices('SPY')
@@ -1615,67 +1689,6 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
     else:
         poc_price = None
 
-    # --- Forward estimates (Monte Carlo at multiple horizons) ---
-    # Projects prices at 3-month, 6-month, and 1-year horizons using GBM
-    # calibrated to the stock's own historical drift and volatility.
-    def _mc_forward_estimate(current, mu, sigma, horizon_days, n_sims=1000, seed=42):
-        """Compute forward price estimate at horizon_days using Monte Carlo GBM.
-        Returns: (median, p5, p25, p75, p95, prob_gain, prob_up20, prob_dn20)"""
-        rng = np.random.default_rng(seed)
-        shocks = rng.normal(mu, sigma, size=(n_sims, horizon_days))
-        paths = current * np.exp(np.cumsum(shocks, axis=1))
-        terminal = paths[:, -1]
-        return {
-            'median': round(float(np.median(terminal)), 2),
-            'p5': round(float(np.percentile(terminal, 5)), 2),
-            'p25': round(float(np.percentile(terminal, 25)), 2),
-            'p75': round(float(np.percentile(terminal, 75)), 2),
-            'p95': round(float(np.percentile(terminal, 95)), 2),
-            'prob_gain': round(float((terminal > current).mean() * 100), 1),
-            'prob_up20': round(float((terminal > current * 1.2).mean() * 100), 1),
-            'prob_dn20': round(float((terminal < current * 0.8).mean() * 100), 1),
-        }
-
-    forward_estimates = {}
-    mc_chart = None
-    mc_stats = {}
-    log_ret = np.log(df['close'] / df['close'].shift(1)).dropna()
-    if len(log_ret) > 30:
-        mu = float(log_ret.mean())
-        sigma = float(log_ret.std())
-
-        # Calculate estimates at multiple horizons
-        forward_estimates['3m'] = _mc_forward_estimate(current_price, mu, sigma, 63)   # ~3 months
-        forward_estimates['6m'] = _mc_forward_estimate(current_price, mu, sigma, 126)  # ~6 months
-        forward_estimates['1y'] = _mc_forward_estimate(current_price, mu, sigma, 252)  # ~1 year
-        mc_stats = forward_estimates['1y'].copy()
-
-        # Full 1-year projection chart
-        horizon = 252
-        n_sims = 1000
-        rng = np.random.default_rng(42)
-        shocks = rng.normal(mu, sigma, size=(n_sims, horizon))
-        paths = current_price * np.exp(np.cumsum(shocks, axis=1))
-        paths = np.hstack([np.full((n_sims, 1), current_price), paths])
-
-        pct = np.percentile(paths, [5, 25, 50, 75, 95], axis=0)
-        future_dates = pd.bdate_range(df.index[-1], periods=horizon + 1)
-
-        mc_series = []
-        # Stack lower bound plus interval width to preserve percentile bands.
-        for low, high, label, opacity in [(0, 4, '5–95%', .12), (1, 3, '25–75%', .28)]:
-            mc_series.append(charts.line(label + ' lower', future_dates, pct[low], '#6366f1', width=0, stack=label, silent=True))
-            mc_series.append(charts.line(label, future_dates, pct[high] - pct[low], '#6366f1', width=0, stack=label, area=f'rgba(99,102,241,{opacity})'))
-        for band in mc_series:
-            band['tooltip'] = {'show': False, 'trigger': 'none'}
-        mc_series.append(charts.line('Median', future_dates, pct[2]))
-        refs = [charts.reference('y', current_price, 'Today')]
-        for days, label in [(64, '3m'), (127, '6m')]:
-            refs.append(charts.reference('x', pd.bdate_range(df.index[-1], periods=days)[-1].strftime('%Y-%m-%d'), label, '#6366f1'))
-        mc_option = charts.cartesian(mc_series, yname='Simulated Price ($)', refs=refs)
-        mc_option['legend'] = {'data': ['5–95%', '25–75%', 'Median']}
-        mc_chart = charts.render_chart(mc_option, height=350)
-
     return {
         'ticker': ticker.upper(),
         'current_price': current_price,
@@ -1691,14 +1704,8 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
             'var_95': latest_var_95,
             'var_99': latest_var_99,
             'poc_price': poc_price,
-            'mc_median':    mc_stats.get('median'),
-            'mc_p5':        mc_stats.get('p5'),
-            'mc_p95':       mc_stats.get('p95'),
-            'mc_prob_gain': mc_stats.get('prob_gain'),
-            'mc_prob_up20': mc_stats.get('prob_up20'),
-            'mc_prob_dn20': mc_stats.get('prob_dn20'),
         },
-        'forward_estimates': forward_estimates,
+        'seasonality_obs': [int(season_obs.min()), int(season_obs.max())] if len(season_obs) else None,
         'charts': {
             'distribution': dist_chart,
             'volatility': vol_chart,
@@ -1708,7 +1715,6 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
             'beta': beta_chart,
             'var': var_chart,
             'volume_profile': vp_chart,
-            'monte_carlo': mc_chart,
         }
     }
 
@@ -1769,7 +1775,8 @@ def analytics_page():
             si_pct, si_dtc = _si_kwargs(ticker)
             si_payload, si_source = _short_interest_for(ticker)
             micro_res = microstructure.get_microstructure_analytics(
-                stock_inst_df, short_pct_float=si_pct, days_to_cover=si_dtc)
+                stock_inst_df, short_pct_float=si_pct, days_to_cover=si_dtc,
+                is_negative_gex=(data.get('gex') or {}).get('regime') == 'negative')
             macro_res = macro_engine.get_macro_financial_report(stock_inst_df, benchmark_df)
             events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
 
@@ -1787,22 +1794,9 @@ def analytics_page():
                 event_dict['car_result'] = car_result.__dict__ if car_result else None
                 sec_8k_events_with_car.append(event_dict)
 
-            # Higher-order Greeks & VRP
-            atm_iv = (data['gex']['spot'] * 0.01) if (data.get('gex') and data['gex'].get('spot')) else 0.25
-            spot_p = data.get('current_price', 100.0)
-            ann_vol = (data.get('stats', {}).get('annualised_vol') or 25.0) / 100.0
-            hog = derivatives_alpha.compute_higher_order_greeks(
-                spot=spot_p,
-                strike=spot_p,
-                time_to_exp=30.0 / 365.0,
-                volatility=max(ann_vol, 0.05),
-                risk_free_rate=0.045,
-                is_call=True
-            )
-            vrp_res = derivatives_alpha.calculate_variance_risk_premium(
-                atm_implied_vol=max(ann_vol * 1.05, 0.05),
-                realized_vol_30d=max(ann_vol, 0.05)
-            )
+            # VRP and Greeks come from the real ATM contract; absent chain -> panel hidden.
+            atm = _guard_section("atm_contract", lambda: get_atm_contract(ticker, data['current_price']))
+            atm_block = _atm_derivatives(atm, stock_inst_df) or {}
 
             data['institutional'] = {
                 'microstructure': micro_res.__dict__,
@@ -1817,8 +1811,7 @@ def analytics_page():
                     'upside_capture': macro_res.upside_capture_ratio,
                     'downside_capture': macro_res.downside_capture_ratio,
                 },
-                'higher_order_greeks': hog.__dict__,
-                'vrp': vrp_res,
+                **atm_block,
                 'sec_8k_events': sec_8k_events_with_car,
             }
     except Exception as e:
@@ -4171,7 +4164,6 @@ def ai_summary_page():
         "ticker": ticker,
         "current_price": analytics_data.get("current_price"),
         "general_stats": analytics_data.get("stats"),
-        "forward_estimates": analytics_data.get("forward_estimates"),
         "valuation": valuation_dict,
         "recommendations": positioning_data.get("recommendations"),
         "insider_sentiment": positioning_data.get("insider", {}).get("sentiment"),

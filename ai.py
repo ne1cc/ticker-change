@@ -63,7 +63,6 @@ def _context(ticker: str, data: dict) -> str:
         "ticker": ticker,
         "current_price": data.get("current_price"),
         "statistics": data.get("stats"),
-        "forward_estimates": data.get("forward_estimates"),
         "fundamentals": data.get("fundamentals"),
         "price_ranges": data.get("price_ranges"),
         "dealer_gex": data.get("gex"),

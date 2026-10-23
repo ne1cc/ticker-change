@@ -673,7 +673,6 @@ def get_openapi_spec() -> Dict[str, Any]:
                                 "corwin_schultz_spread": {"type": "number", "example": 0.0042},
                                 "roll_effective_spread": {"type": "number", "example": 0.0038},
                                 "amihud_illiquidity": {"type": "number"},
-                                "vpin": {"type": "number", "example": 0.28},
                                 "squeeze_risk_score": {"type": "number", "example": 45.0},
                                 "squeeze_risk_level": {"type": "string", "example": "MODERATE"}
                             }
