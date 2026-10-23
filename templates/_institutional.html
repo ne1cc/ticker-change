@@ -169,18 +169,26 @@
       <div class="grid grid-cols-2 gap-3">
         <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5">
           <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">{{ metric('Upside Capture', 'upside_capture') }}</span>
+          {% if macro.get('upside_capture') is not none %}
           <p class="text-xl font-bold font-mono mt-1 {% if macro.upside_capture >= 100 %}text-emerald-500{% else %}text-zinc-700 dark:text-zinc-300{% endif %}">
             {{ "%.1f"|format(macro.upside_capture) }}%
           </p>
-          <span class="text-[10px] text-zinc-400 mt-1 block">Participation in SPY up-market</span>
+          {% else %}
+          <p class="text-sm font-mono mt-1 text-zinc-400" title="Fewer than six up-market months in the shared history">insufficient history</p>
+          {% endif %}
+          <span class="text-[10px] text-zinc-400 mt-1 block">Participation in SPY up-market (geometric, monthly)</span>
         </div>
 
         <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5">
           <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">{{ metric('Downside Capture', 'downside_capture') }}</span>
+          {% if macro.get('downside_capture') is not none %}
           <p class="text-xl font-bold font-mono mt-1 {% if macro.downside_capture < 100 %}text-emerald-500{% else %}text-rose-500{% endif %}">
             {{ "%.1f"|format(macro.downside_capture) }}%
           </p>
-          <span class="text-[10px] text-zinc-400 mt-1 block">Loss absorption in SPY down-market</span>
+          {% else %}
+          <p class="text-sm font-mono mt-1 text-zinc-400" title="Fewer than six down-market months in the shared history">insufficient history</p>
+          {% endif %}
+          <span class="text-[10px] text-zinc-400 mt-1 block">Loss absorption in SPY down-market (geometric, monthly)</span>
         </div>
       </div>
     </div>

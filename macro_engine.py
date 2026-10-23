@@ -26,8 +26,8 @@ class MacroRegimeReport:
     is_yield_curve_inverted: Optional[bool]
     cpi_inflation_yoy: Optional[float]
     regime_conditional_betas: Dict[str, float]
-    upside_capture_ratio: float
-    downside_capture_ratio: float
+    upside_capture_ratio: Optional[float]
+    downside_capture_ratio: Optional[float]
     cross_asset_correlations: Dict[str, float]
 
 
@@ -92,28 +92,35 @@ def calculate_regime_conditional_betas(
 
 
 def calculate_capture_ratios(
-    stock_returns: pd.Series, benchmark_returns: pd.Series
-) -> Tuple[float, float]:
-    """Calculate Upside and Downside Capture Ratios relative to benchmark."""
+    stock_returns: pd.Series, benchmark_returns: pd.Series, min_months: int = 6
+) -> Tuple[Optional[float], Optional[float]]:
+    """Upside/downside capture on compounded monthly returns (the Morningstar
+    geometric convention: geometric mean monthly return of the asset in up/down
+    benchmark months divided by the benchmark's geometric mean in those months).
+
+    Returns (None, None) when there is insufficient history to state a ratio —
+    never a neutral 100.0 placeholder.
+    """
     df = pd.concat([stock_returns.rename("stock"), benchmark_returns.rename("bench")], axis=1).dropna()
-    if len(df) < 20:
-        return 100.0, 100.0
+    if len(df) < 20 or not isinstance(df.index, pd.DatetimeIndex):
+        return None, None
 
-    up_df = df[df["bench"] > 0]
-    down_df = df[df["bench"] < 0]
+    monthly_stock = (1.0 + df["stock"]).resample("ME").prod() - 1.0
+    monthly_bench = (1.0 + df["bench"]).resample("ME").prod() - 1.0
 
-    up_capture = (
-        (up_df["stock"].mean() / up_df["bench"].mean()) * 100.0
-        if len(up_df) > 0 and up_df["bench"].mean() != 0
-        else 100.0
-    )
-    down_capture = (
-        (down_df["stock"].mean() / down_df["bench"].mean()) * 100.0
-        if len(down_df) > 0 and down_df["bench"].mean() != 0
-        else 100.0
-    )
+    def _capture(mask: pd.Series) -> Optional[float]:
+        n = int(mask.sum())
+        if n < min_months:
+            return None
+        g_stock = (1.0 + monthly_stock[mask]).prod() ** (1.0 / n) - 1.0
+        g_bench = (1.0 + monthly_bench[mask]).prod() ** (1.0 / n) - 1.0
+        if g_bench <= -1.0:
+            return None
+        return round((1.0 + g_stock) / (1.0 + g_bench) * 100.0, 2)
 
-    return round(float(up_capture), 2), round(float(down_capture), 2)
+    up_months = monthly_bench > 0
+    down_months = monthly_bench < 0
+    return _capture(up_months), _capture(down_months)
 
 
 def get_macro_financial_report(

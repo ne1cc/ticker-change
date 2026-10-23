@@ -424,13 +424,13 @@ GLOSSARY: dict[str, dict] = {
         "term": "Upside Capture Ratio",
         "section": "Institutional Analytics",
         "short": "Percentage of benchmark gains captured when the market is rising (>100% outperforms up-markets).",
-        "long": "Compound return of the stock divided by compound return of benchmark during positive benchmark periods. Above 100% means the asset generates alpha during market rallies.",
+        "long": "Geometric mean of the asset's compounded monthly returns in up-market months (benchmark return > 0) divided by the benchmark's geometric mean in those same months — the Morningstar convention. Above 100% means the asset outparticipates market rallies; declared as insufficient history below six up-market months.",
     },
     "downside_capture": {
         "term": "Downside Capture Ratio",
         "section": "Institutional Analytics",
         "short": "Percentage of benchmark losses suffered when the market is falling (<100% protects capital).",
-        "long": "Compound return of the asset divided by benchmark return during negative benchmark periods. Below 100% signals superior downside protection.",
+        "long": "Geometric mean of the asset's compounded monthly returns in down-market months (benchmark return < 0) divided by the benchmark's geometric mean in those same months — the Morningstar convention. Below 100% signals superior downside protection; declared as insufficient history below six down-market months.",
     },
     "vanna": {
         "term": "Vanna (dDelta / dVol)",

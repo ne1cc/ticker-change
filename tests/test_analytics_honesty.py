@@ -255,3 +255,51 @@ def test_depth_refetch_is_throttled_for_short_history_symbols(tmp_path, monkeypa
         app_module.get_or_fetch_prices("IPOX", period="5y")
         app_module.get_or_fetch_prices("IPOX", period="5y")
     assert m.call_count == 1  # second call within the hour must not re-hit yfinance
+
+
+# --- Capture ratios are geometric on monthly returns, or declared insufficient
+def _monthly_spread(monthly_returns):
+    """Expand a list of monthly simple returns into a daily return series whose
+    per-month compound equals each entry (20 trading days per month)."""
+    days = []
+    idx = []
+    for i, r in enumerate(monthly_returns):
+        k = 20
+        daily = (1.0 + r) ** (1.0 / k) - 1.0
+        days += [daily] * k
+        idx += pd.bdate_range(start=pd.Timestamp("2024-01-01") + pd.DateOffset(months=i), periods=k).tolist()
+    return pd.Series(days, index=pd.DatetimeIndex(idx))
+
+
+def test_capture_ratios_match_hand_computed_geometric_example():
+    import macro_engine
+    bench = _monthly_spread([0.10] * 6 + [-0.10] * 6)
+    stock = _monthly_spread([0.05] * 6 + [-0.05] * 6)
+    up, down = macro_engine.calculate_capture_ratios(stock, bench)
+    assert abs(up - 1.05 / 1.10 * 100) < 0.01
+    assert abs(down - 0.95 / 0.90 * 100) < 0.01
+
+
+def test_capture_ratios_declared_insufficient_not_neutral_100():
+    import macro_engine
+    bench = _monthly_spread([0.10, -0.10, 0.10])
+    stock = _monthly_spread([0.05, -0.05, 0.05])
+    assert macro_engine.calculate_capture_ratios(stock, bench) == (None, None)
+
+
+def test_capture_glossary_matches_geometric_monthly_implementation():
+    assert "geometric mean" in glossary.GLOSSARY["upside_capture"]["long"]
+    assert "monthly" in glossary.GLOSSARY["downside_capture"]["long"]
+
+
+def test_capture_panel_declares_insufficient_history():
+    from flask import render_template
+    macro = {"regime": None, "fed_funds_rate": None, "yield_curve_2s10s": None,
+             "is_inverted": None, "cpi_yoy": None,
+             "betas": {"bull_beta": 1.1, "bear_beta": 0.9},
+             "upside_capture": None, "downside_capture": None}
+    data = {"ticker": "T", "current_price": 1.0, "stats": {}, "charts": {},
+            "institutional": {"macro_conditioning": macro}}
+    with app_module.app.test_request_context("/analytics?ticker=T"):
+        html = render_template("analytics.html", data=data, ticker="T")
+    assert "insufficient history" in html
