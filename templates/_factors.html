@@ -1,0 +1,80 @@
+{% if data and data.factors %}
+{% set f = data.factors %}
+{% call panel('Factor Exposure & Residual Alpha (FF5 + Momentum)') %}
+  {% if not f.available %}
+  <p class="text-xs font-mono text-zinc-400"
+     title="{{ f.get('state', '') }}">Factor model unavailable — {{ f.get('state', 'no data') }}</p>
+  {% else %}
+  <p class="text-[11px] text-zinc-400 mb-3 font-mono">
+    {{ f.n }} overlapping days ({{ f.start }} → {{ f.end }}) · factor file as of {{ f.factor_as_of }} · excess-return OLS, Newey-West SEs
+  </p>
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <div class="lg:col-span-7">
+      <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">{{ metric('Factor Exposures', 'factor_exposure') }}</div>
+      <table class="w-full text-xs font-mono">
+        <thead>
+          <tr class="text-left text-[10px] text-zinc-400 uppercase border-b border-zinc-200 dark:border-zinc-800">
+            <th class="py-2 pr-3 font-sans">Factor</th>
+            <th class="py-2 px-3 text-right font-sans">Beta</th>
+            <th class="py-2 px-3 text-right font-sans">95% CI</th>
+            <th class="py-2 pl-3 text-right font-sans">t-stat</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-200/50 dark:divide-zinc-800/50">
+          {% for name, e in f.exposures.items() %}
+          <tr>
+            <td class="py-2 pr-3 font-sans font-semibold text-zinc-700 dark:text-zinc-300">{{ name }}</td>
+            <td class="py-2 px-3 text-right font-bold {{ 'text-amber-500' if e.ci95[0] > 0 or e.ci95[1] < 0 else 'text-zinc-400' }}">{{ "%.2f"|format(e.beta) }}</td>
+            <td class="py-2 px-3 text-right text-zinc-400">[{{ "%.2f"|format(e.ci95[0]) }}, {{ "%.2f"|format(e.ci95[1]) }}]</td>
+            <td class="py-2 pl-3 text-right {{ 'text-zinc-800 dark:text-zinc-200' if e.t_stat | abs > 1.96 else 'text-zinc-400' }}">{{ "%+.2f"|format(e.t_stat) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if f.beta_hygiene %}
+      {% set bh = f.beta_hygiene %}
+      <div class="mt-4 pt-3 border-t border-zinc-200/60 dark:border-zinc-800/60">
+        <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">{{ metric('Beta Hygiene', 'dimson_beta') }} <span class="normal-case text-zinc-500">(SPY, n={{ bh.n }})</span></div>
+        <div class="grid grid-cols-4 gap-2 font-mono text-xs">
+          <div><span class="text-[10px] text-zinc-400 uppercase block font-sans">Raw OLS</span><span class="font-bold">{{ "%.2f"|format(bh.ols_beta) }} ± {{ "%.2f"|format(bh.ols_beta_se) }}</span></div>
+          <div><span class="text-[10px] text-zinc-400 uppercase block font-sans">Dimson</span><span class="font-bold">{{ "%.2f"|format(bh.dimson_beta) }}</span></div>
+          <div><span class="text-[10px] text-zinc-400 uppercase block font-sans">Blume</span><span class="font-bold">{{ "%.2f"|format(bh.blume_beta) }}</span></div>
+          <div><span class="text-[10px] text-zinc-400 uppercase block font-sans">Vasicek</span><span class="font-bold">{{ "%.2f"|format(bh.vasicek_beta) }}</span></div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    <div class="lg:col-span-5 space-y-3">
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">{{ metric('Annualised Alpha', 'factor_alpha') }}</span>
+        <p class="text-xl font-bold font-mono mt-1 {{ 'text-emerald-500' if f.alpha_annualised_pct > 0 else 'text-rose-500' }}">
+          {{ "%+.1f"|format(f.alpha_annualised_pct) }}%
+        </p>
+        <span class="text-[10px] text-zinc-400">t-stat {{ "%+.2f"|format(f.alpha_t_stat) }} {{ '(significant at 5%)' if f.alpha_t_stat | abs > 1.96 else '(not significant)' }}</span>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5">
+          <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">R² (factor model)</span>
+          <p class="text-lg font-bold font-mono mt-1">{{ "%.0f"|format(f.r_squared * 100) }}%</p>
+        </div>
+        <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5">
+          <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">{{ metric('Residual Vol (idio.)', 'residual_vol') }}</span>
+          <p class="text-lg font-bold font-mono mt-1">{{ "%.1f"|format(f.residual_vol_annualised_pct) }}%</p>
+        </div>
+        <div class="col-span-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5">
+          <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">Residual return (annualised)</span>
+          <p class="text-lg font-bold font-mono mt-1 {{ 'text-emerald-500' if f.residual_return_annualised_pct > 0 else 'text-rose-500' }}">{{ "%+.1f"|format(f.residual_return_annualised_pct) }}%</p>
+          <span class="text-[10px] text-zinc-400 mt-1 block">Return unexplained by factors — the alpha question, stated with its t-stat above.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% if data.charts.rolling_beta %}
+  <div class="mt-4">
+    <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1">Rolling 1-year beta vs SPY (95% CI band)</div>
+    {{ data.charts.rolling_beta | safe }}
+  </div>
+  {% endif %}
+  {% endif %}
+{% endcall %}
+{% endif %}

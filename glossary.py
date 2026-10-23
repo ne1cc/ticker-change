@@ -519,3 +519,28 @@ GLOSSARY: dict[str, dict] = {
     },
 }
 
+
+GLOSSARY["factor_exposure"] = {
+    "term": "Factor Exposure (FF5 + Momentum)",
+    "section": "Institutional Analytics",
+    "short": "Regression beta of the stock's daily excess return on each Fama-French factor.",
+    "long": "Excess-return OLS on MKT-RF, SMB, HML, RMW, CMA and momentum, with Newey-West (HAC) standard errors that stay valid under autocorrelated and heteroskedastic residuals. Betas whose 95% confidence interval excludes zero are highlighted; the window and the factor file's as-of date are shown because French data lags live markets.",
+}
+GLOSSARY["factor_alpha"] = {
+    "term": "Annualised Alpha (factor model)",
+    "section": "Institutional Analytics",
+    "short": "Annualised intercept of the factor regression — return unexplained by market, size, value, profitability, investment and momentum factors.",
+    "long": "The regression intercept compounded to a yearly rate, with a Newey-West t-stat. A t-stat inside +/-1.96 means the alpha is indistinguishable from zero at the 5% level — treat it as noise, not edge.",
+}
+GLOSSARY["residual_vol"] = {
+    "term": "Residual (Idiosyncratic) Volatility",
+    "section": "Institutional Analytics",
+    "short": "Annualised standard deviation of the factor regression residuals.",
+    "long": "The stock-specific risk left after removing exposure to the six factors: the risk a diversified portfolio actually keeps, and the raw material of residual-momentum and residual-reversal signals.",
+}
+GLOSSARY["dimson_beta"] = {
+    "term": "Beta Hygiene (OLS / Dimson / Blume / Vasicek)",
+    "section": "Institutional Analytics",
+    "short": "The page's market beta under three standard corrections, shown side by side.",
+    "long": "Raw OLS beta against SPY with its standard error; Dimson beta (sums lead and lag benchmark coefficients to correct asynchronous trading); Blume adjustment (2/3 weight toward the market prior of 1); and Vasicek Bayesian shrinkage (weights the raw estimate by its own precision, so noisier betas shrink further). Differences larger than the standard error are a warning that the raw beta is unreliable.",
+}
