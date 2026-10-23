@@ -307,6 +307,8 @@ def purged_kfold(dates: pd.Series, n_splits: int = 5, embargo: int | None = None
 # --------------------------------------------------------------------------- #
 CARD_MAX_AGE_DAYS = 30  # older cards flag the model as unvalidated for the UI gate
 
+CLASS_ORDER = [-1, 0, 1]  # column order for all probability matrices (Sell/Hold/Buy)
+
 
 def card_status(bundle: dict | None) -> str:
     """'ok' | 'stale' | 'missing' — stale or missing means unvalidated."""
@@ -366,7 +368,7 @@ def build_model_card(oof: dict, tickers: list[str], n_samples: int) -> dict:
     from scipy.stats import spearmanr
     from sklearn.metrics import confusion_matrix, log_loss, precision_score
 
-    classes = [-1, 0, 1]
+    classes = CLASS_ORDER
     y, pred, proba, ret = oof["y"], oof["pred"], oof["proba"], oof["ret"]
     n = len(y)
     cm = confusion_matrix(y, pred, labels=classes)
@@ -398,6 +400,83 @@ def build_model_card(oof: dict, tickers: list[str], n_samples: int) -> dict:
             "turnover": round(float((pred[1:] != pred[:-1]).mean()), 4),
         },
     }
+
+
+# --------------------------------------------------------------------------- #
+# Probability calibration (#150)                                               #
+# --------------------------------------------------------------------------- #
+def fit_calibrator(oof: dict) -> dict | None:
+    """Per-class Platt scaling (logistic on the raw class probability), fit on
+    the purged OOF predictions.
+
+    Contract:
+    - Returns {class: fitted LogisticRegression} or None when nothing fits.
+    - Classes whose OOF labels are single-valued are absent; apply_calibrator
+      falls back to the raw probability for those.
+    """
+    from sklearn.linear_model import LogisticRegression
+    proba, y = oof["proba"], oof["y"]
+    calibrator = {}
+    for j, c in enumerate(CLASS_ORDER):
+        target = (pd.Series(y) == c).astype(int)
+        if target.nunique() < 2:
+            continue
+        lr = LogisticRegression(C=1e6, max_iter=1000)
+        lr.fit(proba[:, [j]], target)
+        calibrator[c] = lr
+    return calibrator or None
+
+
+def apply_calibrator(proba: np.ndarray, calibrator: dict) -> np.ndarray:
+    """Map raw class probabilities through the per-class Platt scaling and
+    renormalise each row to sum 1; classes without a calibrator keep raw."""
+    out = proba.copy()
+    for c, lr in calibrator.items():
+        out[:, CLASS_ORDER.index(c)] = lr.predict_proba(proba[:, [CLASS_ORDER.index(c)]])[:, 1]
+    totals = out.sum(axis=1, keepdims=True)
+    totals[totals <= 0] = 1.0
+    return out / totals
+
+
+def expected_calibration_error(proba: np.ndarray, y: np.ndarray, n_bins: int = 10) -> float:
+    """Multiclass one-vs-rest ECE: count-weighted |mean predicted p − observed
+    frequency| over probability bins, averaged over classes."""
+    ece, total = 0.0, 0
+    for j in range(proba.shape[1]):
+        y_bin = (y == CLASS_ORDER[j]).astype(float)
+        p = proba[:, j]
+        bins = np.minimum((p * n_bins).astype(int), n_bins - 1)
+        for b in range(n_bins):
+            mask = bins == b
+            if mask.any():
+                ece += int(mask.sum()) * abs(p[mask].mean() - y_bin[mask].mean())
+                total += int(mask.sum())
+    return float(ece / total) if total else 0.0
+
+
+def reliability_bins(proba: np.ndarray, y: np.ndarray, n_bins: int = 10) -> list:
+    """Per-class reliability curve points {x: mean predicted, y: observed freq, n}
+    — the data behind the reliability diagram."""
+    curve = []
+    for j, c in enumerate(CLASS_ORDER):
+        y_bin = (y == CLASS_ORDER[j]).astype(float)
+        p = proba[:, j]
+        bins = np.minimum((p * n_bins).astype(int), n_bins - 1)
+        points = []
+        for b in range(n_bins):
+            mask = bins == b
+            if mask.any():
+                points.append({"x": round(float(p[mask].mean()), 4),
+                               "y": round(float(y_bin[mask].mean()), 4),
+                               "n": int(mask.sum())})
+        curve.append({"class": c, "points": points})
+    return curve
+
+
+def reliability_from_bundle() -> list | None:
+    """Stored reliability curve from the bundle's card (None without one)."""
+    bundle = _load()
+    return ((bundle.get("card") or {}).get("reliability")) if bundle else None
 
 
 # --------------------------------------------------------------------------- #
@@ -471,6 +550,14 @@ def train(tickers: list[str]) -> None:
     # above stays for chronological reporting). Feeds the model card + calibrator.
     oof = purged_oof(X, y, dates, returns)
     card = build_model_card(oof, tickers, len(X)) if oof else None
+    calibrator = fit_calibrator(oof) if oof else None
+    if card and calibrator and oof:
+        ece_before = expected_calibration_error(oof["proba"], oof["y"])
+        ece_after = expected_calibration_error(apply_calibrator(oof["proba"], calibrator), oof["y"])
+        card["calibration"] = {"method": "platt", "ece_before": round(ece_before, 4),
+                               "ece_after": round(ece_after, 4)}
+        card["reliability"] = reliability_bins(oof["proba"], oof["y"])
+        print(f"Calibration (platt on OOF): ECE {ece_before:.3f} -> {ece_after:.3f}")
     if card:
         oos = card["oos"]
         print(f"Purged k-fold (embargo={HORIZON}): oos acc={oos['hit_rate']:.3f}  "
@@ -492,7 +579,7 @@ def train(tickers: list[str]) -> None:
     with open(MODEL_PATH, "wb") as f:
         pickle.dump({"model": model, "features": FEATURES, "horizon": HORIZON,
                      "importances": importances, "feature_stats": feature_stats,
-                     "card": card, "oof": oof}, f)
+                     "card": card, "oof": oof, "calibrator": calibrator}, f)
     print(f"\nSaved model → {MODEL_PATH}")
 
     # Invalidate cached predictions — they came from the previous model and the
@@ -623,6 +710,12 @@ def predict(ticker: str) -> dict | None:
     classes = list(model.classes_)
     proba = model.predict_proba(feat)[0]
     p = {int(c): float(pr) for c, pr in zip(classes, proba)}
+    # Calibrated probabilities replace the raw ones when a calibrator was fit at
+    # train time (#150) — 'confidence' is then the calibrated max class prob.
+    calibrator = bundle.get("calibrator")
+    if calibrator:
+        raw = np.array([[p.get(c, 0.0) for c in CLASS_ORDER]])
+        p = {c: float(v) for c, v in zip(CLASS_ORDER, apply_calibrator(raw, calibrator)[0])}
     buy, hold, sell = p.get(1, 0.0), p.get(0, 0.0), p.get(-1, 0.0)
     top = int(max(p, key=p.get))
     action = {1: "Buy", 0: "Hold", -1: "Sell"}[top]
@@ -636,6 +729,7 @@ def predict(ticker: str) -> dict | None:
         "action": action,
         "proba": {"buy": round(buy, 3), "hold": round(hold, 3), "sell": round(sell, 3)},
         "confidence": round(confidence, 3),
+        "calibrated": bool(calibrator),
         "horizon_days": bundle.get("horizon", HORIZON),
         "card_status": status,      # ok | stale | missing — stale/missing = unvalidated
         "validated": status == "ok",
