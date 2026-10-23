@@ -96,6 +96,7 @@ class MaterialEvent8K:
     description: str = ""
     is_high_impact: bool = False
     event_type: Optional[str] = None  # None = routine-only: excluded from studies
+    after_close: bool = False  # accepted at/after 16:00 ET → next session reacts
 
 
 def fetch_and_parse_8k_filings(ticker: str, limit: int = 20) -> List[MaterialEvent8K]:
@@ -127,6 +128,7 @@ def fetch_and_parse_8k_filings(ticker: str, limit: int = 20) -> List[MaterialEve
     primary_docs = recent.get("primaryDocument", [])
     items_list = recent.get("items", [])
     descriptions = recent.get("primaryDocDescription", [])
+    acceptances = recent.get("acceptanceDateTime", [])
 
     parsed_events: List[MaterialEvent8K] = []
 
@@ -152,6 +154,17 @@ def fetch_and_parse_8k_filings(ticker: str, limit: int = 20) -> List[MaterialEve
             # High impact categories: 4.02 (restatements), 4.01 (auditor switch), 5.01 (control change), 2.01 (M&A)
             high_impact = any(it in ("4.01", "4.02", "5.01", "2.01", "3.01") for it in found_items)
 
+            # EDGAR acceptanceDateTime carries an ET offset, so .hour is the
+            # local filing time: at/after 16:00 means the market was already
+            # closed and the first reaction session is the next trading day.
+            after_close = False
+            acceptance = acceptances[i] if i < len(acceptances) else ""
+            if acceptance:
+                try:
+                    after_close = datetime.fromisoformat(acceptance).hour >= 16
+                except ValueError:
+                    pass
+
             event = MaterialEvent8K(
                 accession_number=accessions[i] if i < len(accessions) else "",
                 cik=str(cik_str),
@@ -164,6 +177,7 @@ def fetch_and_parse_8k_filings(ticker: str, limit: int = 20) -> List[MaterialEve
                 description=descriptions[i] if i < len(descriptions) else "Form 8-K Current Report",
                 is_high_impact=high_impact,
                 event_type=resolve_event_type(found_items),
+                after_close=after_close,
             )
             parsed_events.append(event)
             if len(parsed_events) >= limit:
