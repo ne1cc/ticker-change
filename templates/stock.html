@@ -31,7 +31,19 @@
     <div class="shiny-card-content flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
         <div>
             <p class="text-xs font-semibold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 mb-1">Current Price</p>
-            <h2 class="font-mono text-xl sm:text-2xl font-semibold text-zinc-900 dark:text-zinc-50 break-words">{{ data.ticker }} <span class="text-amber-600 dark:text-amber-400">${{ "%.2f"|format(data.current_price) }}</span></h2>
+            {% set daily_net = data.net_change_data|selectattr('period', 'equalto', '1D')|first %}
+            {% set daily_pct = data.percentage_data|selectattr('period', 'equalto', '1D')|first %}
+            <h2 class="font-mono text-xl sm:text-2xl font-semibold text-zinc-900 dark:text-zinc-50 break-words">
+                {{ data.ticker }} <span class="text-amber-600 dark:text-amber-400">${{ "%.2f"|format(data.current_price) }}</span>
+                {% if daily_net and daily_pct and daily_net.value is number and daily_pct.value is number %}
+                <span title="Daily change (1D)" class="inline-block text-sm sm:text-base font-medium whitespace-nowrap {{ 'text-emerald-600 dark:text-emerald-400' if daily_net.value > 0 else 'text-rose-600 dark:text-rose-400' if daily_net.value < 0 else 'text-zinc-500 dark:text-zinc-400' }}">
+                    {{ '+' if daily_net.value > 0 else '-' if daily_net.value < 0 else '' }}${{ "%.2f"|format(daily_net.value|abs) }} ({{ '+' if daily_pct.value > 0 else '' }}{{ "%.2f"|format(daily_pct.value) }}%)
+                </span>
+                {% endif %}
+            </h2>
+            {% if data.fundamentals and data.fundamentals.get('Name') %}
+            <p class="text-sm sm:text-base font-medium text-zinc-600 dark:text-zinc-400 mt-1 break-words">{{ data.fundamentals['Name'] }}</p>
+            {% endif %}
         </div>
         <div class="flex flex-col items-stretch sm:items-end gap-2">
             <a href="https://finviz.com/quote.ashx?t={{ data.ticker }}" target="_blank" rel="noopener noreferrer"
