@@ -1593,6 +1593,27 @@ def _guard_section(label, fn, default=None):
         return default
 
 
+def _attach_car_to_8k_events(events, stock_df, benchmark_df, ticker):
+    """Market-model CAR per 8-K filing dict; routine-only filings
+    (event_type None) never trigger an event study and carry car_result
+    None (the table still lists them)."""
+    out = []
+    for event in events:
+        if event.event_type is None:
+            event_dict = event.__dict__.copy()
+            event_dict['car_result'] = None
+            out.append(event_dict)
+            continue
+        car_result = event_study.run_event_study(
+            stock_df, benchmark_df, event.filing_date,
+            event_type=event.event_type, ticker=ticker,
+        )
+        event_dict = event.__dict__.copy()
+        event_dict['car_result'] = car_result.__dict__ if car_result else None
+        out.append(event_dict)
+    return out
+
+
 def compute_analytics(ticker):
     try:
         return _compute_analytics_impl(ticker)
@@ -1831,16 +1852,10 @@ def analytics_page():
             # Cumulative Abnormal Return (Market Model) around each 8-K filing date.
             # None is expected (not an error) when the filing is too recent to have
             # a full post-event window, or too close to the start of price history
-            # to have a full pre-event estimation window.
-            sec_8k_events_with_car = []
-            for event in events_8k:
-                car_result = event_study.run_event_study(
-                    stock_inst_df, benchmark_df, event.filing_date,
-                    event_type="SEC_8K", ticker=ticker,
-                )
-                event_dict = event.__dict__.copy()
-                event_dict['car_result'] = car_result.__dict__ if car_result else None
-                sec_8k_events_with_car.append(event_dict)
+            # to have a full pre-event estimation window. Routine-only filings
+            # (event_type None) are skipped by construction.
+            sec_8k_events_with_car = _attach_car_to_8k_events(
+                events_8k, stock_inst_df, benchmark_df, ticker)
 
             # VRP and Greeks come from the real ATM contract; absent chain -> panel hidden.
             atm = _guard_section("atm_contract", lambda: get_atm_contract(ticker, data['current_price']))
