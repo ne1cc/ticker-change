@@ -670,31 +670,52 @@ def get_openapi_spec() -> Dict[str, Any]:
                         "microstructure": {
                             "type": "object",
                             "properties": {
-                                "corwin_schultz_spread": {"type": "number", "example": 0.0042},
-                                "roll_effective_spread": {"type": "number", "example": 0.0038},
+                                "corwin_schultz_spread_pct": {"type": "number", "example": 0.42},
+                                "roll_effective_spread_pct": {"type": "number", "example": 0.38},
                                 "amihud_illiquidity": {"type": "number"},
                                 "squeeze_risk_score": {"type": "number", "example": 45.0},
-                                "squeeze_risk_level": {"type": "string", "example": "MODERATE"}
+                                "squeeze_risk_level": {"type": "string", "example": "MODERATE"},
+                                "squeeze_inputs_assumed": {
+                                    "type": "array", "items": {"type": "string"},
+                                    "example": ["SI % float", "DTC"],
+                                    "description": "Squeeze inputs that fell back to defaults (no short-interest feed). Cost-to-borrow is excluded from the score unless reported."
+                                }
                             }
                         },
                         "macro_conditioning": {
                             "type": "object",
                             "properties": {
-                                "regime": {"type": "string", "example": "NEUTRAL_EXPANSION"},
-                                "fed_funds_rate": {"type": "number", "example": 4.50},
-                                "yield_curve_2s10s": {"type": "number", "example": 0.35},
-                                "is_inverted": {"type": "boolean", "example": False},
-                                "cpi_yoy": {"type": "number", "example": 2.8},
+                                "regime": {"type": "string", "nullable": True, "example": "NEUTRAL_EXPANSION"},
+                                "fed_funds_rate": {"type": "number", "nullable": True, "example": 4.50},
+                                "yield_curve_2s10s": {"type": "number", "nullable": True, "example": 0.35},
+                                "is_inverted": {"type": "boolean", "nullable": True, "example": False},
+                                "cpi_yoy": {"type": "number", "nullable": True, "example": 2.8},
                                 "betas": {
                                     "type": "object",
+                                    "description": "Up/down-market betas (split by the sign of SPY's daily return).",
                                     "properties": {
                                         "overall": {"type": "number", "example": 1.15},
                                         "bull_beta": {"type": "number", "example": 1.25},
-                                        "bear_beta": {"type": "number", "example": 0.95}
+                                        "bear_beta": {"type": "number", "example": 0.95},
+                                        "bull_days": {"type": "integer", "example": 310},
+                                        "bear_days": {"type": "integer", "example": 254}
                                     }
                                 },
-                                "upside_capture": {"type": "number", "example": 1.12},
-                                "downside_capture": {"type": "number", "example": 0.88}
+                                "regime_betas": {
+                                    "type": "object", "nullable": True,
+                                    "description": "Betas conditional on the FRED regime at each date (curve sign, 3m fed-funds direction); each bucket {beta, n}, beta withheld below 60 obs.",
+                                    "properties": {
+                                        "curve_inverted": {"type": "object"},
+                                        "curve_steep": {"type": "object"},
+                                        "rate_tightening": {"type": "object"},
+                                        "rate_pause": {"type": "object"},
+                                        "rate_easing": {"type": "object"}
+                                    }
+                                },
+                                "upside_capture": {"type": "number", "nullable": True, "example": 112.0,
+                                                    "description": "Geometric monthly convention; null below 6 up-market months."},
+                                "downside_capture": {"type": "number", "nullable": True, "example": 88.0,
+                                                      "description": "Geometric monthly convention; null below 6 down-market months."}
                             }
                         },
                         "signals_backtest": {

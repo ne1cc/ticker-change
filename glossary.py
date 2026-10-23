@@ -415,10 +415,16 @@ GLOSSARY: dict[str, dict] = {
         "long": "Multi-factor squeeze risk metric combining Short Interest % Float, Days to Cover (Short Ratio), and Negative Dealer Gamma Exposure (GEX) acceleration. Cost-to-borrow is excluded unless a reported value exists (no free CTB feed); component weights renormalise over the inputs actually used, and assumed inputs are flagged on the panel.",
     },
     "dual_betas": {
-        "term": "Regime-Conditional Dual Betas",
+        "term": "Up/Down-Market Betas",
         "section": "Institutional Analytics",
-        "short": "Bull Beta vs Bear Beta measuring asymmetric systematic market sensitivity.",
-        "long": "Separates historical covariance against the benchmark (SPY) into Bull market days (SPY > 0) versus Bear market days (SPY < 0), revealing upside participation versus downside exposure.",
+        "short": "Up-market vs down-market beta measuring asymmetric systematic sensitivity to SPY's daily direction.",
+        "long": "Separates historical covariance against the benchmark (SPY) into up-market days (SPY daily return >= 0) versus down-market days (SPY < 0), revealing upside participation versus downside exposure. These are market-DIRECTION betas, not macro-regime betas; sample size per side (n days) is shown alongside.",
+    },
+    "regime_betas": {
+        "term": "Macro-Regime-Conditional Betas",
+        "section": "Institutional Analytics",
+        "short": "Beta estimated only over days sharing the same FRED macro regime.",
+        "long": "Betas conditional on the regime actually prevailing on each historical date: yield-curve buckets from the sign of the 10Y-2Y spread, and rate-direction buckets from the 63-trading-day change in the fed funds rate (tightening/easing beyond +/-25bp, otherwise pause). Each bucket shows its sample size; betas are withheld below 60 observations, and declared unavailable when FRED history is missing.",
     },
     "upside_capture": {
         "term": "Upside Capture Ratio",

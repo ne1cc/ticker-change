@@ -203,7 +203,7 @@ class TestAnalyticalModules(unittest.TestCase):
             rendered_html = render_template('analytics.html', data=mock_payload, ticker='AAPL')
             self.assertIn('Institutional Quantitative Analytics', rendered_html)
             self.assertNotIn('VPIN', rendered_html)
-            self.assertIn('Bull Beta (Up Market)', rendered_html)
+            self.assertIn('Up-market (SPY &gt; 0)', rendered_html)
             self.assertIn('Vanna', rendered_html)
             self.assertIn('SEC Form 8-K Material Events', rendered_html)
 

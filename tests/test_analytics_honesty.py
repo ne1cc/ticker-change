@@ -303,3 +303,71 @@ def test_capture_panel_declares_insufficient_history():
     with app_module.app.test_request_context("/analytics?ticker=T"):
         html = render_template("analytics.html", data=data, ticker="T")
     assert "insufficient history" in html
+
+
+# --- Up/down betas are labelled as market-direction, not macro regime ---------
+def test_dual_betas_report_sample_sizes_and_are_relabelled():
+    import macro_engine
+    rng = np.random.default_rng(7)
+    bench = pd.Series(rng.normal(0.0004, 0.01, 400))
+    out = macro_engine.calculate_regime_conditional_betas(bench * 1.2, bench)
+    assert out["bull_days"] + out["bear_days"] == 400
+    assert glossary.GLOSSARY["dual_betas"]["term"] == "Up/Down-Market Betas"
+
+
+def _fred_obs(dates, values):
+    return [{"date": d.strftime("%Y-%m-%d"), "value": str(v)} for d, v in zip(dates, values)]
+
+
+def test_macro_regime_betas_condition_on_actual_fred_regimes():
+    import macro_engine
+    idx = pd.bdate_range("2024-01-01", periods=400)
+    bench = pd.Series(rng_example := np.random.default_rng(7).normal(0.0004, 0.01, 400), index=idx)
+    dff = [3.0] * 200 + [round(3.0 + 0.01 * i, 4) for i in range(200)]   # tightening phase
+    curve = [0.5] * 200 + [-0.3] * 200                                   # then inverted
+    out = macro_engine.calculate_macro_regime_betas(
+        bench * 1.2, bench, _fred_obs(idx, dff), _fred_obs(idx, curve))
+    assert out is not None
+    assert out["curve_inverted"]["n"] + out["curve_steep"]["n"] == 400
+    assert out["curve_inverted"]["beta"] is not None and out["curve_steep"]["beta"] is not None
+    assert out["rate_tightening"]["n"] > 100 and out["rate_tightening"]["beta"] is not None
+    assert out["rate_easing"]["beta"] is None  # no easing phase in the fixture
+
+
+def test_regime_beta_buckets_under_minimum_are_withheld_with_n():
+    import macro_engine
+    idx = pd.bdate_range("2024-01-01", periods=400)
+    bench = pd.Series(np.random.default_rng(7).normal(0.0004, 0.01, 400), index=idx)
+    dff = [3.0] * 380 + [3.5] * 20  # only 19 tightening days
+    curve = [0.5] * 200 + [-0.3] * 200
+    out = macro_engine.calculate_macro_regime_betas(
+        bench * 1.2, bench, _fred_obs(idx, dff), _fred_obs(idx, curve), min_obs=60)
+    assert out["rate_tightening"] == {"beta": None, "n": 20}
+    assert out["curve_inverted"]["beta"] is not None
+
+
+def test_regime_betas_declared_unavailable_without_fred():
+    import macro_engine
+    px = _prices()
+    with patch.object(macro_engine, "fetch_fred_series", return_value=[]):
+        rep = macro_engine.get_macro_financial_report(px, px)
+    assert all(b["beta"] is None and b["n"] == 0 for b in rep.macro_regime_betas.values())
+
+
+def test_regime_beta_panel_renders_buckets_and_declared_states():
+    from flask import render_template
+    macro = {"regime": None, "fed_funds_rate": None, "yield_curve_2s10s": None,
+             "is_inverted": None, "cpi_yoy": None,
+             "betas": {"bull_beta": 1.1, "bear_beta": 0.9, "bull_days": 210, "bear_days": 188},
+             "regime_betas": {"curve_inverted": {"beta": 1.25, "n": 240},
+                              "curve_steep": {"beta": None, "n": 12},
+                              "rate_tightening": {"beta": None, "n": 0},
+                              "rate_pause": {"beta": 0.9, "n": 300},
+                              "rate_easing": {"beta": None, "n": 0}},
+             "upside_capture": 100.0, "downside_capture": 100.0}
+    data = {"ticker": "T", "current_price": 1.0, "stats": {}, "charts": {},
+            "institutional": {"macro_conditioning": macro}}
+    with app_module.app.test_request_context("/analytics?ticker=T"):
+        html = render_template("analytics.html", data=data, ticker="T")
+    assert "Up/Down-Market Betas" in html and "Up-market (SPY &gt; 0)" in html
+    assert "insufficient sample (n=12)" in html and "FRED history unavailable" in html
