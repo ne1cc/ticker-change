@@ -173,3 +173,34 @@ def test_macro_panel_flags_fred_unavailable():
     with app_module.app.test_request_context("/analytics?ticker=T"):
         html = render_template("analytics.html", data=data, ticker="T")
     assert "FRED unavailable" in html and "5.33" not in html
+
+
+# --- Squeeze index never scores an invented cost-to-borrow --------------------
+def test_squeeze_index_excludes_ctb_when_unreported():
+    # Weights renormalise over the inputs actually used (SI 40, DTC 30, GEX 15).
+    score, _ = microstructure.compute_squeeze_risk_index(3.0, 2.0)
+    assert abs(score - (4.8 + 30 * 2 / 7 + 5) / 85 * 100) < 0.05
+    # A reported CTB still contributes its term on the full 100 weight sum.
+    score_ctb, _ = microstructure.compute_squeeze_risk_index(3.0, 2.0, cost_to_borrow_pct=2.5)
+    assert score_ctb != score
+
+
+def test_squeeze_score_stays_in_range_with_renormalised_weights():
+    assert microstructure.compute_squeeze_risk_index(25.0, 7.0, is_negative_gex=True)[0] == 100.0
+    assert microstructure.compute_squeeze_risk_index(0.0, 0.0)[0] == round(5 / 85 * 100, 1)
+    assert microstructure.compute_squeeze_risk_index(
+        200.0, 20.0, cost_to_borrow_pct=50.0, is_negative_gex=True)[0] == 100.0
+
+
+def test_squeeze_badge_lists_assumed_inputs_not_just_si():
+    from flask import render_template
+    micro = {"corwin_schultz_spread_pct": 0.4, "roll_effective_spread_pct": 0.3,
+             "amihud_illiquidity": 0.1, "squeeze_risk_score": 21.6,
+             "squeeze_risk_level": "LOW", "squeeze_inputs_assumed": ["SI % float", "DTC"]}
+    data = {"ticker": "T", "current_price": 1.0, "stats": {}, "charts": {},
+            "institutional": {"microstructure": micro,
+                              "short_interest": {"si_source": "assumed"}}}
+    with app_module.app.test_request_context("/analytics?ticker=T"):
+        html = render_template("analytics.html", data=data, ticker="T")
+    assert "assumed si % float · dtc" in html
+    assert "Cost-to-borrow excluded" in html

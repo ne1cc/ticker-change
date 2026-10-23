@@ -712,15 +712,19 @@ def _short_interest_for(ticker: str) -> tuple[dict | None, str]:
     return si, "assumed"
 
 
-def _si_kwargs(ticker: str) -> tuple[float, float]:
-    """(short_pct_float, days_to_cover) kwargs for get_microstructure_analytics,
-    real values when reported (fraction x100 — the squeeze index is scaled in
-    percent), signature defaults otherwise."""
+def _si_inputs(ticker: str) -> tuple[float, float, list[str]]:
+    """(short_pct_float, days_to_cover, assumed-input names) for
+    get_microstructure_analytics: real values when reported (fraction x100 —
+    the squeeze index is scaled in percent), signature defaults otherwise with
+    the assumed inputs listed so the UI can flag them. Cost-to-borrow has no
+    free source and is never scored on an invented constant."""
     si, _source = _short_interest_for(ticker)
     pct = (si or {}).get("short_pct_float")
     dtc = (si or {}).get("days_to_cover")
+    assumed = ([name for name, val in (("SI % float", pct), ("DTC", dtc)) if val is None])
     return (pct * 100.0 if pct is not None else 3.0,
-            dtc if dtc is not None else 2.0)
+            dtc if dtc is not None else 2.0,
+            assumed)
 
 
 def _get_fundamentals_uncached(ticker: str) -> dict | None:
@@ -1772,11 +1776,12 @@ def analytics_page():
         stock_inst_df = price_df if price_df is not None else get_or_fetch_prices(ticker, period="2y")
         if stock_inst_df is not None and not stock_inst_df.empty:
             benchmark_df = spy_df if spy_df is not None else stock_inst_df
-            si_pct, si_dtc = _si_kwargs(ticker)
+            si_pct, si_dtc, si_assumed = _si_inputs(ticker)
             si_payload, si_source = _short_interest_for(ticker)
             micro_res = microstructure.get_microstructure_analytics(
                 stock_inst_df, short_pct_float=si_pct, days_to_cover=si_dtc,
-                is_negative_gex=(data.get('gex') or {}).get('regime') == 'negative')
+                is_negative_gex=(data.get('gex') or {}).get('regime') == 'negative',
+                assumed_si_inputs=si_assumed)
             macro_res = macro_engine.get_macro_financial_report(stock_inst_df, benchmark_df)
             events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
 
@@ -4658,10 +4663,11 @@ def api_institutional(ticker):
         return jsonify({"error": f"No pricing data for {ticker}"}), 404
 
     # 1. Microstructure & Squeeze
-    si_pct, si_dtc = _si_kwargs(ticker)
+    si_pct, si_dtc, si_assumed = _si_inputs(ticker)
     si_payload, si_source = _short_interest_for(ticker)
     micro_res = microstructure.get_microstructure_analytics(
-        stock_df, short_pct_float=si_pct, days_to_cover=si_dtc)
+        stock_df, short_pct_float=si_pct, days_to_cover=si_dtc,
+        assumed_si_inputs=si_assumed)
 
     # 2. Macro Conditioning
     macro_res = macro_engine.get_macro_financial_report(stock_df, spy_df if spy_df is not None else stock_df)

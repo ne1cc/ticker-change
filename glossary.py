@@ -412,7 +412,7 @@ GLOSSARY: dict[str, dict] = {
         "term": "Short Squeeze Risk Score",
         "section": "Institutional Analytics",
         "short": "Multi-factor composite score [0-100] quantifying short squeeze vulnerability.",
-        "long": "Multi-factor squeeze risk metric combining Short Interest % Float, Days to Cover (Short Ratio), Cost to Borrow (CTB), and Negative Dealer Gamma Exposure (GEX) acceleration.",
+        "long": "Multi-factor squeeze risk metric combining Short Interest % Float, Days to Cover (Short Ratio), and Negative Dealer Gamma Exposure (GEX) acceleration. Cost-to-borrow is excluded unless a reported value exists (no free CTB feed); component weights renormalise over the inputs actually used, and assumed inputs are flagged on the panel.",
     },
     "dual_betas": {
         "term": "Regime-Conditional Dual Betas",
