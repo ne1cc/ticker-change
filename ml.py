@@ -37,6 +37,7 @@ from __future__ import annotations
 import os
 import pickle
 import sys
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -301,6 +302,24 @@ def purged_kfold(dates: pd.Series, n_splits: int = 5, embargo: int | None = None
     return splits
 
 
+# --------------------------------------------------------------------------- #
+# Model card — persisted OOS evaluation (#149)                                 #
+# --------------------------------------------------------------------------- #
+CARD_MAX_AGE_DAYS = 30  # older cards flag the model as unvalidated for the UI gate
+
+
+def card_status(bundle: dict | None) -> str:
+    """'ok' | 'stale' | 'missing' — stale or missing means unvalidated."""
+    card = (bundle or {}).get("card")
+    if not card or not card.get("trained_at"):
+        return "missing"
+    try:
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(card["trained_at"])
+    except (ValueError, TypeError):
+        return "stale"
+    return "ok" if age.total_seconds() <= CARD_MAX_AGE_DAYS * 86400 else "stale"
+
+
 def purged_oof(X: pd.DataFrame, y: pd.Series, dates: pd.Series, returns: pd.Series,
                n_splits: int = 5) -> dict | None:
     """Out-of-fold predictions from purged k-fold with embargo.
@@ -335,6 +354,50 @@ def purged_oof(X: pd.DataFrame, y: pd.Series, dates: pd.Series, returns: pd.Seri
         return None
     return {"y": y.to_numpy()[ok], "pred": pred[ok], "proba": proba[ok],
             "ret": returns.to_numpy()[ok]}
+
+
+def build_model_card(oof: dict, tickers: list[str], n_samples: int) -> dict:
+    """Model card: provenance plus the OOS evaluation from purged k-fold.
+
+    Contract:
+    - Returns a JSON-safe dict stored in the bundle under "card".
+    - ic/ic_tstat are None when the rank IC is undefined (flat/degenerate OOF).
+    """
+    from scipy.stats import spearmanr
+    from sklearn.metrics import confusion_matrix, log_loss, precision_score
+
+    classes = [-1, 0, 1]
+    y, pred, proba, ret = oof["y"], oof["pred"], oof["proba"], oof["ret"]
+    n = len(y)
+    cm = confusion_matrix(y, pred, labels=classes)
+    prec = precision_score(y, pred, labels=classes, average=None, zero_division=0)
+    edge_scores = proba[:, classes.index(1)] - proba[:, classes.index(-1)]
+    ic_res = spearmanr(edge_scores, ret)
+    ic = float(ic_res.statistic) if np.isfinite(ic_res.statistic) else None
+    # t-stat of the rank IC under H0: IC = 0 (standard large-n approximation)
+    ic_tstat = (ic * np.sqrt((n - 2) / (1 - ic ** 2))) if (ic is not None and n >= 3 and abs(ic) < 1) else None
+    y_idx = pd.Series(y).map({c: i for i, c in enumerate(classes)}).to_numpy()
+    brier = float(np.mean(np.sum((proba - np.eye(3)[y_idx]) ** 2, axis=1)))
+
+    return {
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "universe": list(tickers),
+        "horizon": HORIZON,
+        "n_samples": int(n_samples),
+        "oos": {
+            "n": int(n),
+            "confusion_matrix": cm.tolist(),   # rows = true, cols = pred, order Sell/Hold/Buy
+            "precision": {"Sell": round(float(prec[0]), 3), "Hold": round(float(prec[1]), 3),
+                          "Buy": round(float(prec[2]), 3)},
+            "brier": round(brier, 6),
+            "log_loss": round(float(log_loss(y, proba, labels=classes)), 6),
+            "ic": None if ic is None else round(ic, 4),
+            "ic_tstat": None if ic_tstat is None else round(float(ic_tstat), 2),
+            "hit_rate": round(float((pred == y).mean()), 4),
+            # share of consecutive OOF predictions that flip direction
+            "turnover": round(float((pred[1:] != pred[:-1]).mean()), 4),
+        },
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -405,12 +468,13 @@ def train(tickers: list[str]) -> None:
     walk_forward(X, y, dates, returns)
 
     # Purged k-fold with embargo: the leakage-controlled OOS estimate (walk-forward
-    # above stays for chronological reporting). Also the source for the model card.
+    # above stays for chronological reporting). Feeds the model card + calibrator.
     oof = purged_oof(X, y, dates, returns)
-    if oof:
-        acc = float((oof["pred"] == oof["y"]).mean())
-        edge = float(np.where(oof["pred"] == 1, oof["ret"] - COST_BPS / 1e4, 0.0).mean())
-        print(f"Purged k-fold (embargo={HORIZON}): oos acc={acc:.3f}  mean buy-edge={edge:+.4f}")
+    card = build_model_card(oof, tickers, len(X)) if oof else None
+    if card:
+        oos = card["oos"]
+        print(f"Purged k-fold (embargo={HORIZON}): oos acc={oos['hit_rate']:.3f}  "
+              f"brier={oos['brier']:.3f}  ic={oos['ic']} (t={oos['ic_tstat']})  n={oos['n']}")
 
     model = _new_model()
     if model is None:
@@ -427,7 +491,8 @@ def train(tickers: list[str]) -> None:
 
     with open(MODEL_PATH, "wb") as f:
         pickle.dump({"model": model, "features": FEATURES, "horizon": HORIZON,
-                     "importances": importances, "feature_stats": feature_stats}, f)
+                     "importances": importances, "feature_stats": feature_stats,
+                     "card": card, "oof": oof}, f)
     print(f"\nSaved model → {MODEL_PATH}")
 
     # Invalidate cached predictions — they came from the previous model and the
@@ -565,13 +630,19 @@ def predict(ticker: str) -> dict | None:
 
     drivers, rationale = _explain(feat.iloc[0], bundle, action, confidence)
 
+    card = bundle.get("card") or {}
+    status = card_status(bundle)
     result = {
         "action": action,
         "proba": {"buy": round(buy, 3), "hold": round(hold, 3), "sell": round(sell, 3)},
         "confidence": round(confidence, 3),
         "horizon_days": bundle.get("horizon", HORIZON),
-        "drivers": drivers,        # top feature drivers behind THIS prediction
-        "rationale": rationale,    # plain-English explainer (None if no model stats)
+        "card_status": status,      # ok | stale | missing — stale/missing = unvalidated
+        "validated": status == "ok",
+        "oos": card.get("oos"),     # OOS evaluation from the model card (None if absent)
+        "trained_at": card.get("trained_at"),
+        "drivers": drivers,         # top feature drivers behind THIS prediction
+        "rationale": rationale,     # plain-English explainer (None if no model stats)
     }
     db.cache_set("ml", ticker, result)
     return result
