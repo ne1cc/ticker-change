@@ -89,10 +89,11 @@ def compute_higher_order_greeks(
     vanna = -pdf_d1 * d2 / volatility
 
     # 6. Charm (Delta decay per year): -pdf(d1) * (2*r*T - d2*vol*sqrt(T)) / (2*T*vol*sqrt(T))
+    #    With zero dividend yield put charm equals call charm (put delta = call delta - 1).
     charm_annual = pdf_d1 * (
         (2.0 * risk_free_rate * time_to_exp - d2 * volatility * t_sqrt) / (2.0 * time_to_exp * volatility * t_sqrt)
     )
-    charm = float(-charm_annual / 365.0 if is_call else (1.0 - charm_annual) / 365.0)
+    charm = float(-charm_annual / 365.0)
 
     # 7. Vomma / Volga: dVega / dVol = Vega * d1 * d2 / vol
     vomma = vega * d1 * d2 / volatility
