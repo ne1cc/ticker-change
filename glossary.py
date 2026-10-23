@@ -113,13 +113,6 @@ GLOSSARY: dict[str, dict] = {
         "short": "Average return by calendar month over the full history — recurring strong/weak periods.",
         "long": "The mean daily return grouped by calendar month across all available history. It surfaces recurring patterns (e.g. the historical weakness of September). Treat it as descriptive, not predictive — with limited years of data, monthly averages are noisy and prone to overfitting.",
     },
-    "monte_carlo": {
-        "term": "Monte Carlo Projection",
-        "section": "Risk & Return",
-        "short": "1,000 simulated future price paths, showing the range of plausible outcomes — not a forecast.",
-        "long": "Simulates forward prices using geometric Brownian motion calibrated to the stock's own historical drift and volatility. The shaded bands are the 5–95% and 25–75% outcome ranges across simulations. It assumes returns are normally distributed and that the past drift/vol persist — both strong assumptions, so read it as a distribution of scenarios, not a target.",
-        "formula": "S_t = S_0 · exp(Σ (μ − ½σ²) + σ·Z)",
-    },
     "cumulative_return": {
         "term": "Cumulative Return",
         "section": "Risk & Return",
@@ -409,13 +402,6 @@ GLOSSARY: dict[str, dict] = {
     },
 
     # ----------------------------------------------------------------- Institutional Analytics
-    "vpin": {
-        "term": "VPIN (Order Flow Toxicity)",
-        "section": "Institutional Analytics",
-        "short": "Volume-Synchronized Probability of Toxicity measuring informed trader order flow imbalances.",
-        "long": "Easley-Kiefer-O'Hara Volume-Synchronized Probability of Toxicity. Measures toxicity by bucketing trading volume and quantifying directional order flow asymmetry. High VPIN flags aggressive informed trading and elevated short-term volatility or flash crash risk.",
-        "formula": "VPIN = Σ|V_buy - V_sell| / (2 × N × V_bucket)",
-    },
     "corwin_schultz": {
         "term": "Corwin-Schultz Bid-Ask Spread",
         "section": "Institutional Analytics",

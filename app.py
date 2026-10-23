@@ -1615,67 +1615,6 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
     else:
         poc_price = None
 
-    # --- Forward estimates (Monte Carlo at multiple horizons) ---
-    # Projects prices at 3-month, 6-month, and 1-year horizons using GBM
-    # calibrated to the stock's own historical drift and volatility.
-    def _mc_forward_estimate(current, mu, sigma, horizon_days, n_sims=1000, seed=42):
-        """Compute forward price estimate at horizon_days using Monte Carlo GBM.
-        Returns: (median, p5, p25, p75, p95, prob_gain, prob_up20, prob_dn20)"""
-        rng = np.random.default_rng(seed)
-        shocks = rng.normal(mu, sigma, size=(n_sims, horizon_days))
-        paths = current * np.exp(np.cumsum(shocks, axis=1))
-        terminal = paths[:, -1]
-        return {
-            'median': round(float(np.median(terminal)), 2),
-            'p5': round(float(np.percentile(terminal, 5)), 2),
-            'p25': round(float(np.percentile(terminal, 25)), 2),
-            'p75': round(float(np.percentile(terminal, 75)), 2),
-            'p95': round(float(np.percentile(terminal, 95)), 2),
-            'prob_gain': round(float((terminal > current).mean() * 100), 1),
-            'prob_up20': round(float((terminal > current * 1.2).mean() * 100), 1),
-            'prob_dn20': round(float((terminal < current * 0.8).mean() * 100), 1),
-        }
-
-    forward_estimates = {}
-    mc_chart = None
-    mc_stats = {}
-    log_ret = np.log(df['close'] / df['close'].shift(1)).dropna()
-    if len(log_ret) > 30:
-        mu = float(log_ret.mean())
-        sigma = float(log_ret.std())
-
-        # Calculate estimates at multiple horizons
-        forward_estimates['3m'] = _mc_forward_estimate(current_price, mu, sigma, 63)   # ~3 months
-        forward_estimates['6m'] = _mc_forward_estimate(current_price, mu, sigma, 126)  # ~6 months
-        forward_estimates['1y'] = _mc_forward_estimate(current_price, mu, sigma, 252)  # ~1 year
-        mc_stats = forward_estimates['1y'].copy()
-
-        # Full 1-year projection chart
-        horizon = 252
-        n_sims = 1000
-        rng = np.random.default_rng(42)
-        shocks = rng.normal(mu, sigma, size=(n_sims, horizon))
-        paths = current_price * np.exp(np.cumsum(shocks, axis=1))
-        paths = np.hstack([np.full((n_sims, 1), current_price), paths])
-
-        pct = np.percentile(paths, [5, 25, 50, 75, 95], axis=0)
-        future_dates = pd.bdate_range(df.index[-1], periods=horizon + 1)
-
-        mc_series = []
-        # Stack lower bound plus interval width to preserve percentile bands.
-        for low, high, label, opacity in [(0, 4, '5–95%', .12), (1, 3, '25–75%', .28)]:
-            mc_series.append(charts.line(label + ' lower', future_dates, pct[low], '#6366f1', width=0, stack=label, silent=True))
-            mc_series.append(charts.line(label, future_dates, pct[high] - pct[low], '#6366f1', width=0, stack=label, area=f'rgba(99,102,241,{opacity})'))
-        for band in mc_series:
-            band['tooltip'] = {'show': False, 'trigger': 'none'}
-        mc_series.append(charts.line('Median', future_dates, pct[2]))
-        refs = [charts.reference('y', current_price, 'Today')]
-        for days, label in [(64, '3m'), (127, '6m')]:
-            refs.append(charts.reference('x', pd.bdate_range(df.index[-1], periods=days)[-1].strftime('%Y-%m-%d'), label, '#6366f1'))
-        mc_option = charts.cartesian(mc_series, yname='Simulated Price ($)', refs=refs)
-        mc_option['legend'] = {'data': ['5–95%', '25–75%', 'Median']}
-        mc_chart = charts.render_chart(mc_option, height=350)
-
     return {
         'ticker': ticker.upper(),
         'current_price': current_price,
@@ -1691,14 +1630,7 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
             'var_95': latest_var_95,
             'var_99': latest_var_99,
             'poc_price': poc_price,
-            'mc_median':    mc_stats.get('median'),
-            'mc_p5':        mc_stats.get('p5'),
-            'mc_p95':       mc_stats.get('p95'),
-            'mc_prob_gain': mc_stats.get('prob_gain'),
-            'mc_prob_up20': mc_stats.get('prob_up20'),
-            'mc_prob_dn20': mc_stats.get('prob_dn20'),
         },
-        'forward_estimates': forward_estimates,
         'charts': {
             'distribution': dist_chart,
             'volatility': vol_chart,
@@ -1708,7 +1640,6 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
             'beta': beta_chart,
             'var': var_chart,
             'volume_profile': vp_chart,
-            'monte_carlo': mc_chart,
         }
     }
 
@@ -4171,7 +4102,6 @@ def ai_summary_page():
         "ticker": ticker,
         "current_price": analytics_data.get("current_price"),
         "general_stats": analytics_data.get("stats"),
-        "forward_estimates": analytics_data.get("forward_estimates"),
         "valuation": valuation_dict,
         "recommendations": positioning_data.get("recommendations"),
         "insider_sentiment": positioning_data.get("insider", {}).get("sentiment"),

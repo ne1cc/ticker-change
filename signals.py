@@ -31,7 +31,6 @@ WEIGHTS = {
     "trend": 0.20,
     "momentum": 0.16,
     "gex": 0.18,
-    "monte_carlo": 0.15,
     "volatility": 0.08,
     "tail_risk": 0.05,
     "valuation": 0.10,
@@ -154,21 +153,6 @@ def _gex(data) -> dict | None:
     return _factor("gex", "Dealer positioning (GEX)", score, " ".join(parts))
 
 
-def _monte_carlo(stats) -> dict | None:
-    pg = stats.get("mc_prob_gain")
-    if pg is None:
-        return None
-    if pg > 1.5:           # tolerate either 0-1 or 0-100 storage
-        pg, up, dn = pg / 100, (stats.get("mc_prob_up20") or 0) / 100, (stats.get("mc_prob_dn20") or 0) / 100
-    else:
-        up, dn = stats.get("mc_prob_up20") or 0, stats.get("mc_prob_dn20") or 0
-    score = _clip((pg - 0.5) * 2 * 0.7 + (up - dn) * 1.5)
-    read = (f"Monte-Carlo path simulation puts the odds of finishing higher over the "
-            f"horizon at {pg * 100:.0f}%, with {up * 100:.0f}% odds of a +20% move vs "
-            f"{dn * 100:.0f}% for −20% (assumes returns stay statistically like history).")
-    return _factor("monte_carlo", "Monte-Carlo path odds", score, read)
-
-
 def _tail_risk(stats) -> dict | None:
     v95, v99 = stats.get("var_95"), stats.get("var_99")
     if v95 is None:
@@ -233,7 +217,7 @@ def compute(ticker: str, data: dict) -> dict | None:
     builders = []
     if feat is not None:
         builders += [_trend(feat), _momentum(feat), _volatility(feat, stats)]
-    builders += [_gex(data), _monte_carlo(stats), _tail_risk(stats),
+    builders += [_gex(data), _tail_risk(stats),
                  _valuation(data), _ml(data)]
     factors = [f for f in builders if f]
     if not factors:

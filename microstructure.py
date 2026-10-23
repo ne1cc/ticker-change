@@ -1,16 +1,16 @@
 """Microstructure, Liquidity & Squeeze Vulnerability Engine.
 
 Implements:
-1. Easley-Kiefer-O'Hara VPIN (Volume-Synchronized Probability of Toxicity)
-2. Corwin-Schultz (2012) High-Low Bid-Ask Spread Estimator
-3. Roll (1984) Effective Spread from Serial Covariance of Price Changes
+1. Corwin-Schultz (2012) High-Low Bid-Ask Spread Estimator
+2. Roll (1984) Effective Spread from Serial Covariance of Price Changes
+3. Amihud (2002) illiquidity
 4. Squeeze Risk Index (Multi-factor: DTC, Short Interest % Float, CTB, Negative GEX)
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -21,8 +21,6 @@ class MicrostructureAnalytics:
     corwin_schultz_spread_pct: float
     roll_effective_spread_pct: float
     amihud_illiquidity: float
-    vpin_toxicity: float  # [0.0, 1.0]
-    toxicity_regime: str  # LOW, MODERATE, HIGH, CRITICAL
     squeeze_risk_score: float  # [0, 100]
     squeeze_risk_level: str  # LOW, ELEVATED, HIGH, EXTREME
 
@@ -122,63 +120,6 @@ def calculate_amihud_illiquidity(df: pd.DataFrame) -> float:
     return float(illiq)
 
 
-def calculate_vpin(trades: List[Dict[str, Any]], num_buckets: int = 50, bucket_size: Optional[int] = None) -> float:
-    """Calculate Easley-Kiefer-O'Hara VPIN from trade ticks or volume bars.
-
-    trades: list of dicts with {'price': float, 'volume': int, 'side': 'buy'|'sell' (or inferred via tick rule)}
-    """
-    if not trades:
-        return 0.20  # Neutral baseline
-
-    total_vol = sum(t.get("volume", 0) for t in trades)
-    if total_vol <= 0:
-        return 0.20
-
-    if not bucket_size:
-        bucket_size = max(int(total_vol / max(num_buckets, 1)), 100)
-
-    bucket_imbalances = []
-    curr_buy_vol = 0
-    curr_sell_vol = 0
-    curr_bucket_vol = 0
-
-    last_p = None
-    for t in trades:
-        p = t.get("price", 0.0)
-        v = t.get("volume", 0)
-        side = t.get("side")
-
-        # Inferred side via Tick Rule if missing
-        if not side:
-            if last_p is None or p >= last_p:
-                side = "buy"
-            else:
-                side = "sell"
-        last_p = p
-
-        while v > 0:
-            space = bucket_size - curr_bucket_vol
-            fill = min(v, space)
-            if side == "buy":
-                curr_buy_vol += fill
-            else:
-                curr_sell_vol += fill
-            curr_bucket_vol += fill
-            v -= fill
-
-            if curr_bucket_vol >= bucket_size:
-                bucket_imbalances.append(abs(curr_buy_vol - curr_sell_vol))
-                curr_buy_vol = 0
-                curr_sell_vol = 0
-                curr_bucket_vol = 0
-
-    if not bucket_imbalances:
-        return 0.20
-
-    vpin = sum(bucket_imbalances) / (len(bucket_imbalances) * bucket_size)
-    return float(np.clip(vpin, 0.0, 1.0))
-
-
 def compute_squeeze_risk_index(
     short_pct_float: float,
     days_to_cover: float,
@@ -235,25 +176,6 @@ def get_microstructure_analytics(
     roll_spread = calculate_roll_effective_spread(df)
     amihud = calculate_amihud_illiquidity(df)
 
-    # Convert OHLCV bars into simulated volume buckets for VPIN
-    pseudo_trades = []
-    if not df.empty:
-        closes = df["close"].values if "close" in df.columns else df["Close"].values
-        vols = df["volume"].values if "volume" in df.columns else df["Volume"].values
-        for i in range(1, len(closes)):
-            side = "buy" if closes[i] >= closes[i - 1] else "sell"
-            pseudo_trades.append({"price": float(closes[i]), "volume": int(vols[i]), "side": side})
-
-    vpin = calculate_vpin(pseudo_trades)
-    if vpin >= 0.65:
-        vpin_regime = "CRITICAL"
-    elif vpin >= 0.45:
-        vpin_regime = "HIGH"
-    elif vpin >= 0.25:
-        vpin_regime = "MODERATE"
-    else:
-        vpin_regime = "LOW"
-
     sq_score, sq_level = compute_squeeze_risk_index(
         short_pct_float=short_pct_float,
         days_to_cover=days_to_cover,
@@ -264,8 +186,6 @@ def get_microstructure_analytics(
         corwin_schultz_spread_pct=round(cs_spread * 100, 3),
         roll_effective_spread_pct=round(roll_spread * 100, 3),
         amihud_illiquidity=round(amihud, 4),
-        vpin_toxicity=round(vpin, 3),
-        toxicity_regime=vpin_regime,
         squeeze_risk_score=sq_score,
         squeeze_risk_level=sq_level,
     )
