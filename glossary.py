@@ -456,9 +456,9 @@ GLOSSARY: dict[str, dict] = {
     "vrp": {
         "term": "Variance Risk Premium (VRP)",
         "section": "Institutional Analytics",
-        "short": "Spread between ATM Implied Volatility and 30-Day Realized Historical Volatility.",
-        "long": "VRP = Implied Volatility - Realized Volatility. Positive VRP indicates expensive option premiums suitable for volatility sellers; negative VRP indicates underpriced option convexity favouring buyers.",
-        "formula": "VRP = IV_ATM - HV_30d",
+        "short": "Spread between ATM implied volatility (~30 days out) and 21-day Yang–Zhang realized volatility.",
+        "long": "VRP = ATM implied volatility (average of call and put on the strike nearest spot, expiry nearest 30 days) minus 21-session Yang–Zhang realized volatility. Positive VRP indicates expensive option premiums suitable for volatility sellers; negative VRP indicates underpriced option convexity favouring buyers.",
+        "formula": "VRP = IV_ATM(~30d) - RV_YZ(21d)",
     },
     "sec_8k": {
         "term": "SEC Form 8-K Filings",

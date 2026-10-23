@@ -241,6 +241,11 @@
 <!-- 3. Higher-Order Greeks Surface & Variance Risk Premium (VRP) -->
 {% if inst.higher_order_greeks or inst.vrp %}
 {% call panel('Higher-Order Greeks & Volatility Risk Premium') %}
+  {% if inst.atm_contract %}
+  <p class="text-[11px] text-zinc-400 mb-3 font-mono">
+    Priced on the real contract: {{ "%.2f"|format(inst.atm_contract.strike) }} call · exp {{ inst.atm_contract.expiration }} ({{ inst.atm_contract.dte }}d) · IV {{ "%.1f"|format(inst.atm_contract.iv * 100) }}%
+  </p>
+  {% endif %}
   <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
     
     <!-- Higher-Order Greeks Card (Vanna, Charm, Vomma) -->
@@ -315,21 +320,21 @@
           <span class="text-3xl font-bold font-mono {% if vrp.vrp_spread_pct > 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
             {{ "%+.2f"|format(vrp.vrp_spread_pct) }}%
           </span>
-          <span class="text-xs text-zinc-400">IV − HV30 Spread</span>
+          <span class="text-xs text-zinc-400">IV − RV21 Spread</span>
         </div>
       </div>
 
       <div class="mt-4 pt-3 border-t border-zinc-200/60 dark:border-zinc-800/60 space-y-2 text-xs font-mono">
         <div class="flex justify-between">
-          <span class="text-zinc-400 font-sans">ATM Implied Volatility:</span>
+          <span class="text-zinc-400 font-sans">ATM Implied Vol (~30d):</span>
           <span class="font-bold text-zinc-900 dark:text-zinc-100">{{ "%.2f"|format(vrp.atm_implied_vol) }}%</span>
         </div>
         <div class="flex justify-between">
-          <span class="text-zinc-400 font-sans">30D Realized Historical Vol:</span>
-          <span class="font-bold text-zinc-900 dark:text-zinc-100">{{ "%.2f"|format(vrp.realized_vol_30d) }}%</span>
+          <span class="text-zinc-400 font-sans">21D Yang–Zhang Realized Vol:</span>
+          <span class="font-bold text-zinc-900 dark:text-zinc-100">{{ "%.2f"|format(vrp.realized_vol) }}%</span>
         </div>
         <div class="flex justify-between">
-          <span class="text-zinc-400 font-sans">VRP Ratio (IV / HV30):</span>
+          <span class="text-zinc-400 font-sans">VRP Ratio (IV / RV21):</span>
           <span class="font-bold text-zinc-900 dark:text-zinc-100">{{ "%.2f"|format(vrp.vrp_ratio) }}x</span>
         </div>
       </div>

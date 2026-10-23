@@ -114,7 +114,7 @@ class TestAnalyticalModules(unittest.TestCase):
         self.assertIsInstance(greeks.charm, float)
         self.assertIsInstance(greeks.vomma, float)
 
-        vrp = calculate_variance_risk_premium(atm_implied_vol=0.32, realized_vol_30d=0.20)
+        vrp = calculate_variance_risk_premium(atm_implied_vol=0.32, realized_vol=0.20)
         self.assertEqual(vrp["vrp_spread_pct"], 12.0)
         self.assertIn("RICH_VOLATILITY", vrp["regime"])
 
@@ -180,7 +180,7 @@ class TestAnalyticalModules(unittest.TestCase):
                     },
                     'vrp': {
                         'atm_implied_vol': 26.5,
-                        'realized_vol_30d': 21.2,
+                        'realized_vol': 21.2,
                         'vrp_spread_pct': 5.3,
                         'vrp_ratio': 1.25,
                         'regime': 'NORMAL_PREMIUM (Moderate Variance Spread)',

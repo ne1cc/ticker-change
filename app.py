@@ -41,6 +41,7 @@ import options
 from option_chain_data import (chain_quality, valid_iv, valid_quote, finite_number,
                                 get_cboe_snapshot, cboe_chain)
 from options import compute_options_terminal, calculate_greeks
+from options.cones import compute_yang_zhang_vol
 import derivatives_alpha
 import backtest_engine
 import api_docs
@@ -975,6 +976,66 @@ def get_options_smile(ticker: str, current_price: float) -> str | None:
         return None
 
 
+def get_atm_contract(ticker: str, spot: float) -> dict | None:
+    """The real ATM contract nearest 30 days out: {expiration, dte, strike, iv}.
+
+    Contract: expiry with DTE >= 7 closest to 30; per side, the nearest-to-spot
+    strike within 5% that has a valid IV; `iv` (decimal) is the call/put mean.
+    Returns None when no chain or no valid IV exists -- callers hide, never default.
+    """
+    stock = _get_yf_ticker(ticker)
+    today = datetime.now().date()
+    dated = []
+    for exp in get_cached_expirations(ticker, stock) or []:
+        try:
+            dte = (datetime.strptime(exp, '%Y-%m-%d').date() - today).days
+        except ValueError:
+            continue
+        if dte >= 7:
+            dated.append((abs(dte - 30), exp, dte))
+    if not dated:
+        return None
+    _, exp, dte = min(dated)
+    cached = get_cached_chain(ticker, exp, stock=stock, spot_hint=spot)
+    if cached is None:
+        return None
+    rows = []
+    for side_df in cached[:2]:
+        if side_df is None or side_df.empty or 'impliedVolatility' not in side_df.columns:
+            continue
+        ok = side_df[((side_df['strike'] - spot).abs() <= spot * 0.05)
+                     & side_df['impliedVolatility'].map(valid_iv)]
+        if not ok.empty:
+            rows.append(ok.loc[(ok['strike'] - spot).abs().idxmin()])
+    if not rows:
+        return None
+    return {'expiration': exp, 'dte': dte,
+            'strike': float(min((r['strike'] for r in rows), key=lambda k: abs(k - spot))),
+            'iv': float(np.mean([r['impliedVolatility'] for r in rows]))}
+
+
+def _atm_derivatives(atm: dict | None, price_df: pd.DataFrame | None) -> dict | None:
+    """VRP and call Greeks for the real ATM contract; None when either input is missing.
+
+    Realized vol is the 21-session Yang-Zhang estimate (~30 calendar days, the
+    tenor of the contract's IV).
+    """
+    if not atm or price_df is None:
+        return None
+    rv = compute_yang_zhang_vol(price_df, 21)
+    if rv <= 0:
+        return None
+    greeks = derivatives_alpha.compute_higher_order_greeks(
+        spot=float(price_df['close'].iloc[-1]), strike=atm['strike'],
+        time_to_exp=max(atm['dte'], 1) / 365.0, volatility=atm['iv'],
+        risk_free_rate=0.045, is_call=True)
+    return {
+        'atm_contract': atm,
+        'higher_order_greeks': greeks.__dict__,
+        'vrp': derivatives_alpha.calculate_variance_risk_premium(atm['iv'], rv / 100.0),
+    }
+
+
 def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -> dict | None:
     """Build a dealer Gamma Exposure (GEX) profile from yfinance option chains.
 
@@ -1700,7 +1761,8 @@ def analytics_page():
             si_pct, si_dtc = _si_kwargs(ticker)
             si_payload, si_source = _short_interest_for(ticker)
             micro_res = microstructure.get_microstructure_analytics(
-                stock_inst_df, short_pct_float=si_pct, days_to_cover=si_dtc)
+                stock_inst_df, short_pct_float=si_pct, days_to_cover=si_dtc,
+                is_negative_gex=(data.get('gex') or {}).get('regime') == 'negative')
             macro_res = macro_engine.get_macro_financial_report(stock_inst_df, benchmark_df)
             events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
 
@@ -1718,22 +1780,9 @@ def analytics_page():
                 event_dict['car_result'] = car_result.__dict__ if car_result else None
                 sec_8k_events_with_car.append(event_dict)
 
-            # Higher-order Greeks & VRP
-            atm_iv = (data['gex']['spot'] * 0.01) if (data.get('gex') and data['gex'].get('spot')) else 0.25
-            spot_p = data.get('current_price', 100.0)
-            ann_vol = (data.get('stats', {}).get('annualised_vol') or 25.0) / 100.0
-            hog = derivatives_alpha.compute_higher_order_greeks(
-                spot=spot_p,
-                strike=spot_p,
-                time_to_exp=30.0 / 365.0,
-                volatility=max(ann_vol, 0.05),
-                risk_free_rate=0.045,
-                is_call=True
-            )
-            vrp_res = derivatives_alpha.calculate_variance_risk_premium(
-                atm_implied_vol=max(ann_vol * 1.05, 0.05),
-                realized_vol_30d=max(ann_vol, 0.05)
-            )
+            # VRP and Greeks come from the real ATM contract; absent chain -> panel hidden.
+            atm = _guard_section("atm_contract", lambda: get_atm_contract(ticker, data['current_price']))
+            atm_block = _atm_derivatives(atm, stock_inst_df) or {}
 
             data['institutional'] = {
                 'microstructure': micro_res.__dict__,
@@ -1748,8 +1797,7 @@ def analytics_page():
                     'upside_capture': macro_res.upside_capture_ratio,
                     'downside_capture': macro_res.downside_capture_ratio,
                 },
-                'higher_order_greeks': hog.__dict__,
-                'vrp': vrp_res,
+                **atm_block,
                 'sec_8k_events': sec_8k_events_with_car,
             }
     except Exception as e:
