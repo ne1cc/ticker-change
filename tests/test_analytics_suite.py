@@ -95,8 +95,10 @@ class TestAnalyticalModules(unittest.TestCase):
         self.assertIn("bear_beta", betas)
 
         up_cap, down_cap = calculate_capture_ratios(s_ret, b_ret)
-        self.assertIsInstance(up_cap, float)
-        self.assertIsInstance(down_cap, float)
+        # New contract: a number only when >= 6 up/down-market months exist,
+        # otherwise None (declared insufficient) — never a neutral 100.0.
+        for cap in (up_cap, down_cap):
+            self.assertTrue(cap is None or (isinstance(cap, float) and cap > 0.0))
 
     def test_higher_order_greeks_and_vrp(self):
         """Verify Vanna, Charm, Vomma, and VRP calculation."""
