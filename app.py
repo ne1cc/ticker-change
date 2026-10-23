@@ -14,6 +14,7 @@ import time
 import threading
 import math
 import os
+import re
 import hmac
 import sqlite3
 import traceback
@@ -124,15 +125,49 @@ def _fetch_yfinance_with_retry(symbol: str, period: str, retries: int = 3):
     return None
 
 
+def _period_floor(period: str):
+    """Earliest calendar date a cached history must cover to serve `period`,
+    or None when the period carries no depth requirement (1d/5d/ytd/max/unknown)."""
+    m = re.fullmatch(r"(\d+)(mo|y)", period or "")
+    if not m:
+        return None
+    n, unit = int(m.group(1)), m.group(2)
+    return pd.Timestamp.now().normalize() - pd.Timedelta(days=n * (30 if unit == "mo" else 365))
+
+
+def _covers_period(df: pd.DataFrame | None, period: str) -> bool:
+    start = _period_floor(period)
+    if start is None or df is None or df.empty:
+        return True
+    # 30d slack: yfinance rows start at the calendar boundary, minus holidays.
+    return df.index.min() <= start + pd.Timedelta(days=30)
+
+
+def _slice_to_period(df: pd.DataFrame | None, period: str) -> pd.DataFrame | None:
+    start = _period_floor(period)
+    if start is None or df is None or df.empty or df.index.min() >= start:
+        return df
+    return df[df.index >= start].copy()
+
+
+_PRICE_DEPTH_FETCH_ATTEMPTS: dict = {}
+_PRICE_DEPTH_RETRY_SECS = 3600  # throttle deep refetches (young IPOs never "cover" 5y)
+
+
 def get_or_fetch_prices(symbol: str, period: str = "5y") -> pd.DataFrame | None:
     """Return cached prices from the DB, refreshing from yfinance when stale.
 
     Layered for speed and resilience:
       1. In-process memo (skips redundant DB reads within a request).
       2. SQLite cache (skips the network when data is < 1h old).
-      3. yfinance fetch with retry/backoff on a miss.
+      3. yfinance fetch with retry/backoff on a miss — also triggered when the
+         cache is fresh but too shallow for the requested period (e.g. a 3mo
+         heatmap warm cannot serve a 5y page), throttled hourly per symbol.
       4. Stale-while-error: if the refresh fails but we hold older cached rows,
          serve those rather than returning nothing.
+
+    The memo and DB hold full history; `period` is applied as a slice on the
+    way out so callers get roughly the window they asked for.
     """
     symbol = symbol.upper()
 
@@ -140,12 +175,19 @@ def get_or_fetch_prices(symbol: str, period: str = "5y") -> pd.DataFrame | None:
     with _PRICE_MEMO_LOCK:
         cached = _PRICE_MEMO.get(symbol)
         if cached is not None and now - cached[0] < _PRICE_MEMO_TTL:
-            return cached[1]
+            return _slice_to_period(cached[1], period)
 
-    if not is_fresh(symbol):
-        df = _fetch_yfinance_with_retry(symbol, period)
-        if df is not None and not df.empty:
-            store_prices(symbol, df)
+    df = get_prices(symbol)
+    need_refresh = df is None or not is_fresh(symbol)
+    if not need_refresh and not _covers_period(df, period):
+        if now - _PRICE_DEPTH_FETCH_ATTEMPTS.get(symbol, 0.0) > _PRICE_DEPTH_RETRY_SECS:
+            need_refresh = True
+
+    if need_refresh:
+        _PRICE_DEPTH_FETCH_ATTEMPTS[symbol] = now
+        fetched = _fetch_yfinance_with_retry(symbol, period)
+        if fetched is not None and not fetched.empty:
+            store_prices(symbol, fetched)
         else:
             # Refresh failed — fall through and serve whatever we already have.
             print(f"Serving stale/cached data for {symbol} (refresh unavailable)")
@@ -156,6 +198,7 @@ def get_or_fetch_prices(symbol: str, period: str = "5y") -> pd.DataFrame | None:
     if result is not None and not result.empty:
         with _PRICE_MEMO_LOCK:
             _PRICE_MEMO[symbol] = (now, result)
+        return _slice_to_period(result, period)
 
     return result
 

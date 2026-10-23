@@ -204,3 +204,54 @@ def test_squeeze_badge_lists_assumed_inputs_not_just_si():
         html = render_template("analytics.html", data=data, ticker="T")
     assert "assumed si % float · dtc" in html
     assert "Cost-to-borrow excluded" in html
+
+
+# --- period= is honoured: shallow caches trigger a deeper fetch ----------------
+def _shallow_prices(n=43, freq="D"):
+    idx = pd.date_range(end=pd.Timestamp.now().normalize(), periods=n, freq=freq)
+    close = pd.Series(100.0, index=idx)
+    return pd.DataFrame({"Open": close, "High": close, "Low": close,
+                         "Close": close, "Volume": pd.Series(1_000_000, index=idx)})
+
+
+def test_shallow_cache_triggers_deeper_fetch_when_5y_requested(tmp_path, monkeypatch):
+    import db as db_module
+    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "t.db"))
+    db_module.init_db()
+    app_module._PRICE_MEMO.clear()
+    app_module._PRICE_DEPTH_FETCH_ATTEMPTS.clear()
+    db_module.store_prices("SHAL", _shallow_prices())
+
+    deep = _shallow_prices(1260)  # ~5y of calendar rows
+    fetch = patch.object(app_module, "_fetch_yfinance_with_retry", return_value=deep)
+    with fetch as m:
+        out = app_module.get_or_fetch_prices("SHAL", period="5y")
+    assert m.call_args.args[1] == "5y" or m.call_args.kwargs.get("period") == "5y"
+    assert len(out) == 1260  # 43 rows would have starved the page
+
+
+def test_period_2y_slices_cached_full_history(tmp_path, monkeypatch):
+    import db as db_module
+    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "t.db"))
+    db_module.init_db()
+    app_module._PRICE_MEMO.clear()
+    app_module._PRICE_DEPTH_FETCH_ATTEMPTS.clear()
+    db_module.store_prices("TWOY", _shallow_prices(1260))
+    with patch.object(app_module, "_fetch_yfinance_with_retry") as m:
+        out = app_module.get_or_fetch_prices("TWOY", period="2y")
+    assert m.call_count == 0  # fresh and deep enough: no network
+    assert 700 <= len(out) <= 740  # ~2y of calendar rows, not the full 5y
+
+
+def test_depth_refetch_is_throttled_for_short_history_symbols(tmp_path, monkeypatch):
+    import db as db_module
+    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "t.db"))
+    db_module.init_db()
+    app_module._PRICE_MEMO.clear()
+    app_module._PRICE_DEPTH_FETCH_ATTEMPTS.clear()
+    db_module.store_prices("IPOX", _shallow_prices(20))  # young IPO, can never cover 5y
+
+    with patch.object(app_module, "_fetch_yfinance_with_retry", return_value=None) as m:
+        app_module.get_or_fetch_prices("IPOX", period="5y")
+        app_module.get_or_fetch_prices("IPOX", period="5y")
+    assert m.call_count == 1  # second call within the hour must not re-hit yfinance
