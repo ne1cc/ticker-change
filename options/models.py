@@ -49,6 +49,10 @@ class GexProfile:
     vanna_series: List[float] = field(default_factory=list)
     charm_series: List[float] = field(default_factory=list)
     top_nodes: List[Dict[str, Any]] = field(default_factory=list)
+    gamma_flip_sticky_moneyness: Optional[float] = None
+    gamma_flip_diff: Optional[float] = None
+    rate_source: str = "Fallback 4.5%"
+    rf_rate: float = 0.045
 
 
 @dataclass
@@ -75,8 +79,8 @@ class RealizedVolCones:
     yang_zhang_90: float
     vrp: float  # IV - HV30
     vrp_regime: str  # e.g. "Negative VRP (Underpriced Volatility)"
-    iv_rank: float
-    iv_percentile: float
+    iv_rank: Optional[float]
+    iv_percentile: Optional[float]
     iv_min_52w: float
     iv_max_52w: float
     expected_move_1d: float
