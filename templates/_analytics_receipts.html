@@ -1,0 +1,20 @@
+{# Data receipts + section errors for one fragment. Context: receipts (list from analytics_receipts.receipt), status ({section: ok|error|timeout}). #}
+{% set bad = (status or {}).items() | rejectattr(1, 'equalto', 'ok') | list %}
+{% if receipts or bad %}
+<div class="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 px-3 py-2 text-[11px] text-zinc-500 dark:text-zinc-400" data-receipts>
+  {% for r in receipts or [] %}
+  <div class="flex flex-wrap gap-x-2" data-receipt="{{ r.panel }}" data-state="{{ r.state }}">
+    <span class="font-semibold text-zinc-600 dark:text-zinc-300">{{ r.label }}</span>
+    <span>{{ r.source }}</span>
+    <span>·</span>
+    {% if r.state == 'unavailable' %}<span class="text-zinc-400">unavailable</span>
+    {% elif r.state == 'no_asof' %}<span>as-of not recorded</span>
+    {% else %}<span class="{{ 'text-amber-600 dark:text-amber-400 font-semibold' if r.state in ('stale', 'assumed') else '' }}">{{ 'STALE · ' if r.state == 'stale' }}as of {{ r.as_of }} ({{ r.age_text }}){{ ' · ' ~ r.note if r.note }}</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% for name, st in bad %}
+  <div class="text-rose-500 dark:text-rose-400" data-section-error="{{ name }}">{{ name }}: {{ 'timed out' if st == 'timeout' else 'failed to load' }}</div>
+  {% endfor %}
+</div>
+{% endif %}

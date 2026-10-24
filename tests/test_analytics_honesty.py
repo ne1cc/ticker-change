@@ -99,16 +99,15 @@ def test_analytics_page_wires_gex_and_real_contract():
         seen.update(kw)
         return real(df, **kw)
 
-    minimal = {"current_price": 100.0, "charts": {}, "stats": {}}
-    with patch.object(app_module, "compute_analytics", return_value=minimal), \
-         patch.object(app_module, "get_or_fetch_prices", return_value=_prices()), \
+    with patch.object(app_module, "get_or_fetch_prices", return_value=_prices()), \
+         patch.object(app_module, "get_options_smile", return_value=None), \
+         patch.object(app_module.ml, "predict", return_value=None), \
          patch.object(app_module, "get_gex_profile", return_value=gex), \
          patch.object(app_module, "get_atm_contract", return_value=atm), \
          patch.object(app_module.microstructure, "get_microstructure_analytics", side_effect=spy), \
          patch.object(app_module.sec_8k, "fetch_and_parse_8k_filings", return_value=[]), \
-         patch.object(app_module.providers, "get_short_interest", return_value=None), \
-         patch.object(app_module.ai, "generate_report", return_value=None):
-        html = app_module.app.test_client().get("/analytics?ticker=TEST").get_data(as_text=True)
+         patch.object(app_module.providers, "get_short_interest", return_value=None):
+        html = app_module.app.test_client().get("/analytics/fragment/options?ticker=TEST").get_data(as_text=True)
     assert seen["is_negative_gex"] is True
     assert "Priced on the real contract" in html and "100.00 call" in html
 

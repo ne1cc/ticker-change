@@ -26,6 +26,7 @@ import providers
 import news
 import ml
 import ai
+import analytics_receipts
 import corporate_actions
 import event_study
 import sec_8k
@@ -1582,15 +1583,56 @@ def get_price_target_chart(ticker: str, current_price: float) -> str | None:
         return None
 
 
-def _guard_section(label, fn, default=None):
+SECTION_TIMEOUT_S = float(os.environ.get("ANALYTICS_SECTION_TIMEOUT_S", "8"))
+
+
+def _call_with_timeout(fn, timeout):
+    """Run fn in a daemon thread; raise TimeoutError if it outlives `timeout`.
+
+    shortcut: a timed-out call keeps running in its thread until the provider's
+    own timeout fires (Python cannot kill it); move to a bounded pool if hung
+    providers ever pile up."""
+    box = {}
+
+    def run():
+        try:
+            box["value"] = fn()
+        except BaseException as e:  # re-raised in the caller
+            box["error"] = e
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise TimeoutError(f"no result after {timeout:g}s")
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+def _guard_section(label, fn, default=None, timeout=None, status=None):
     """Run one analytics attachment; on failure log and return default so one
-    broken section never takes down the whole page."""
+    broken section never takes down the whole page.
+
+    timeout: seconds before the section is abandoned (None = run inline).
+    status: dict that receives {label: "ok" | "error" | "timeout"} so the page
+    can show an error state for just that section. Every call logs its timing."""
+    started = time.perf_counter()
+    outcome = "ok"
     try:
-        return fn()
+        return fn() if timeout is None else _call_with_timeout(fn, timeout)
+    except TimeoutError:
+        outcome = "timeout"
+        return default
     except Exception:
+        outcome = "error"
         print(f"[analytics:{label}] section failed:")
         traceback.print_exc()
         return default
+    finally:
+        if status is not None:
+            status[label] = outcome
+        print(f"[analytics:{label}] {outcome} in {(time.perf_counter() - started) * 1000:.0f}ms")
 
 
 def compute_analytics(ticker):
@@ -1766,8 +1808,144 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
     }
 
 
+def _trade_type_arg() -> str:
+    trade_type = request.args.get('trade_type', 'long_stock')
+    return trade_type if trade_type in decide.TRADE_TYPES else 'long_stock'
+
+
+def _fragment_base(ticker):
+    """Minimal data dict (+ price frame) the lazy fragments build on; avoids
+    re-running the full compute_analytics once per fragment. (None, None) when
+    there is no price history."""
+    price_df = get_or_fetch_prices(ticker)
+    if price_df is None or price_df.empty:
+        return None, None
+    return {'ticker': ticker, 'current_price': float(price_df['close'].iloc[-1]),
+            'charts': {}, 'stats': {}}, price_df
+
+
+def _attach_gex(ticker, data, status):
+    gex = _guard_section("gex", lambda: get_gex_profile(ticker, data['current_price']),
+                         timeout=SECTION_TIMEOUT_S, status=status)
+    data['charts']['gex'] = gex['chart'] if gex else None
+    data['gex'] = gex['stats'] if gex else None
+
+
+def _build_institutional(ticker, data, price_df):
+    """Institutional suite (microstructure, macro, SEC 8-K events, ATM-priced
+    VRP/Greeks). Raises on failure; the caller's _guard_section turns that into
+    a declared-missing section."""
+    spy_df = get_or_fetch_prices("SPY", period="2y")
+    stock_inst_df = price_df if price_df is not None else get_or_fetch_prices(ticker, period="2y")
+    if stock_inst_df is None or stock_inst_df.empty:
+        return None
+    benchmark_df = spy_df if spy_df is not None else stock_inst_df
+    si_pct, si_dtc, si_assumed = _si_inputs(ticker)
+    si_payload, si_source = _short_interest_for(ticker)
+    micro_res = microstructure.get_microstructure_analytics(
+        stock_inst_df, short_pct_float=si_pct, days_to_cover=si_dtc,
+        is_negative_gex=(data.get('gex') or {}).get('regime') == 'negative',
+        assumed_si_inputs=si_assumed)
+    macro_res = macro_engine.get_macro_financial_report(stock_inst_df, benchmark_df)
+    events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
+
+    # Cumulative Abnormal Return (Market Model) around each 8-K filing date.
+    # None is expected (not an error) when the filing is too recent to have
+    # a full post-event window, or too close to the start of price history
+    # to have a full pre-event estimation window.
+    sec_8k_events_with_car = []
+    for event in events_8k:
+        car_result = event_study.run_event_study(
+            stock_inst_df, benchmark_df, event.filing_date,
+            event_type="SEC_8K", ticker=ticker,
+        )
+        event_dict = event.__dict__.copy()
+        event_dict['car_result'] = car_result.__dict__ if car_result else None
+        sec_8k_events_with_car.append(event_dict)
+
+    # VRP and Greeks come from the real ATM contract; absent chain -> panel hidden.
+    atm = _guard_section("atm_contract", lambda: get_atm_contract(ticker, data['current_price']))
+    atm_block = _atm_derivatives(atm, stock_inst_df) or {}
+
+    return {
+        'microstructure': micro_res.__dict__,
+        'short_interest': {**(si_payload or {}), 'si_source': si_source},
+        'macro_conditioning': {
+            'regime': macro_res.current_regime,
+            'fed_funds_rate': macro_res.fed_funds_rate,
+            'yield_curve_2s10s': macro_res.yield_curve_2s10s_spread,
+            'is_inverted': macro_res.is_yield_curve_inverted,
+            'cpi_yoy': macro_res.cpi_inflation_yoy,
+            'betas': macro_res.regime_conditional_betas,
+            'regime_betas': macro_res.macro_regime_betas,
+            'upside_capture': macro_res.upside_capture_ratio,
+            'downside_capture': macro_res.downside_capture_ratio,
+        },
+        **atm_block,
+        'sec_8k_events': sec_8k_events_with_car,
+    }
+
+
+def _attach_company(ticker, data, price_df, status):
+    """Fundamentals, price target, insider flow, earnings. Each guarded and
+    timed independently; returns the panel receipts."""
+    def run(label, fn):
+        return _guard_section(label, fn, timeout=SECTION_TIMEOUT_S, status=status)
+
+    data['fundamentals'] = run("fundamentals", lambda: get_fundamentals(ticker))
+    data['charts']['price_target'] = run(
+        "price_target", lambda: get_price_target_chart(ticker, data['current_price']))
+    if price_df is not None:
+        data['charts']['insider'] = run("insider", lambda: get_insider_chart(ticker, price_df))
+        data['insider_summary'] = run("insider_summary", lambda: get_insider_summary(ticker))
+    data['earnings'] = run("earnings", lambda: earnings.build_earnings_section(ticker))
+    rcpt = analytics_receipts.receipt
+    return [
+        rcpt("fundamentals", ticker, present=bool(data['fundamentals'])),
+        rcpt("price_target", ticker, present=bool(data['charts'].get('price_target'))),
+        rcpt("insider", ticker, present=bool(data.get('insider_summary') or data['charts'].get('insider'))),
+        rcpt("earnings", ticker, present=bool(data['earnings'])),
+    ]
+
+
+def _attach_options(ticker, data, price_df, status):
+    """IV smile, GEX, ML signal, institutional suite; returns panel receipts."""
+    data['charts']['options_smile'] = _guard_section(
+        "options_smile", lambda: get_options_smile(ticker, data['current_price']),
+        timeout=SECTION_TIMEOUT_S, status=status)
+    _attach_gex(ticker, data, status)
+    data['ml'] = _guard_section("ml", lambda: ml.predict(ticker),
+                                timeout=SECTION_TIMEOUT_S, status=status)
+    # The suite fans out to SEC, FRED, short-interest and chain providers, so it gets 3x the budget.
+    data['institutional'] = _guard_section(
+        "institutional", lambda: _build_institutional(ticker, data, price_df),
+        timeout=SECTION_TIMEOUT_S * 3, status=status)
+    inst = data['institutional'] or {}
+    macro = inst.get('macro_conditioning') or {}
+    assumed = (inst.get('microstructure') or {}).get('squeeze_inputs_assumed') or []
+    rcpt = analytics_receipts.receipt
+    return [
+        rcpt("options_chain", ticker, present=bool(data['charts'].get('options_smile') or data['gex'])),
+        rcpt("ml", ticker, present=bool(data['ml'])),
+        rcpt("macro", ticker, present=macro.get('fed_funds_rate') is not None),
+        rcpt("short_interest", ticker, present=bool(inst), assumed=assumed),
+    ]
+
+
+def _full_ai_data(ticker):
+    """Everything ai._context reads. Runs inside the background report job."""
+    data = compute_analytics(ticker)
+    if data is None:
+        raise RuntimeError(f"no price data for {ticker}")
+    status = {}
+    _attach_company(ticker, data, get_or_fetch_prices(ticker), status)
+    _attach_options(ticker, data, get_or_fetch_prices(ticker), status)
+    return data
+
+
 @app.route('/analytics')
 def analytics_page():
+    """Cache-first core; slow sections load as fragments (/analytics/fragment/*)."""
     ticker = request.args.get('ticker', '').strip().upper()
     if not ticker:
         return render_template('analytics.html', data=None, ticker='')
@@ -1776,110 +1954,54 @@ def analytics_page():
         return render_template('analytics.html', data=None, ticker=ticker,
                                error=f"Could not retrieve data for {ticker}")
 
-    # Attach fundamentals
-    data['fundamentals'] = _guard_section(
-        "fundamentals", lambda: get_fundamentals(ticker))
-
-    # Attach options smile
-    data['charts']['options_smile'] = _guard_section(
-        "options_smile",
-        lambda: get_options_smile(ticker, data['current_price']))
-
-    # Attach dealer Gamma Exposure (GEX) profile
-    gex = _guard_section("gex", lambda: get_gex_profile(ticker, data['current_price']))
-    data['charts']['gex'] = gex['chart'] if gex else None
-    data['gex'] = gex['stats'] if gex else None
-
-    trade_type = request.args.get('trade_type', 'long_stock')
-    if trade_type not in decide.TRADE_TYPES:
-        trade_type = 'long_stock'
-    data['checklist'] = _guard_section(
-        "checklist", lambda: decide.build_checklist(ticker, data, trade_type))
-
-    # Attach insider chart (needs price df)
     price_df = get_or_fetch_prices(ticker)
+    prices_receipt = None
     if price_df is not None:
-        data['charts']['insider'] = _guard_section(
-            "insider", lambda: get_insider_chart(ticker, price_df))
-        data['insider_summary'] = _guard_section(
-            "insider_summary", lambda: get_insider_summary(ticker))
         data['charts']['cumulative_return'] = _guard_section(
-            "cumulative_return", lambda: get_cumulative_return_chart(ticker, price_df))
+            "cumulative_return", lambda: get_cumulative_return_chart(ticker, price_df),
+            timeout=SECTION_TIMEOUT_S)
+        prices_receipt = analytics_receipts.receipt("prices", ticker, present=True, as_of=price_df.index[-1])
+    return render_template('analytics.html', data=data, ticker=ticker, lazy=True,
+                           trade_type=_trade_type_arg(), prices_receipt=prices_receipt)
 
-    # Attach analyst price target
-    data['charts']['price_target'] = _guard_section(
-        "price_target", lambda: get_price_target_chart(ticker, data['current_price']))
 
-    # Machine-learning Buy/Hold/Sell signal (None until a model is trained)
-    data['ml'] = _guard_section("ml", lambda: ml.predict(ticker))
+@app.route('/analytics/fragment/<name>')
+def analytics_fragment(name):
+    """One slow /analytics section as an HTML fragment. Always 200 with
+    per-section error notes; 404 for an unknown fragment or ticker without prices."""
+    ticker = request.args.get('ticker', '').strip().upper()
+    if name not in ('checklist', 'company', 'options', 'ai') or not ticker:
+        abort(404)
+    data, price_df = _fragment_base(ticker)
+    if data is None:
+        abort(404)
+    status, receipts = {}, []
 
-    # Attach Institutional Analytics Suite (Microstructure, Macro Conditioning, Higher-Order Greeks, 8-K + Event Study)
-    try:
-        spy_df = get_or_fetch_prices("SPY", period="2y")
-        stock_inst_df = price_df if price_df is not None else get_or_fetch_prices(ticker, period="2y")
-        if stock_inst_df is not None and not stock_inst_df.empty:
-            benchmark_df = spy_df if spy_df is not None else stock_inst_df
-            si_pct, si_dtc, si_assumed = _si_inputs(ticker)
-            si_payload, si_source = _short_interest_for(ticker)
-            micro_res = microstructure.get_microstructure_analytics(
-                stock_inst_df, short_pct_float=si_pct, days_to_cover=si_dtc,
-                is_negative_gex=(data.get('gex') or {}).get('regime') == 'negative',
-                assumed_si_inputs=si_assumed)
-            macro_res = macro_engine.get_macro_financial_report(stock_inst_df, benchmark_df)
-            events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
+    if name == 'ai':
+        report = ai.report_status(ticker, lambda: _full_ai_data(ticker))
+        if report['state'] == 'unconfigured':
+            return ''
+        if report['state'] == 'ready':
+            report['sections'] = ai.parse_html_sections(report['html'])
+            report['receipt'] = analytics_receipts.receipt(
+                "ai", ticker, present=True, as_of=report['generated_at'])
+        return render_template('_analytics_ai.html', ai=report)
 
-            # Cumulative Abnormal Return (Market Model) around each 8-K filing date.
-            # None is expected (not an error) when the filing is too recent to have
-            # a full post-event window, or too close to the start of price history
-            # to have a full pre-event estimation window.
-            sec_8k_events_with_car = []
-            for event in events_8k:
-                car_result = event_study.run_event_study(
-                    stock_inst_df, benchmark_df, event.filing_date,
-                    event_type="SEC_8K", ticker=ticker,
-                )
-                event_dict = event.__dict__.copy()
-                event_dict['car_result'] = car_result.__dict__ if car_result else None
-                sec_8k_events_with_car.append(event_dict)
+    if name == 'checklist':
+        data['fundamentals'] = _guard_section("fundamentals", lambda: get_fundamentals(ticker),
+                                              timeout=SECTION_TIMEOUT_S, status=status)
+        _attach_gex(ticker, data, status)
+        trade_type = _trade_type_arg()
+        checklist = _guard_section("checklist", lambda: decide.build_checklist(ticker, data, trade_type),
+                                   timeout=SECTION_TIMEOUT_S, status=status)
+        body = render_template('_checklist.html', checklist=checklist)
+        failed = {k: v for k, v in status.items() if v != 'ok'}
+        return body + render_template('_analytics_receipts.html', receipts=[], status=failed)
 
-            # VRP and Greeks come from the real ATM contract; absent chain -> panel hidden.
-            atm = _guard_section("atm_contract", lambda: get_atm_contract(ticker, data['current_price']))
-            atm_block = _atm_derivatives(atm, stock_inst_df) or {}
-
-            data['institutional'] = {
-                'microstructure': micro_res.__dict__,
-                'short_interest': {**(si_payload or {}), 'si_source': si_source},
-                'macro_conditioning': {
-                    'regime': macro_res.current_regime,
-                    'fed_funds_rate': macro_res.fed_funds_rate,
-                    'yield_curve_2s10s': macro_res.yield_curve_2s10s_spread,
-                    'is_inverted': macro_res.is_yield_curve_inverted,
-                    'cpi_yoy': macro_res.cpi_inflation_yoy,
-                    'betas': macro_res.regime_conditional_betas,
-                    'regime_betas': macro_res.macro_regime_betas,
-                    'upside_capture': macro_res.upside_capture_ratio,
-                    'downside_capture': macro_res.downside_capture_ratio,
-                },
-                **atm_block,
-                'sec_8k_events': sec_8k_events_with_car,
-            }
-    except Exception as e:
-        print(f"Error computing institutional analytics for {ticker}: {e}")
-        data['institutional'] = None
-
-    # Earnings Event Study — CAR per past print + upcoming-print block.
-    data['earnings'] = _guard_section(
-        "earnings", lambda: earnings.build_earnings_section(ticker))
-
-    # AI analyst report — reads everything above, including the ML signal
-    ai_report_html = ai.generate_report(ticker, data)
-    data['ai_report'] = ai_report_html
-    if ai_report_html:
-        data['ai_sections'] = ai.parse_html_sections(ai_report_html)
-    else:
-        data['ai_sections'] = None
-
-    return render_template('analytics.html', data=data, ticker=ticker)
+    attach = _attach_company if name == 'company' else _attach_options
+    receipts = attach(ticker, data, price_df, status)
+    return render_template(f'_analytics_{name}.html', data=data, ticker=ticker,
+                           receipts=receipts, status=status)
 
 
 @app.route('/api/checklist/<ticker>')

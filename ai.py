@@ -16,6 +16,7 @@ report section simply doesn't render.
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime
 
 import requests
@@ -371,6 +372,44 @@ def generate_report(ticker: str, data: dict) -> str | None:
     html = _to_html(text)
     db.cache_set("ai_report", ticker, {"html": html, "provider": used})
     return html
+
+
+REPORT_RETRY_HOURS = 0.1  # a failed or in-flight generation is not restarted for ~6 min
+
+
+def _run_report_job(ticker: str, build_data) -> None:
+    try:
+        html = generate_report(ticker, build_data())
+    except Exception as e:
+        print(f"AI report job failed for {ticker}: {e}")
+        html = None
+    if not html:
+        db.cache_set("ai_report_failed", ticker, {"failed": True})
+
+
+def report_status(ticker: str, build_data) -> dict:
+    """Non-blocking report state for /analytics; never waits on a provider.
+
+    Contract: returns {"state": ...} where state is
+    - "unconfigured": no AI provider key, nothing to show;
+    - "ready" (+ html, generated_at): served from the 12h api_cache;
+    - "failed": the last attempt produced nothing, retried after REPORT_RETRY_HOURS;
+    - "pending": a background thread is generating (this worker or another).
+
+    Limits: the job lock is cross-process (db.try_claim_lock) and expires after
+    REPORT_RETRY_HOURS, so a generation slower than that may be started twice.
+    """
+    ticker = ticker.upper()
+    if not providers.ai_providers():
+        return {"state": "unconfigured"}
+    cached, fetched_at = db.cache_get_with_age("ai_report", ticker, CACHE_TTL_HOURS)
+    if cached is not None and cached.get("html"):
+        return {"state": "ready", "html": cached["html"], "generated_at": fetched_at}
+    if db.cache_get("ai_report_failed", ticker, REPORT_RETRY_HOURS) is not None:
+        return {"state": "failed"}
+    if db.try_claim_lock(f"ai_report_job:{ticker}", REPORT_RETRY_HOURS):
+        threading.Thread(target=_run_report_job, args=(ticker, build_data), daemon=True).start()
+    return {"state": "pending"}
 
 
 COMPREHENSIVE_SYSTEM = """You are a world-class quantitative hedge fund strategist and financial research director. You are given a comprehensive, multi-dimensional dataset of a single stock ticker containing daily returns stats, tail risk calculations (VaR, Expected Shortfall), valuation multiples, dealer GEX walls/ regime flip details, insider trading MSP sentiment, top institutional 13F holders, seasonality history, momentum indices, and machine learning model signal/feature weights.
