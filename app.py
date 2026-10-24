@@ -28,6 +28,7 @@ import ml
 import ai
 import analytics_receipts
 import corporate_actions
+import event_pool
 import event_study
 import sec_8k
 import snapshot_store
@@ -1707,11 +1708,13 @@ def _attach_car_to_8k_events(events, stock_df, benchmark_df, ticker):
     None (the table still lists them). Windows are per type, with a
     separate drift leg, and after-close filings shift the event day to
     the next session."""
+    pool = event_pool.current_pool()
     out = []
     for event in events:
         if event.event_type is None:
             event_dict = event.__dict__.copy()
             event_dict['car_result'] = None
+            event_dict['pool'] = None
             out.append(event_dict)
             continue
         ev_win, drift_win = event_study.windows_for(event.event_type)
@@ -1723,6 +1726,8 @@ def _attach_car_to_8k_events(events, stock_df, benchmark_df, ticker):
         )
         event_dict = event.__dict__.copy()
         event_dict['car_result'] = car_result.__dict__ if car_result else None
+        event_dict['pool'] = event_pool.pool_percentile(
+            pool, event.event_type, car_result.car if car_result else None)
         out.append(event_dict)
     return out
 
