@@ -429,7 +429,7 @@ def get_openapi_spec() -> Dict[str, Any]:
                 "get": {
                     "tags": ["Market Data & Analytics"],
                     "summary": "Comprehensive Fundamental & Statistical Analytics",
-                    "description": "Returns forward analyst estimates, distribution statistics, historical drawdown, and valuation multiples.",
+                    "description": "Returns distribution statistics, historical drawdown, valuation multiples, and (under `factors`) the FF5+momentum factor decomposition with Newey-West t-stats, annualised alpha, residual volatility, beta hygiene (OLS/Dimson/Blume/Vasicek) and declared unavailable/insufficient states. Chart HTML is stripped.",
                     "parameters": [
                         {
                             "name": "ticker",

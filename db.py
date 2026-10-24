@@ -3,7 +3,7 @@ import os
 import sqlite3
 import json
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 
 DB_PATH = os.environ.get("DB_PATH", "stocks.db")
@@ -24,51 +24,7 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         conn.executescript("""
-            CREATE TABLE IF NOT EXISTS tickers (
-                symbol       TEXT PRIMARY KEY,
-                last_fetched DATETIME NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS daily_prices (
-                symbol  TEXT    NOT NULL,
-                date    DATE    NOT NULL,
-                open    REAL    NOT NULL,
-                high    REAL    NOT NULL,
-                low     REAL    NOT NULL,
-                close   REAL    NOT NULL,
-                volume  INTEGER NOT NULL,
-                PRIMARY KEY (symbol, date)
-            );
-
-            CREATE TABLE IF NOT EXISTS api_cache (
-                provider   TEXT     NOT NULL,
-                key        TEXT     NOT NULL,
-                fetched_at DATETIME NOT NULL,
-                payload    TEXT     NOT NULL,
-                PRIMARY KEY (provider, key)
-            );
-
-            CREATE TABLE IF NOT EXISTS app_settings (
-                key   TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS news_request_usage (
-                day      TEXT PRIMARY KEY,
-                attempts INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS gex_snapshots (
-                ticker      TEXT NOT NULL,
-                date        TEXT NOT NULL,
-                gamma_flip  REAL,
-                call_wall   REAL,
-                put_wall    REAL,
-                spot        REAL,
-                created_at  TEXT NOT NULL,
-                PRIMARY KEY (ticker, date)
-            );
-        """)
+            CREATE TABLE IF NOT EXISTS tickers (\n                symbol       TEXT PRIMARY KEY,\n                last_fetched DATETIME NOT NULL\n            );\n\n            CREATE TABLE IF NOT EXISTS daily_prices (\n                symbol  TEXT    NOT NULL,\n                date    DATE    NOT NULL,\n                open    REAL    NOT NULL,\n                high    REAL    NOT NULL,\n                low     REAL    NOT NULL,\n                close   REAL    NOT NULL,\n                volume  INTEGER NOT NULL,\n                PRIMARY KEY (symbol, date)\n            );\n\n            CREATE TABLE IF NOT EXISTS api_cache (\n                provider   TEXT     NOT NULL,\n                key        TEXT     NOT NULL,\n                fetched_at DATETIME NOT NULL,\n                payload    TEXT     NOT NULL,\n                PRIMARY KEY (provider, key)\n            );\n\n            CREATE TABLE IF NOT EXISTS app_settings (\n                key   TEXT PRIMARY KEY,\n                value TEXT NOT NULL\n            );\n\n            CREATE TABLE IF NOT EXISTS news_request_usage (\n                day      TEXT PRIMARY KEY,\n                attempts INTEGER NOT NULL\n            );\n\n            CREATE TABLE IF NOT EXISTS gex_snapshots (\n                ticker      TEXT NOT NULL,\n                date        TEXT NOT NULL,\n                gamma_flip  REAL,\n                call_wall   REAL,\n                put_wall    REAL,\n                spot        REAL,\n                created_at  TEXT NOT NULL,\n                PRIMARY KEY (ticker, date)\n            );\n\n            CREATE TABLE IF NOT EXISTS short_interest_snapshots (\n                ticker           TEXT NOT NULL,\n                date             TEXT NOT NULL,\n                short_pct_float  REAL,\n                short_ratio      REAL,\n                shares_short     INTEGER,\n                shares_float     INTEGER,\n                created_at       TEXT NOT NULL,\n                PRIMARY KEY (ticker, date)\n            );\n        """)
 
 
 def reserve_news_request(day: str, limit: int = 90) -> bool:
@@ -284,9 +240,13 @@ def get_prices_batch(symbols: list[str]) -> dict[str, pd.DataFrame]:
 
 
 def store_prices(symbol: str, df: pd.DataFrame):
+    if df is None or df.empty:
+        return
     symbol = symbol.upper()
     df = df.copy()
-    # Drop rows with any NaN in essential columns to avoid IntegrityError in SQLite
+    if df is None or df.empty:
+        return
+
     df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
     df.index = pd.to_datetime(df.index).tz_localize(None)
 
@@ -314,6 +274,8 @@ def store_prices(symbol: str, df: pd.DataFrame):
             (symbol, datetime.utcnow().isoformat()),
         )
 
+save_prices = store_prices
+
 
 def insert_gex_snapshot(
     ticker: str,
@@ -333,3 +295,40 @@ def insert_gex_snapshot(
             (ticker.upper(), date, gamma_flip, call_wall, put_wall, spot,
              datetime.utcnow().isoformat()),
         )
+
+
+def insert_short_interest_snapshot(
+    ticker: str,
+    date: str,
+    short_pct_float: float | None = None,
+    short_ratio: float | None = None,
+    shares_short: int | None = None,
+    shares_float: int | None = None,
+):
+    """Insert-or-ignore one daily Short Interest snapshot row. Idempotent by design."""
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO short_interest_snapshots "
+            "(ticker, date, short_pct_float, short_ratio, shares_short, shares_float, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                ticker.upper(),
+                date,
+                short_pct_float,
+                short_ratio,
+                shares_short,
+                shares_float,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def get_short_interest_history(ticker: str) -> list[dict]:
+    """Retrieve historical short interest snapshots for ticker."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT ticker, date, short_pct_float, short_ratio, shares_short, shares_float, created_at "
+            "FROM short_interest_snapshots WHERE ticker = ? ORDER BY date ASC",
+            (ticker.upper(),),
+        ).fetchall()
+    return [dict(r) for r in rows]
