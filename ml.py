@@ -12,9 +12,10 @@ Design (see README → "ML signal"):
   * Model is a gradient-boosted tree (LightGBM if installed, else sklearn's
     HistGradientBoosting). It outputs class *probabilities*, surfaced to the user
     as a confidence-weighted signal — never a hard "BUY".
-  * Validation is **walk-forward with an embargo** (train on the past, test on
-    the next block, gap = HORIZON to remove label overlap) and is scored against
-    buy-and-hold after a cost assumption. Plain shuffled CV would leak.
+   * Validation is **purged k-fold with embargo** (test blocks purged of any
+     training row whose HORIZON-day label window overlaps the block, plus an
+     embargo gap) for the OOS estimates, plus walk-forward with a HORIZON gap
+     for chronological reporting. Plain shuffled CV would leak.
 
 This is a directional, educational signal on delayed end-of-day data — not advice.
 
@@ -36,6 +37,7 @@ from __future__ import annotations
 import os
 import pickle
 import sys
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -274,6 +276,211 @@ def _importances(model, X: pd.DataFrame, y: pd.Series) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Purged k-fold with embargo (López de Prado, Advances in Financial ML, ch. 7) #
+# --------------------------------------------------------------------------- #
+def purged_kfold(dates: pd.Series, n_splits: int = 5, embargo: int | None = None) -> list:
+    """(train_idx, test_idx) splits over contiguous date blocks, purged + embargoed.
+
+    Triple-barrier labels overlap their HORIZON-day window, so a training row
+    whose label window touches the test block leaks the test label into fit.
+    Each split therefore (a) purges training rows within HORIZON day-positions
+    of the test block on either side (their label windows overlap) and
+    (b) embargoes `embargo` further positions after the block (default
+    HORIZON, derived from the label horizon) against serial-correlation leak.
+    """
+    embargo = HORIZON if embargo is None else embargo
+    unique_dates = pd.Series(sorted(dates.unique()))
+    pos = dates.map({d: i for i, d in enumerate(unique_dates)}).to_numpy()
+    n_days = len(unique_dates)
+    edges = np.linspace(0, n_days, n_splits + 1).astype(int)
+    splits = []
+    for k in range(n_splits):
+        lo, hi = edges[k], edges[k + 1]
+        test_idx = np.where((pos >= lo) & (pos < hi))[0]
+        train_idx = np.where((pos < lo - HORIZON) | (pos > hi - 1 + HORIZON + embargo))[0]
+        splits.append((train_idx, test_idx))
+    return splits
+
+
+# --------------------------------------------------------------------------- #
+# Model card — persisted OOS evaluation (#149)                                 #
+# --------------------------------------------------------------------------- #
+CARD_MAX_AGE_DAYS = 30  # older cards flag the model as unvalidated for the UI gate
+IC_TSTAT_GATE = 2.0     # |IC t-stat| the OOS evidence must clear to show the call (#151)
+
+CLASS_ORDER = [-1, 0, 1]  # column order for all probability matrices (Sell/Hold/Buy)
+
+
+def card_status(bundle: dict | None) -> str:
+    """'ok' | 'stale' | 'missing' — stale or missing means unvalidated."""
+    card = (bundle or {}).get("card")
+    if not card or not card.get("trained_at"):
+        return "missing"
+    try:
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(card["trained_at"])
+    except (ValueError, TypeError):
+        return "stale"
+    return "ok" if age.total_seconds() <= CARD_MAX_AGE_DAYS * 86400 else "stale"
+
+
+def purged_oof(X: pd.DataFrame, y: pd.Series, dates: pd.Series, returns: pd.Series,
+               n_splits: int = 5) -> dict | None:
+    """Out-of-fold predictions from purged k-fold with embargo.
+
+    Returns {y, pred, proba, ret} with proba columns ordered [-1, 0, 1]; folds
+    are chronological, so consecutive rows are temporally comparable. Skips
+    folds that are too small or single-class. None when no fold is usable.
+    """
+    classes = [-1, 0, 1]
+    proba = np.full((len(X), len(classes)), np.nan)
+    pred = np.full(len(X), np.nan)
+    for train_idx, test_idx in purged_kfold(dates, n_splits=n_splits):
+        if len(test_idx) == 0 or len(train_idx) < 50:
+            continue
+        ytr = y.iloc[train_idx]
+        if ytr.nunique() < 2:
+            continue
+        m = _new_model()
+        if m is None:
+            return None
+        try:
+            m.fit(X.iloc[train_idx], ytr, sample_weight=_sample_weights(ytr))
+        except TypeError:
+            m.fit(X.iloc[train_idx], ytr)
+        cols = {int(c): j for j, c in enumerate(m.classes_)}
+        for c, j in cols.items():
+            if c in classes:
+                proba[test_idx, classes.index(c)] = m.predict_proba(X.iloc[test_idx])[:, j]
+        pred[test_idx] = m.predict(X.iloc[test_idx])
+    ok = ~np.isnan(pred)
+    if not ok.any():
+        return None
+    return {"y": y.to_numpy()[ok], "pred": pred[ok], "proba": proba[ok],
+            "ret": returns.to_numpy()[ok]}
+
+
+def build_model_card(oof: dict, tickers: list[str], n_samples: int) -> dict:
+    """Model card: provenance plus the OOS evaluation from purged k-fold.
+
+    Contract:
+    - Returns a JSON-safe dict stored in the bundle under "card".
+    - ic/ic_tstat are None when the rank IC is undefined (flat/degenerate OOF).
+    """
+    from scipy.stats import spearmanr
+    from sklearn.metrics import confusion_matrix, log_loss, precision_score
+
+    classes = CLASS_ORDER
+    y, pred, proba, ret = oof["y"], oof["pred"], oof["proba"], oof["ret"]
+    n = len(y)
+    cm = confusion_matrix(y, pred, labels=classes)
+    prec = precision_score(y, pred, labels=classes, average=None, zero_division=0)
+    edge_scores = proba[:, classes.index(1)] - proba[:, classes.index(-1)]
+    ic_res = spearmanr(edge_scores, ret)
+    ic = float(ic_res.statistic) if np.isfinite(ic_res.statistic) else None
+    # t-stat of the rank IC under H0: IC = 0 (standard large-n approximation)
+    ic_tstat = (ic * np.sqrt((n - 2) / (1 - ic ** 2))) if (ic is not None and n >= 3 and abs(ic) < 1) else None
+    y_idx = pd.Series(y).map({c: i for i, c in enumerate(classes)}).to_numpy()
+    brier = float(np.mean(np.sum((proba - np.eye(3)[y_idx]) ** 2, axis=1)))
+
+    return {
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "universe": list(tickers),
+        "horizon": HORIZON,
+        "n_samples": int(n_samples),
+        "oos": {
+            "n": int(n),
+            "confusion_matrix": cm.tolist(),   # rows = true, cols = pred, order Sell/Hold/Buy
+            "precision": {"Sell": round(float(prec[0]), 3), "Hold": round(float(prec[1]), 3),
+                          "Buy": round(float(prec[2]), 3)},
+            "brier": round(brier, 6),
+            "log_loss": round(float(log_loss(y, proba, labels=classes)), 6),
+            "ic": None if ic is None else round(ic, 4),
+            "ic_tstat": None if ic_tstat is None else round(float(ic_tstat), 2),
+            "hit_rate": round(float((pred == y).mean()), 4),
+            # share of consecutive OOF predictions that flip direction
+            "turnover": round(float((pred[1:] != pred[:-1]).mean()), 4),
+        },
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Probability calibration (#150)                                               #
+# --------------------------------------------------------------------------- #
+def fit_calibrator(oof: dict) -> dict | None:
+    """Per-class Platt scaling (logistic on the raw class probability), fit on
+    the purged OOF predictions.
+
+    Contract:
+    - Returns {class: fitted LogisticRegression} or None when nothing fits.
+    - Classes whose OOF labels are single-valued are absent; apply_calibrator
+      falls back to the raw probability for those.
+    """
+    from sklearn.linear_model import LogisticRegression
+    proba, y = oof["proba"], oof["y"]
+    calibrator = {}
+    for j, c in enumerate(CLASS_ORDER):
+        target = (pd.Series(y) == c).astype(int)
+        if target.nunique() < 2:
+            continue
+        lr = LogisticRegression(C=1e6, max_iter=1000)
+        lr.fit(proba[:, [j]], target)
+        calibrator[c] = lr
+    return calibrator or None
+
+
+def apply_calibrator(proba: np.ndarray, calibrator: dict) -> np.ndarray:
+    """Map raw class probabilities through the per-class Platt scaling and
+    renormalise each row to sum 1; classes without a calibrator keep raw."""
+    out = proba.copy()
+    for c, lr in calibrator.items():
+        out[:, CLASS_ORDER.index(c)] = lr.predict_proba(proba[:, [CLASS_ORDER.index(c)]])[:, 1]
+    totals = out.sum(axis=1, keepdims=True)
+    totals[totals <= 0] = 1.0
+    return out / totals
+
+
+def expected_calibration_error(proba: np.ndarray, y: np.ndarray, n_bins: int = 10) -> float:
+    """Multiclass one-vs-rest ECE: count-weighted |mean predicted p − observed
+    frequency| over probability bins, averaged over classes."""
+    ece, total = 0.0, 0
+    for j in range(proba.shape[1]):
+        y_bin = (y == CLASS_ORDER[j]).astype(float)
+        p = proba[:, j]
+        bins = np.minimum((p * n_bins).astype(int), n_bins - 1)
+        for b in range(n_bins):
+            mask = bins == b
+            if mask.any():
+                ece += int(mask.sum()) * abs(p[mask].mean() - y_bin[mask].mean())
+                total += int(mask.sum())
+    return float(ece / total) if total else 0.0
+
+
+def reliability_bins(proba: np.ndarray, y: np.ndarray, n_bins: int = 10) -> list:
+    """Per-class reliability curve points {x: mean predicted, y: observed freq, n}
+    — the data behind the reliability diagram."""
+    curve = []
+    for j, c in enumerate(CLASS_ORDER):
+        y_bin = (y == CLASS_ORDER[j]).astype(float)
+        p = proba[:, j]
+        bins = np.minimum((p * n_bins).astype(int), n_bins - 1)
+        points = []
+        for b in range(n_bins):
+            mask = bins == b
+            if mask.any():
+                points.append({"x": round(float(p[mask].mean()), 4),
+                               "y": round(float(y_bin[mask].mean()), 4),
+                               "n": int(mask.sum())})
+        curve.append({"class": c, "points": points})
+    return curve
+
+
+def reliability_from_bundle() -> list | None:
+    """Stored reliability curve from the bundle's card (None without one)."""
+    bundle = _load()
+    return ((bundle.get("card") or {}).get("reliability")) if bundle else None
+
+
+# --------------------------------------------------------------------------- #
 # Walk-forward validation                                                      #
 # --------------------------------------------------------------------------- #
 def walk_forward(X: pd.DataFrame, y: pd.Series, dates: pd.Series, returns: pd.Series, n_folds: int = 5) -> None:
@@ -340,6 +547,23 @@ def train(tickers: list[str]) -> None:
     
     walk_forward(X, y, dates, returns)
 
+    # Purged k-fold with embargo: the leakage-controlled OOS estimate (walk-forward
+    # above stays for chronological reporting). Feeds the model card + calibrator.
+    oof = purged_oof(X, y, dates, returns)
+    card = build_model_card(oof, tickers, len(X)) if oof else None
+    calibrator = fit_calibrator(oof) if oof else None
+    if card and calibrator and oof:
+        ece_before = expected_calibration_error(oof["proba"], oof["y"])
+        ece_after = expected_calibration_error(apply_calibrator(oof["proba"], calibrator), oof["y"])
+        card["calibration"] = {"method": "platt", "ece_before": round(ece_before, 4),
+                               "ece_after": round(ece_after, 4)}
+        card["reliability"] = reliability_bins(oof["proba"], oof["y"])
+        print(f"Calibration (platt on OOF): ECE {ece_before:.3f} -> {ece_after:.3f}")
+    if card:
+        oos = card["oos"]
+        print(f"Purged k-fold (embargo={HORIZON}): oos acc={oos['hit_rate']:.3f}  "
+              f"brier={oos['brier']:.3f}  ic={oos['ic']} (t={oos['ic_tstat']})  n={oos['n']}")
+
     model = _new_model()
     if model is None:
         raise SystemExit("Install a backend first: pip install lightgbm  (or scikit-learn)")
@@ -355,7 +579,8 @@ def train(tickers: list[str]) -> None:
 
     with open(MODEL_PATH, "wb") as f:
         pickle.dump({"model": model, "features": FEATURES, "horizon": HORIZON,
-                     "importances": importances, "feature_stats": feature_stats}, f)
+                     "importances": importances, "feature_stats": feature_stats,
+                     "card": card, "oof": oof, "calibrator": calibrator}, f)
     print(f"\nSaved model → {MODEL_PATH}")
 
     # Invalidate cached predictions — they came from the previous model and the
@@ -486,6 +711,12 @@ def predict(ticker: str) -> dict | None:
     classes = list(model.classes_)
     proba = model.predict_proba(feat)[0]
     p = {int(c): float(pr) for c, pr in zip(classes, proba)}
+    # Calibrated probabilities replace the raw ones when a calibrator was fit at
+    # train time (#150) — 'confidence' is then the calibrated max class prob.
+    calibrator = bundle.get("calibrator")
+    if calibrator:
+        raw = np.array([[p.get(c, 0.0) for c in CLASS_ORDER]])
+        p = {c: float(v) for c, v in zip(CLASS_ORDER, apply_calibrator(raw, calibrator)[0])}
     buy, hold, sell = p.get(1, 0.0), p.get(0, 0.0), p.get(-1, 0.0)
     top = int(max(p, key=p.get))
     action = {1: "Buy", 0: "Hold", -1: "Sell"}[top]
@@ -493,13 +724,24 @@ def predict(ticker: str) -> dict | None:
 
     drivers, rationale = _explain(feat.iloc[0], bundle, action, confidence)
 
+    card = bundle.get("card") or {}
+    status = card_status(bundle)
+    oos = card.get("oos")
+    ic_tstat = (oos or {}).get("ic_tstat") or 0.0
+    show = status == "ok" and bool(oos) and abs(ic_tstat) >= IC_TSTAT_GATE
     result = {
         "action": action,
         "proba": {"buy": round(buy, 3), "hold": round(hold, 3), "sell": round(sell, 3)},
         "confidence": round(confidence, 3),
+        "calibrated": bool(calibrator),
         "horizon_days": bundle.get("horizon", HORIZON),
-        "drivers": drivers,        # top feature drivers behind THIS prediction
-        "rationale": rationale,    # plain-English explainer (None if no model stats)
+        "card_status": status,      # ok | stale | missing — stale/missing = unvalidated
+        "validated": status == "ok",
+        "oos": oos,                 # OOS evaluation from the model card (None if absent)
+        "trained_at": card.get("trained_at"),
+        "show": show,               # evidence gate: hide the call when weak (#151)
+        "drivers": drivers,         # top feature drivers behind THIS prediction
+        "rationale": rationale,     # plain-English explainer (None if no model stats)
     }
     db.cache_set("ml", ticker, result)
     return result
