@@ -14,6 +14,7 @@ import time
 import threading
 import math
 import os
+import re
 import hmac
 import sqlite3
 import traceback
@@ -124,15 +125,49 @@ def _fetch_yfinance_with_retry(symbol: str, period: str, retries: int = 3):
     return None
 
 
+def _period_floor(period: str):
+    """Earliest calendar date a cached history must cover to serve `period`,
+    or None when the period carries no depth requirement (1d/5d/ytd/max/unknown)."""
+    m = re.fullmatch(r"(\d+)(mo|y)", period or "")
+    if not m:
+        return None
+    n, unit = int(m.group(1)), m.group(2)
+    return pd.Timestamp.now().normalize() - pd.Timedelta(days=n * (30 if unit == "mo" else 365))
+
+
+def _covers_period(df: pd.DataFrame | None, period: str) -> bool:
+    start = _period_floor(period)
+    if start is None or df is None or df.empty:
+        return True
+    # 30d slack: yfinance rows start at the calendar boundary, minus holidays.
+    return df.index.min() <= start + pd.Timedelta(days=30)
+
+
+def _slice_to_period(df: pd.DataFrame | None, period: str) -> pd.DataFrame | None:
+    start = _period_floor(period)
+    if start is None or df is None or df.empty or df.index.min() >= start:
+        return df
+    return df[df.index >= start].copy()
+
+
+_PRICE_DEPTH_FETCH_ATTEMPTS: dict = {}
+_PRICE_DEPTH_RETRY_SECS = 3600  # throttle deep refetches (young IPOs never "cover" 5y)
+
+
 def get_or_fetch_prices(symbol: str, period: str = "5y") -> pd.DataFrame | None:
     """Return cached prices from the DB, refreshing from yfinance when stale.
 
     Layered for speed and resilience:
       1. In-process memo (skips redundant DB reads within a request).
       2. SQLite cache (skips the network when data is < 1h old).
-      3. yfinance fetch with retry/backoff on a miss.
+      3. yfinance fetch with retry/backoff on a miss — also triggered when the
+         cache is fresh but too shallow for the requested period (e.g. a 3mo
+         heatmap warm cannot serve a 5y page), throttled hourly per symbol.
       4. Stale-while-error: if the refresh fails but we hold older cached rows,
          serve those rather than returning nothing.
+
+    The memo and DB hold full history; `period` is applied as a slice on the
+    way out so callers get roughly the window they asked for.
     """
     symbol = symbol.upper()
 
@@ -140,12 +175,19 @@ def get_or_fetch_prices(symbol: str, period: str = "5y") -> pd.DataFrame | None:
     with _PRICE_MEMO_LOCK:
         cached = _PRICE_MEMO.get(symbol)
         if cached is not None and now - cached[0] < _PRICE_MEMO_TTL:
-            return cached[1]
+            return _slice_to_period(cached[1], period)
 
-    if not is_fresh(symbol):
-        df = _fetch_yfinance_with_retry(symbol, period)
-        if df is not None and not df.empty:
-            store_prices(symbol, df)
+    df = get_prices(symbol)
+    need_refresh = df is None or not is_fresh(symbol)
+    if not need_refresh and not _covers_period(df, period):
+        if now - _PRICE_DEPTH_FETCH_ATTEMPTS.get(symbol, 0.0) > _PRICE_DEPTH_RETRY_SECS:
+            need_refresh = True
+
+    if need_refresh:
+        _PRICE_DEPTH_FETCH_ATTEMPTS[symbol] = now
+        fetched = _fetch_yfinance_with_retry(symbol, period)
+        if fetched is not None and not fetched.empty:
+            store_prices(symbol, fetched)
         else:
             # Refresh failed — fall through and serve whatever we already have.
             print(f"Serving stale/cached data for {symbol} (refresh unavailable)")
@@ -156,6 +198,7 @@ def get_or_fetch_prices(symbol: str, period: str = "5y") -> pd.DataFrame | None:
     if result is not None and not result.empty:
         with _PRICE_MEMO_LOCK:
             _PRICE_MEMO[symbol] = (now, result)
+        return _slice_to_period(result, period)
 
     return result
 
@@ -712,15 +755,19 @@ def _short_interest_for(ticker: str) -> tuple[dict | None, str]:
     return si, "assumed"
 
 
-def _si_kwargs(ticker: str) -> tuple[float, float]:
-    """(short_pct_float, days_to_cover) kwargs for get_microstructure_analytics,
-    real values when reported (fraction x100 — the squeeze index is scaled in
-    percent), signature defaults otherwise."""
+def _si_inputs(ticker: str) -> tuple[float, float, list[str]]:
+    """(short_pct_float, days_to_cover, assumed-input names) for
+    get_microstructure_analytics: real values when reported (fraction x100 —
+    the squeeze index is scaled in percent), signature defaults otherwise with
+    the assumed inputs listed so the UI can flag them. Cost-to-borrow has no
+    free source and is never scored on an invented constant."""
     si, _source = _short_interest_for(ticker)
     pct = (si or {}).get("short_pct_float")
     dtc = (si or {}).get("days_to_cover")
+    assumed = ([name for name, val in (("SI % float", pct), ("DTC", dtc)) if val is None])
     return (pct * 100.0 if pct is not None else 3.0,
-            dtc if dtc is not None else 2.0)
+            dtc if dtc is not None else 2.0,
+            assumed)
 
 
 def _get_fundamentals_uncached(ticker: str) -> dict | None:
@@ -1772,11 +1819,12 @@ def analytics_page():
         stock_inst_df = price_df if price_df is not None else get_or_fetch_prices(ticker, period="2y")
         if stock_inst_df is not None and not stock_inst_df.empty:
             benchmark_df = spy_df if spy_df is not None else stock_inst_df
-            si_pct, si_dtc = _si_kwargs(ticker)
+            si_pct, si_dtc, si_assumed = _si_inputs(ticker)
             si_payload, si_source = _short_interest_for(ticker)
             micro_res = microstructure.get_microstructure_analytics(
                 stock_inst_df, short_pct_float=si_pct, days_to_cover=si_dtc,
-                is_negative_gex=(data.get('gex') or {}).get('regime') == 'negative')
+                is_negative_gex=(data.get('gex') or {}).get('regime') == 'negative',
+                assumed_si_inputs=si_assumed)
             macro_res = macro_engine.get_macro_financial_report(stock_inst_df, benchmark_df)
             events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
 
@@ -1808,6 +1856,7 @@ def analytics_page():
                     'is_inverted': macro_res.is_yield_curve_inverted,
                     'cpi_yoy': macro_res.cpi_inflation_yoy,
                     'betas': macro_res.regime_conditional_betas,
+                    'regime_betas': macro_res.macro_regime_betas,
                     'upside_capture': macro_res.upside_capture_ratio,
                     'downside_capture': macro_res.downside_capture_ratio,
                 },
@@ -4658,10 +4707,11 @@ def api_institutional(ticker):
         return jsonify({"error": f"No pricing data for {ticker}"}), 404
 
     # 1. Microstructure & Squeeze
-    si_pct, si_dtc = _si_kwargs(ticker)
+    si_pct, si_dtc, si_assumed = _si_inputs(ticker)
     si_payload, si_source = _short_interest_for(ticker)
     micro_res = microstructure.get_microstructure_analytics(
-        stock_df, short_pct_float=si_pct, days_to_cover=si_dtc)
+        stock_df, short_pct_float=si_pct, days_to_cover=si_dtc,
+        assumed_si_inputs=si_assumed)
 
     # 2. Macro Conditioning
     macro_res = macro_engine.get_macro_financial_report(stock_df, spy_df if spy_df is not None else stock_df)
@@ -4685,6 +4735,7 @@ def api_institutional(ticker):
             "is_inverted": macro_res.is_yield_curve_inverted,
             "cpi_yoy": macro_res.cpi_inflation_yoy,
             "betas": macro_res.regime_conditional_betas,
+            "regime_betas": macro_res.macro_regime_betas,
             "upside_capture": macro_res.upside_capture_ratio,
             "downside_capture": macro_res.downside_capture_ratio,
         },

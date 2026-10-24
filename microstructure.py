@@ -9,7 +9,7 @@ Implements:
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Tuple
 
 import numpy as np
@@ -23,6 +23,7 @@ class MicrostructureAnalytics:
     amihud_illiquidity: float
     squeeze_risk_score: float  # [0, 100]
     squeeze_risk_level: str  # LOW, ELEVATED, HIGH, EXTREME
+    squeeze_inputs_assumed: list = field(default_factory=list)  # inputs the squeeze index assumed (e.g. ["SI % float", "DTC"])
 
 
 def calculate_corwin_schultz_spread(df: pd.DataFrame, window: int = 2) -> float:
@@ -123,17 +124,19 @@ def calculate_amihud_illiquidity(df: pd.DataFrame) -> float:
 def compute_squeeze_risk_index(
     short_pct_float: float,
     days_to_cover: float,
-    cost_to_borrow_pct: float = 2.5,
+    cost_to_borrow_pct: float | None = None,
     is_negative_gex: bool = False,
     realized_vol_30d: float = 0.35,
 ) -> Tuple[float, str]:
     """Multi-factor Short Squeeze Risk Composite (0 - 100).
 
-    Components:
+    Components (weights renormalise over the inputs actually used):
     - Short Interest % Float (0-40 pts): >20% heavily penalized
     - Days to Cover (0-30 pts): >5 days heavily penalized
-    - Cost to Borrow (0-15 pts): >10% annualized fee
     - Negative Gamma Dealer Exposure (0-15 pts): Accelerates price upside cascades
+    - Cost to Borrow (0-15 pts): >10% annualized fee — only when a reported CTB
+      is supplied. There is no free CTB feed, so callers omit it (None) rather
+      than scoring every ticker on an invented constant.
     """
     # 1. Short Float Score
     si = max(short_pct_float, 0.0)
@@ -143,15 +146,17 @@ def compute_squeeze_risk_index(
     dtc = max(days_to_cover, 0.0)
     dtc_score = min(dtc / 7.0, 1.0) * 30.0
 
-    # 3. Cost to Borrow Score
-    ctb = max(cost_to_borrow_pct, 0.0)
-    ctb_score = min(ctb / 20.0, 1.0) * 15.0
-
-    # 4. Negative GEX Accelerator
+    # 3. Negative GEX Accelerator
     gex_score = 15.0 if is_negative_gex else 5.0
 
-    raw_score = si_score + dtc_score + ctb_score + gex_score
-    score = round(float(np.clip(raw_score, 0.0, 100.0)), 1)
+    raw_score = si_score + dtc_score + gex_score
+    weight_sum = 85.0
+    if cost_to_borrow_pct is not None:
+        ctb = max(cost_to_borrow_pct, 0.0)
+        raw_score += min(ctb / 20.0, 1.0) * 15.0
+        weight_sum += 15.0
+
+    score = round(float(np.clip(raw_score / weight_sum * 100.0, 0.0, 100.0)), 1)
 
     if score >= 75.0:
         level = "EXTREME"
@@ -170,8 +175,15 @@ def get_microstructure_analytics(
     short_pct_float: float = 3.0,
     days_to_cover: float = 2.0,
     is_negative_gex: bool = False,
+    assumed_si_inputs: list | None = None,
 ) -> MicrostructureAnalytics:
-    """Unified entry-point for quantitative microstructure analysis."""
+    """Unified entry-point for quantitative microstructure analysis.
+
+    `assumed_si_inputs` names the squeeze inputs that fell back to defaults
+    (e.g. ["SI % float", "DTC"] when no short-interest feed reported) so the UI
+    can flag them; cost-to-borrow is always absent (no free source) and is
+    never scored on an invented value.
+    """
     cs_spread = calculate_corwin_schultz_spread(df)
     roll_spread = calculate_roll_effective_spread(df)
     amihud = calculate_amihud_illiquidity(df)
@@ -188,4 +200,5 @@ def get_microstructure_analytics(
         amihud_illiquidity=round(amihud, 4),
         squeeze_risk_score=sq_score,
         squeeze_risk_level=sq_level,
+        squeeze_inputs_assumed=list(assumed_si_inputs or []),
     )
