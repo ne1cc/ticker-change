@@ -132,8 +132,9 @@ def forecast_evaluation(returns: np.ndarray, forecast_var: np.ndarray) -> dict:
     valid = np.isfinite(naive)
     if valid.sum() > 20:
         mse_naive = float(np.mean((naive[valid] - r2[valid]) ** 2))
-        ql_naive = float(np.mean(r2[valid] / naive[valid]
-                                 - np.log(naive[valid] / r2[valid]) - 1.0))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ql_naive = float(np.mean(r2[valid] / naive[valid]
+                                     - np.log(naive[valid] / r2[valid]) - 1.0))
     else:
         mse_naive, ql_naive = float("nan"), float("nan")
     return {"mse": mse, "qlike": float(qlike),
