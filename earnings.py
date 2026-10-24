@@ -213,9 +213,12 @@ def compute_earnings_events(stock_df, benchmark_df, events, ticker="UNKNOWN",
     out: list[dict] = []
     pool = event_pool.current_pool()
     ev_win, drift_win = event_study.windows_for("earnings")
-    for ev in events or []:
-        if ev.get("is_upcoming"):
-            continue
+    past_candidates = sorted(
+        [ev for ev in (events or []) if not ev.get("is_upcoming") and ev.get("date")],
+        key=lambda r: str(r["date"]),
+        reverse=True,
+    )
+    for ev in past_candidates[:max_events]:
         res = event_study.run_event_study(
             stock_df, benchmark_df, ev["date"],
             event_type="EARNINGS", ticker=ticker,
@@ -276,7 +279,10 @@ def realized_earnings_moves(stock_df: pd.DataFrame, events: list[dict],
             return None
         close = stock_df["close"] if "close" in stock_df.columns else stock_df["Close"]
         rets = close.pct_change()
-        past = [e for e in (events or []) if not e.get("is_upcoming")]
+        past = sorted(
+            [e for e in (events or []) if not e.get("is_upcoming") and e.get("date")],
+            key=lambda x: str(x["date"]),
+        )
         moves = []
         for ev in past[-n:]:
             idx = rets.index[rets.index > pd.to_datetime(ev["date"])]

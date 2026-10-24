@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Methodology & Limitations — ticker/change{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 py-6">
+  <!-- Header & Disclaimers -->
+  <div class="mb-8">
+    <div class="flex items-center gap-2 mb-2">
+      <span class="px-2.5 py-1 text-xs font-semibold rounded-md bg-amber-500/10 text-amber-500 border border-amber-500/20 uppercase tracking-wider">Quantitative Transparency</span>
+      <span class="text-xs text-zinc-500">Model & Data Disclosures</span>
+    </div>
+    <h1 class="text-3xl font-bold tracking-tight mb-3 text-zinc-900 dark:text-zinc-100">Methodology & Analytical Limitations</h1>
+    <p class="text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed mb-6">
+      Complete quantitative specifications for all metrics across ticker/change. For every statistic, we disclose the mathematical estimator, sampling window, sources of uncertainty, empirical limitations, and upstream data provenance.
+    </p>
+
+    <!-- Prominent Disclaimer Banner -->
+    <div class="p-4 rounded-xl border border-amber-500/30 bg-amber-500/5 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200 text-sm space-y-2">
+      <div class="flex items-start gap-2.5">
+        <svg class="w-5 h-5 text-amber-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+        </svg>
+        <div>
+          <p class="font-semibold text-amber-800 dark:text-amber-300">Important Financial & Data Disclaimers</p>
+          <ul class="mt-1 space-y-1 text-xs text-amber-900/90 dark:text-amber-200/90 list-disc list-inside">
+            <li><strong class="font-medium">Not Investment Advice:</strong> All quantitative analytics, risk models, simulated signals, and options analyses provided on this platform are strictly for informational, educational, and research purposes. Nothing herein constitutes investment advice, financial advice, or a recommendation to buy or sell any security.</li>
+            <li><strong class="font-medium">Delayed Market Data:</strong> Market pricing, trade volume, and options chain quotes are sourced from delayed data feeds (typically delayed 15–20 minutes during market hours, or end-of-day snapshots). Realized execution prices will differ from models.</li>
+            <li><strong class="font-medium">Model Risk:</strong> Backtests and quantitative estimators rely on historical market assumptions that may break down during market structural breaks, regime transitions, or liquidity shocks.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Search -->
+  <div class="mb-8 sticky top-0 z-10 bg-zinc-50 dark:bg-zinc-950 py-3 backdrop-blur-sm bg-opacity-95 dark:bg-opacity-95">
+    <div class="relative">
+      <input
+        id="methodology-search"
+        type="text"
+        placeholder="Search methodology by metric, estimator, window, or limitation (e.g., OLS, Black-Scholes, VaR, FRED, yfinance)…"
+        class="w-full px-4 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-sm"
+        autocomplete="off"
+        spellcheck="false"
+      />
+    </div>
+    <p id="methodology-empty" class="hidden text-sm text-zinc-400 mt-3">No methodology entries match that query.</p>
+  </div>
+
+  <!-- Sections -->
+  {% for section, entries in sections.items() %}
+  <section class="methodology-section mb-12" data-section>
+    <div class="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 pb-2 mb-6">
+      <h2 class="text-sm font-bold text-amber-500 uppercase tracking-widest">{{ section }}</h2>
+      <span class="text-xs text-zinc-400">{{ entries|length }} metrics</span>
+    </div>
+    <div class="space-y-6">
+      {% for e in entries %}
+      <div id="{{ e.key }}"
+           data-search="{{ e.term | lower }} {{ e.key | lower }} {{ e.estimator | lower }} {{ e.limits | lower }} {{ e.source | lower }} {{ e.short | lower }}"
+           class="methodology-entry scroll-mt-24 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 target:ring-2 target:ring-amber-500 transition-all shadow-sm">
+        <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-2">
+          <h3 class="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+            {{ e.term }}
+            <a href="#{{ e.key }}" class="text-zinc-400 hover:text-amber-500 text-sm opacity-50 hover:opacity-100 transition-opacity">#</a>
+          </h3>
+          <div class="flex items-center gap-3 text-xs">
+            <a href="/glossary#{{ e.key }}" class="text-amber-500 hover:text-amber-400 font-medium inline-flex items-center gap-1">
+              Glossary Definition &rarr;
+            </a>
+          </div>
+        </div>
+
+        <p class="text-sm text-zinc-600 dark:text-zinc-400 mb-4 leading-relaxed">{{ e.short }}</p>
+
+        {% if e.formula %}
+        <div class="mb-4 inline-block rounded-md bg-zinc-100 dark:bg-zinc-800 px-3 py-1.5 font-mono text-xs text-zinc-800 dark:text-zinc-200">
+          {{ e.formula }}
+        </div>
+        {% endif %}
+
+        <!-- Structured Methodology Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-zinc-100 dark:border-zinc-800/80 text-xs">
+          <div class="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-100 dark:border-zinc-800/50">
+            <div class="font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider text-[10px] mb-1">Mathematical Estimator</div>
+            <div class="text-zinc-800 dark:text-zinc-200 leading-normal font-mono text-[11px]">{{ e.estimator }}</div>
+          </div>
+          <div class="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-100 dark:border-zinc-800/50">
+            <div class="font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider text-[10px] mb-1">Sample Window & Lookback</div>
+            <div class="text-zinc-800 dark:text-zinc-200 leading-normal">{{ e.window }}</div>
+          </div>
+          <div class="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-100 dark:border-zinc-800/50">
+            <div class="font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider text-[10px] mb-1">Estimation Uncertainty & Error</div>
+            <div class="text-zinc-800 dark:text-zinc-200 leading-normal">{{ e.uncertainty }}</div>
+          </div>
+          <div class="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-100 dark:border-zinc-800/50">
+            <div class="font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider text-[10px] mb-1">Data Source & Provenance</div>
+            <div class="text-zinc-800 dark:text-zinc-200 leading-normal">{{ e.source }}</div>
+          </div>
+          <div class="p-3 rounded-lg bg-amber-50/50 dark:bg-amber-950/10 border border-amber-200/40 dark:border-amber-900/30 md:col-span-2">
+            <div class="font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider text-[10px] mb-1">Analytical Limitations & Failure Modes</div>
+            <div class="text-zinc-800 dark:text-zinc-300 leading-normal">{{ e.limits }}</div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+</div>
+
+<script>
+  (function () {
+    const input = document.getElementById('methodology-search');
+    const entries = Array.from(document.querySelectorAll('.methodology-entry'));
+    const sections = Array.from(document.querySelectorAll('.methodology-section'));
+    const empty = document.getElementById('methodology-empty');
+    if (!input) return;
+
+    input.addEventListener('input', () => {
+      const q = input.value.trim().toLowerCase();
+      let anyVisible = false;
+
+      entries.forEach(el => {
+        const match = !q || el.dataset.search.includes(q);
+        el.classList.toggle('hidden', !match);
+        if (match) anyVisible = true;
+      });
+
+      sections.forEach(sec => {
+        const visible = sec.querySelectorAll('.methodology-entry:not(.hidden)').length;
+        sec.classList.toggle('hidden', visible === 0);
+      });
+
+      empty.classList.toggle('hidden', anyVisible);
+    });
+
+    if (location.hash) {
+      const el = document.querySelector(location.hash);
+      if (el) {
+        setTimeout(() => el.scrollIntoView({ block: 'center' }), 100);
+      }
+    }
+  })();
+</script>
+{% endblock %}

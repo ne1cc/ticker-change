@@ -52,6 +52,7 @@ class TestApiDocs(unittest.TestCase):
         schemas = spec["components"]["schemas"]
         expected_schemas = [
             "ErrorResponse",
+            "AnalyticsResponse",
             "InstitutionalAnalyticsResponse",
             "CorporateActionsResponse",
             "OptionsGreeksResponse",

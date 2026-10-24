@@ -1,7 +1,7 @@
-{# Reusable metric label with an inline ⓘ tooltip that deep-links to /glossary.
+{# Reusable metric label with an inline ⓘ tooltip that deep-links to /glossary and /methodology.
    Usage:  {% from "_macros.html" import metric %}
            {{ metric('Annualised Vol', 'annualised_vol') }}
-   The tooltip text and the glossary entry both come from the GLOSSARY Jinja
+   The tooltip text, glossary entry, and methodology all come from the GLOSSARY Jinja
    global (registered in app.py), so there is a single source of truth.
    `label_cls` styles the label text; pass the classes the bare label used to have.
    `p` optionally carries pre-computed cross-sectional percentiles (Issue #119). #}
@@ -27,7 +27,7 @@
     </svg>
   </a>
   <span role="tooltip"
-        class="pointer-events-none absolute top-full left-0 mt-1.5 w-60 px-3 py-2 rounded-lg bg-zinc-900 dark:bg-zinc-800 ring-1 ring-white/10 text-zinc-100 text-[11px] font-normal normal-case tracking-normal leading-snug text-left shadow-xl opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150 z-50">
+        class="pointer-events-none group-hover:pointer-events-auto absolute top-full left-0 mt-1.5 w-64 px-3 py-2.5 rounded-lg bg-zinc-900 dark:bg-zinc-800 ring-1 ring-white/10 text-zinc-100 text-[11px] font-normal normal-case tracking-normal leading-snug text-left shadow-xl opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150 z-50">
     {{ g.short }}
     {%- if p and p.universe and p.universe.percentile is not none %}
     <span class="block mt-1 text-zinc-300 text-[10px]">
@@ -42,7 +42,10 @@
     {%- if g.direction %}
     <span class="block mt-1 text-[10px] text-zinc-400 font-mono">Direction: {{ g.direction }}</span>
     {%- endif %}
-    <span class="block mt-1 text-amber-400 text-[10px] font-semibold uppercase tracking-wide">Details →</span>
+    <span class="flex items-center justify-between mt-1.5 pt-1.5 border-t border-zinc-700/60 text-[10px] font-medium tracking-wide">
+      <a href="/glossary#{{ key }}" class="text-amber-400 hover:text-amber-300">Glossary &rarr;</a>
+      <a href="/methodology#{{ key }}" class="text-zinc-400 hover:text-amber-300">Methodology &rarr;</a>
+    </span>
   </span>
   {%- endif %}
 </span>
