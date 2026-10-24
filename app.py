@@ -6,7 +6,7 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, R
 from flask_cors import CORS
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
 import numpy as np
 import charts
@@ -43,6 +43,16 @@ from option_chain_data import (chain_quality, valid_iv, valid_quote, finite_numb
                                 get_cboe_snapshot, cboe_chain)
 from options import compute_options_terminal, calculate_greeks
 from options.cones import compute_yang_zhang_vol
+from options.gex import get_risk_free_rate, find_gamma_flip
+from options.vol import compute_vol_term_structure
+from options.storage import (
+    compute_iv_rank_and_percentile,
+    get_vrp_history_with_bands,
+    get_term_structure_and_skew_history,
+)
+from options.svi import select_otm_wings, fit_svi
+from options.density import breeden_litzenberger_density
+from options.earnings_move import get_earnings_implied_vs_realized
 import derivatives_alpha
 import backtest_engine
 import api_docs
@@ -985,7 +995,7 @@ def get_cached_chain(ticker: str, expiration: str, stock=None, spot_hint=None, f
 
 
 def get_options_smile(ticker: str, current_price: float) -> str | None:
-    """Build an IV smile chart from cached option chains across 3-4 expirations."""
+    """Build an IV smile chart with OTM wing selection (OTM puts below spot, OTM calls above spot) and SVI fit overlay."""
     try:
         stock = _get_yf_ticker(ticker)
         expirations = get_cached_expirations(ticker, stock)
@@ -997,22 +1007,51 @@ def get_options_smile(ticker: str, current_price: float) -> str | None:
 
         chart_series = []
         plotted = 0
+        today = datetime.now().date()
         for exp in selected:
             cached = get_cached_chain(ticker, exp, stock=stock, spot_hint=current_price)
             if cached is None:
                 continue
-            calls, _, _ = cached
-            if calls.empty or 'impliedVolatility' not in calls.columns:
+            calls, puts, _ = cached
+            try:
+                exp_date = datetime.strptime(exp, '%Y-%m-%d').date()
+                dte = max(1, (exp_date - today).days)
+            except Exception:
+                dte = 30
+            t_years = dte / 365.0
+
+            # OTM wing selection: puts below spot, calls above spot
+            wings = select_otm_wings(calls, puts, current_price, t_years, min_oi=0)
+            if wings.empty or len(wings) < 3:
                 continue
-            calls = calls[
-                (calls['strike'] >= current_price * 0.70) &
-                (calls['strike'] <= current_price * 1.50) &
-                (calls['impliedVolatility'] > 0.01)
-            ].sort_values('strike')
-            if len(calls) < 3:
-                continue
-            chart_series.append(charts.line(exp, calls['strike'] / current_price,
-                                            calls['impliedVolatility'] * 100, palette[plotted % len(palette)]))
+
+            m_points = wings['strike'] / current_price
+            iv_points = wings['iv'] * 100.0
+            chart_series.append(charts.line(
+                exp,
+                m_points,
+                iv_points,
+                palette[plotted % len(palette)],
+                showSymbol=True,
+                symbolSize=5,
+                width=1.0,
+            ))
+
+            # Fit SVI per expiry when sufficient liquidity/observations exist (>= 5 points)
+            if len(wings) >= 5:
+                svi_res = fit_svi(wings['log_moneyness'].to_numpy(), wings['total_variance'].to_numpy(), t_years)
+                if svi_res.get('success') and 'dense_k' in svi_res:
+                    dense_m = np.exp(np.array(svi_res['dense_k']))
+                    dense_iv_pct = np.array(svi_res['dense_iv']) * 100.0
+                    chart_series.append(charts.line(
+                        f"{exp} (SVI fit RMSE={svi_res['rmse']:.3f})",
+                        dense_m,
+                        dense_iv_pct,
+                        palette[plotted % len(palette)],
+                        dash=True,
+                        width=2.0,
+                    ))
+
             plotted += 1
 
         if plotted == 0:
@@ -1064,7 +1103,7 @@ def get_atm_contract(ticker: str, spot: float) -> dict | None:
             'iv': float(np.mean([r['impliedVolatility'] for r in rows]))}
 
 
-def _atm_derivatives(atm: dict | None, price_df: pd.DataFrame | None) -> dict | None:
+def _atm_derivatives(atm: dict | None, price_df: pd.DataFrame | None, ticker: str = "") -> dict | None:
     """VRP and call Greeks for the real ATM contract; None when either input is missing.
 
     Realized vol is the 21-session Yang-Zhang estimate (~30 calendar days, the
@@ -1075,10 +1114,11 @@ def _atm_derivatives(atm: dict | None, price_df: pd.DataFrame | None) -> dict | 
     rv = compute_yang_zhang_vol(price_df, 21)
     if rv <= 0:
         return None
+    rf_rate, rate_source = get_risk_free_rate()
     greeks = derivatives_alpha.compute_higher_order_greeks(
         spot=float(price_df['close'].iloc[-1]), strike=atm['strike'],
         time_to_exp=max(atm['dte'], 1) / 365.0, volatility=atm['iv'],
-        risk_free_rate=0.045, is_call=True)
+        risk_free_rate=rf_rate, is_call=True)
     return {
         'atm_contract': atm,
         'higher_order_greeks': greeks.__dict__,
@@ -1086,7 +1126,7 @@ def _atm_derivatives(atm: dict | None, price_df: pd.DataFrame | None) -> dict | 
     }
 
 
-def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -> dict | None:
+def get_gex_profile(ticker: str, current_price: float, rf_rate: float | None = None) -> dict | None:
     """Build a dealer Gamma Exposure (GEX) profile from yfinance option chains.
 
     Per strike:  GEX = Γ × OpenInterest × 100 × Spot² × 0.01, signed by the
@@ -1101,6 +1141,11 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
     assumptions) — directional, not an institutional low-latency feed.
     """
     try:
+        inferred_r, rate_source = get_risk_free_rate()
+        if rf_rate is None or rf_rate == 0.045:
+            rf_rate = inferred_r
+        else:
+            rate_source = f"Custom ({rf_rate*100:.2f}%)"
         stock = _get_yf_ticker(ticker)
         expirations = get_cached_expirations(ticker, stock)
         if not expirations or not current_price:
@@ -1211,41 +1256,20 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
         call_wall = _wall(call_gex, want_above=True,  pick=max)
         put_wall  = _wall(put_gex,  want_above=False, pick=min)
 
-        # Gamma flip: spot price where total net GEX crosses zero.
-        # Below it dealers are net-short gamma (vol-expanding);
-        # above it net-long gamma (vol-dampening).
-        def calc_total_gex(s):
-            total = 0.0
-            for k, t_years, side, oi, iv in options_data:
-                if s <= 0.01:
-                    continue
-                try:
-                    d1 = (math.log(s / k) + (rf_rate + 0.5 * iv * iv) * t_years) / (iv * math.sqrt(t_years))
-                    pdf_d1 = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
-                    gamma = pdf_d1 / (s * iv * math.sqrt(t_years))
-                    sign = 1.0 if side == 'call' else -1.0
-                    gex = sign * gamma * oi * 100 * (s ** 2) * 0.01 / 1e6
-                    total += gex
-                except Exception:
-                    continue
-            return total
-
-        gamma_flip = None
-        if strikes:
-            y_lo, y_hi = strikes[0], strikes[-1]
-            grid_spots = np.linspace(y_lo, y_hi, 100)
-            grid_gex = [calc_total_gex(s) for s in grid_spots]
-            
-            crossings = []
-            for i in range(1, len(grid_gex)):
-                if (grid_gex[i - 1] <= 0 < grid_gex[i]) or (grid_gex[i - 1] >= 0 > grid_gex[i]):
-                    s0, s1 = grid_spots[i - 1], grid_spots[i]
-                    y0, y1 = grid_gex[i - 1], grid_gex[i]
-                    val = float(s0 + (s1 - s0) * (-y0) / (y1 - y0)) if y1 != y0 else float(s1)
-                    crossings.append(val)
-            
-            if crossings:
-                gamma_flip = round(min(crossings, key=lambda c: abs(c - current_price)), 2)
+        # Continuous gamma flip search under both sticky-strike and sticky-moneyness (Issue #131)
+        flip_rows = [{
+            'strike': k,
+            'cp': 'C' if side == 'call' else 'P',
+            'dte': int(t_years * 365.0),
+            'iv': iv,
+            'open_interest': oi,
+            'volume': 0,
+            'bid': 1.0,
+        } for k, t_years, side, oi, iv in options_data]
+        flip_df = pd.DataFrame(flip_rows)
+        gamma_flip = find_gamma_flip(flip_df, current_price, convention='naive', r=rf_rate, iv_model='sticky_strike')
+        gamma_flip_moneyness = find_gamma_flip(flip_df, current_price, convention='naive', r=rf_rate, iv_model='sticky_moneyness')
+        gamma_flip_diff = round(gamma_flip_moneyness - gamma_flip, 2) if (gamma_flip is not None and gamma_flip_moneyness is not None) else None
 
         total_gex = float(np.sum(net_gex))
 
@@ -1320,6 +1344,19 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
         views += [_gex_view(bin_strikes, bin_call, bin_put, bin_net, bin_cum, split) for split in [False, True]]
         gex_option = {**views[0]}
         gex_option['terminalViews'] = {'labels': ['Net', 'Call / Put', 'Net · $5', 'Call / Put · $5'], 'options': views.copy()}
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            db.insert_gex_snapshot(
+                ticker=ticker,
+                date=today_str,
+                gamma_flip=gamma_flip,
+                call_wall=call_wall,
+                put_wall=put_wall,
+                spot=current_price,
+            )
+        except Exception:
+            pass
+
         return {
             'chart': charts.render_chart(gex_option, height=520),
             'stats': {
@@ -1330,6 +1367,10 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
                 'put_wall': put_wall,
                 'put_wall_val': put_wall_val,
                 'gamma_flip': gamma_flip,
+                'gamma_flip_sticky_moneyness': gamma_flip_moneyness,
+                'gamma_flip_diff': gamma_flip_diff,
+                'rate_source': rate_source,
+                'rf_rate': rf_rate,
                 'hvl': hvl,
                 'hvl_val': hvl_val,
                 'spot': round(float(current_price), 2),
@@ -1983,7 +2024,7 @@ def analytics_page():
 
             # VRP and Greeks come from the real ATM contract; absent chain -> panel hidden.
             atm = _guard_section("atm_contract", lambda: get_atm_contract(ticker, data['current_price']))
-            atm_block = _atm_derivatives(atm, stock_inst_df) or {}
+            atm_block = _atm_derivatives(atm, stock_inst_df, ticker=ticker) or {}
 
             data['institutional'] = {
                 'microstructure': micro_res.__dict__,
@@ -2016,6 +2057,120 @@ def analytics_page():
     # Earnings Event Study — CAR per past print + upcoming-print block.
     data['earnings'] = _guard_section(
         "earnings", lambda: earnings.build_earnings_section(ticker))
+
+    # Options-Implied Institutional Suite (Term Structure, Density, Earnings Implied, VRP History)
+    try:
+        opt_charts = {}
+        stock = _get_yf_ticker(ticker)
+        expirations = get_cached_expirations(ticker, stock) or []
+        chain_full = get_full_option_chain_df(ticker, stock=stock, current_price=data['current_price'])
+
+        # 1. Term structure & skew (#130)
+        term_structure_data = None
+        if chain_full is not None and not chain_full.empty:
+            vol_ts = compute_vol_term_structure(chain_full, data['current_price'])
+            ts_hist = get_term_structure_and_skew_history(
+                ticker, vol_ts.slope, vol_ts.skew_25d, min_obs=63
+            )
+            term_structure_data = {
+                'available': True,
+                'expirations': vol_ts.expirations,
+                'dtes': vol_ts.dtes,
+                'atm_ivs': vol_ts.atm_ivs,
+                'slope': vol_ts.slope,
+                'regime': vol_ts.regime,
+                'skew_25d': vol_ts.skew_25d,
+                'risk_reversal': vol_ts.risk_reversal,
+                'slope_percentile': ts_hist.get('slope_percentile'),
+                'skew_percentile': ts_hist.get('skew_percentile'),
+                'history_status': ts_hist.get('status', 'accumulating (0/252)'),
+            }
+            if vol_ts.dtes and vol_ts.atm_ivs:
+                ts_chart_series = [
+                    charts.line("ATM IV Term Structure", vol_ts.dtes, vol_ts.atm_ivs, '#6366f1', showSymbol=True, symbolSize=6)
+                ]
+                opt_charts['term_structure'] = charts.render_chart(
+                    charts.cartesian(ts_chart_series, xtype='value', xname='Days to Expiration (DTE)', yname='ATM Implied Volatility (%)'),
+                    height=260
+                )
+        else:
+            term_structure_data = {
+                'available': False,
+                'reason': f"Option chain unavailable for {ticker}",
+            }
+
+        # 2. Breeden-Litzenberger Risk-Neutral Density (#127)
+        density_data = None
+        if chain_full is not None and not chain_full.empty:
+            front_exp = term_structure_data.get('expirations', [None])[0] if term_structure_data.get('available') else None
+            if front_exp:
+                front_sub = chain_full[chain_full['expiration'] == front_exp]
+                calls_sub = front_sub[front_sub['cp'] == 'C'].sort_values('strike')
+                if len(calls_sub) >= 5:
+                    dte_val = int(calls_sub['dte'].iloc[0])
+                    t_y = max(dte_val, 1) / 365.0
+                    c_prices = np.where(calls_sub['bid'] > 0, (calls_sub['bid'] + calls_sub['ask']) / 2.0, calls_sub['last_price'])
+                    gex_stats = data.get('gex') or {}
+                    rf = gex_stats.get('rf_rate', 0.045)
+                    density_data = breeden_litzenberger_density(
+                        calls_sub['strike'].to_numpy(), c_prices,
+                        spot=data['current_price'], t_years=t_y, r=rf,
+                        enforce_no_arbitrage=True,
+                    )
+                    if density_data.get('available'):
+                        dens_series = [
+                            charts.line("Risk-Neutral Density q(K)", density_data['strikes'], density_data['density'], '#8b5cf6', width=2.0),
+                            charts.line("Lognormal Benchmark", density_data['strikes'], density_data['lognormal_benchmark'], '#71717a', dash=True, width=1.5),
+                        ]
+                        opt_charts['density'] = charts.render_chart(
+                            charts.cartesian(
+                                dens_series, xtype='value', xname='Strike ($)', yname='Probability Density',
+                                refs=[charts.reference('x', data['current_price'], f"Spot ${data['current_price']:.2f}", '#f59e0b')]
+                            ),
+                            height=260
+                        )
+        if density_data is None:
+            density_data = {'available': False, 'reason': 'Option chain unavailable or insufficient strike density'}
+
+        # 3. Earnings Implied vs Realized (#128)
+        chains_by_exp = {}
+        if expirations:
+            for exp in expirations[:4]:
+                c = get_cached_chain(ticker, exp, stock=stock, spot_hint=data['current_price'])
+                if c:
+                    cdf, pdf, _ = c
+                    c_copy = cdf.copy(); c_copy['cp'] = 'C'
+                    p_copy = pdf.copy(); p_copy['cp'] = 'P'
+                    chains_by_exp[exp] = pd.concat([c_copy, p_copy], ignore_index=True)
+        earnings_implied_data = get_earnings_implied_vs_realized(
+            ticker, data['current_price'], chains_by_exp, prices_df=price_df
+        )
+
+        # 4. Real VRP history chart with percentile bands (#126)
+        vrp_history_data = get_vrp_history_with_bands(ticker, min_obs=21)
+        if vrp_history_data.get('available'):
+            dates = vrp_history_data['dates']
+            vrp_series = [
+                charts.line("VRP Spread (IV30 - RV21)", dates, vrp_history_data['vrp_series'], '#10b981', width=2.0),
+                charts.line("90th Percentile", dates, [vrp_history_data['p90']] * len(dates), '#f43f5e', dash=True, width=1.0),
+                charts.line("Median", dates, [vrp_history_data['median']] * len(dates), '#71717a', dash=True, width=1.2),
+                charts.line("10th Percentile", dates, [vrp_history_data['p10']] * len(dates), '#3b82f6', dash=True, width=1.0),
+            ]
+            opt_charts['vrp_history'] = charts.render_chart(
+                charts.cartesian(vrp_series, xtype='time', yname='VRP Spread (%)', refs=[charts.reference('y', 0, 'Zero VRP', '#71717a')]),
+                height=260
+            )
+
+        data['options_implied'] = {
+            'term_structure': term_structure_data,
+            'density': density_data,
+            'earnings_implied': earnings_implied_data,
+            'vrp_history': vrp_history_data,
+            'charts': opt_charts,
+        }
+    except Exception as e:
+        print(f"Error computing options implied suite for {ticker}: {e}")
+        data['options_implied'] = None
 
     # AI analyst report — reads everything above, including the ML signal
     ai_report_html = ai.generate_report(ticker, data)
@@ -2174,60 +2329,7 @@ def positioning_api(ticker):
     return jsonify(data)
 
 
-def normal_cdf(x):
-    """Cumulative distribution function of standard normal distribution."""
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-
-def normal_pdf(x):
-    """Probability density function of standard normal distribution."""
-    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
-
-
-def calculate_greeks(s, k, t, v, r=0.045):
-    """Calculate Black-Scholes option pricing and greeks."""
-    if t <= 0:
-        t = 1e-5
-    if v <= 0:
-        v = 1e-5
-    try:
-        d1 = (math.log(s / k) + (r + 0.5 * v * v) * t) / (v * math.sqrt(t))
-        d2 = d1 - v * math.sqrt(t)
-        
-        pdf_d1 = normal_pdf(d1)
-        cdf_d1 = normal_cdf(d1)
-        cdf_d2 = normal_cdf(d2)
-        
-        cdf_minus_d1 = normal_cdf(-d1)
-        cdf_minus_d2 = normal_cdf(-d2)
-        
-        # Call Greeks
-        call_delta = cdf_d1
-        call_theta = (-(s * pdf_d1 * v) / (2 * math.sqrt(t)) - r * k * math.exp(-r * t) * cdf_d2) / 365.0
-        call_rho = (k * t * math.exp(-r * t) * cdf_d2) / 100.0
-        
-        # Put Greeks
-        put_delta = cdf_d1 - 1.0
-        put_theta = (-(s * pdf_d1 * v) / (2 * math.sqrt(t)) + r * k * math.exp(-r * t) * cdf_minus_d2) / 365.0
-        put_rho = (-k * t * math.exp(-r * t) * cdf_minus_d2) / 100.0
-        
-        # Common Greeks
-        gamma = pdf_d1 / (s * v * math.sqrt(t))
-        vega = (s * math.sqrt(t) * pdf_d1) / 100.0
-        
-        return {
-            'call_delta': call_delta,
-            'call_theta': call_theta,
-            'call_rho': call_rho,
-            'put_delta': put_delta,
-            'put_theta': put_theta,
-            'put_rho': put_rho,
-            'gamma': gamma,
-            'vega': vega,
-        }
-    except Exception as e:
-        print(f"Error calculating greeks: {e}")
-        return None
+# Duplicate calculate_greeks / normal_cdf / normal_pdf removed (consolidated to options.greeks)
 
 
 def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045, strike_count=None):
@@ -4140,14 +4242,12 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
                 ivs.append(nearest[f'{side}_iv'])
         atm_iv = float(np.mean(ivs)) if ivs else None
 
-        # Rank/percentile use the existing historical realized-vol proxy.
-        iv_rank, iv_percentile = None, None
-        if not vol_history.empty and atm_iv is not None:
-            min_vol = float(vol_history.min())
-            max_vol = float(vol_history.max())
-            iv_rank = ((atm_iv - min_vol) / (max_vol - min_vol)) * 100 if max_vol > min_vol else 50.0
-            iv_rank = max(0.0, min(100.0, iv_rank))
-            iv_percentile = float((vol_history < atm_iv).sum() / len(vol_history) * 100)
+        # Rank/percentile strictly computed on stored IV history (Issue #125)
+        # Below 63 days, renders accumulating state and shows nothing numeric.
+        iv_stats = compute_iv_rank_and_percentile(ticker, atm_iv, min_obs=63)
+        iv_rank = iv_stats["iv_rank"]
+        iv_percentile = iv_stats["iv_percentile"]
+        iv_status = iv_stats["status"]
 
         time_to_exp = greeks_data.get('time_to_expiration_years', days_to_exp / 365.0)
         expected_move_bs = (0.85 * spot_price * (atm_iv / 100.0) * np.sqrt(time_to_exp)
@@ -4227,6 +4327,7 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
             'atm_iv': round(atm_iv, 2) if atm_iv is not None else None,
             'iv_rank': round(iv_rank, 1) if iv_rank is not None else None,
             'iv_percentile': round(iv_percentile, 1) if iv_percentile is not None else None,
+            'iv_status': iv_status,
             'expected_move_bs': round(expected_move_bs, 2) if expected_move_bs is not None else None,
             'expected_move_straddle': round(expected_move_straddle, 2) if expected_move_straddle is not None else None,
             'vol_pcr': round(vol_pcr, 3) if vol_pcr is not None else None,
