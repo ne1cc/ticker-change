@@ -1834,6 +1834,8 @@ def analytics_page():
 
     # Machine-learning Buy/Hold/Sell signal (None until a model is trained)
     data['ml'] = _guard_section("ml", lambda: ml.predict(ticker))
+    # TODO(#139): register the ML signal as a signal in the Signal Lab once
+    # Epic 5 lands (#151 leaves this clause unimplemented until then).
     data['charts']['ml_reliability'] = _guard_section(
         "ml_reliability", lambda: get_ml_reliability_chart())
 

@@ -306,6 +306,7 @@ def purged_kfold(dates: pd.Series, n_splits: int = 5, embargo: int | None = None
 # Model card — persisted OOS evaluation (#149)                                 #
 # --------------------------------------------------------------------------- #
 CARD_MAX_AGE_DAYS = 30  # older cards flag the model as unvalidated for the UI gate
+IC_TSTAT_GATE = 2.0     # |IC t-stat| the OOS evidence must clear to show the call (#151)
 
 CLASS_ORDER = [-1, 0, 1]  # column order for all probability matrices (Sell/Hold/Buy)
 
@@ -725,6 +726,9 @@ def predict(ticker: str) -> dict | None:
 
     card = bundle.get("card") or {}
     status = card_status(bundle)
+    oos = card.get("oos")
+    ic_tstat = (oos or {}).get("ic_tstat") or 0.0
+    show = status == "ok" and bool(oos) and abs(ic_tstat) >= IC_TSTAT_GATE
     result = {
         "action": action,
         "proba": {"buy": round(buy, 3), "hold": round(hold, 3), "sell": round(sell, 3)},
@@ -733,8 +737,9 @@ def predict(ticker: str) -> dict | None:
         "horizon_days": bundle.get("horizon", HORIZON),
         "card_status": status,      # ok | stale | missing — stale/missing = unvalidated
         "validated": status == "ok",
-        "oos": card.get("oos"),     # OOS evaluation from the model card (None if absent)
+        "oos": oos,                 # OOS evaluation from the model card (None if absent)
         "trained_at": card.get("trained_at"),
+        "show": show,               # evidence gate: hide the call when weak (#151)
         "drivers": drivers,         # top feature drivers behind THIS prediction
         "rationale": rationale,     # plain-English explainer (None if no model stats)
     }
