@@ -1789,6 +1789,63 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
         }
     }
 
+def _build_factor_block(ticker: str) -> dict | None:
+    """FF5+momentum factor decomposition and beta hygiene for /analytics.
+
+    Returns {"available": False, "state": ...} declared states rather than
+    blanks when factor data or overlap history is missing."""
+    import factors
+    px = get_or_fetch_prices(ticker)
+    if px is None or px.empty or len(px) < 60:
+        return None
+    fac_df, fac_as_of = factors.load_factor_returns()
+    if fac_df is None:
+        return {"available": False,
+                "state": "Factor data unavailable (French download failed and nothing cached)."}
+    out = factors.compute_factor_exposures(px, fac_df, factor_as_of=fac_as_of)
+    if out.get("insufficient"):
+        return {"available": False, "factor_as_of": fac_as_of,
+                "state": f"Insufficient price/factor overlap ({out['n']} days; need {out['min_obs']})."}
+    out["available"] = True
+
+    # Beta hygiene against SPY (same benchmark as the page's beta stat).
+    spy = get_or_fetch_prices("SPY", period="5y")
+    if spy is not None and not spy.empty:
+        s = px['close'].pct_change().dropna()
+        b = spy['close'].pct_change().dropna()
+        j = pd.concat([s.rename('s'), b.rename('m')], axis=1).dropna()
+        if len(j) >= 60:
+            beta = float(np.cov(j['s'], j['m'])[0, 1] / j['m'].var())
+            resid = j['s'] - beta * j['m']
+            se = float(np.sqrt(resid.var(ddof=2) / (len(j) * j['m'].var())))
+            out['beta_hygiene'] = {
+                'n': int(len(j)),
+                'ols_beta': round(beta, 3),
+                'ols_beta_se': round(se, 3),
+                'dimson_beta': round(factors.dimson_beta(j['s'], j['m']), 3),
+                'blume_beta': round(factors.blume_shrink(beta), 3),
+                'vasicek_beta': round(factors.vasicek_shrink(beta, se), 3),
+            }
+            out['rolling_beta'] = factors.rolling_beta(j['s'], j['m'])
+    return out
+
+
+def _rolling_beta_chart(rows) -> str | None:
+    """Rolling 1y beta line with a shaded 95% CI band and a reference at 1."""
+    if not rows:
+        return None
+    ends = [pd.Timestamp(r['end']) for r in rows]
+    lo = charts.line('lo', ends, [r['lo'] for r in rows], 'rgba(99,102,241,0)',
+                     stack='band', lineStyle={'opacity': 0},
+                     areaStyle={'color': 'transparent'})
+    band = charts.line('95% CI', ends, [round(r['hi'] - r['lo'], 3) for r in rows],
+                       'rgba(99,102,241,0)', stack='band', lineStyle={'opacity': 0},
+                       area={'color': 'rgba(99,102,241,0.18)'})
+    beta = charts.line('Rolling 1y beta', ends, [r['beta'] for r in rows], '#f59e0b')
+    return charts.render_chart(
+        charts.cartesian([lo, band, beta], yname='beta',
+                         refs=[charts.reference('yAxis', 1.0, 'β = 1.0')]), height=300)
+
 
 @app.route('/analytics')
 def analytics_page():
@@ -1910,6 +1967,13 @@ def analytics_page():
     except Exception as e:
         print(f"Error computing institutional analytics for {ticker}: {e}")
         data['institutional'] = None
+
+    # Factor decomposition (FF5 + momentum) and beta hygiene — declared
+    # unavailable/insufficient states rather than blanks.
+    data['factors'] = _guard_section("factors", lambda: _build_factor_block(ticker))
+    data['charts']['rolling_beta'] = _guard_section(
+        "rolling_beta",
+        lambda: _rolling_beta_chart((data.get('factors') or {}).get('rolling_beta')))
 
     # Earnings Event Study — CAR per past print + upcoming-print block.
     data['earnings'] = _guard_section(
