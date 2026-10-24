@@ -1596,6 +1596,28 @@ def _guard_section(label, fn, default=None):
         return default
 
 
+def get_ml_reliability_chart() -> str | None:
+    """Reliability diagram from the OOS predictions stored in the model card
+    (#150): observed class frequency vs predicted probability, per class."""
+    bins = ml.reliability_from_bundle()
+    if not bins:
+        return None
+    series = []
+    for entry in bins:
+        pts = entry.get("points") or []
+        if len(pts) < 2:
+            continue
+        name = {1: "Buy", 0: "Hold", -1: "Sell"}.get(entry.get("class"), str(entry.get("class")))
+        color = {1: "#10b981", 0: "#a1a1aa", -1: "#f43f5e"}.get(entry.get("class"), "#6366f1")
+        series.append(charts.line(f"{name}", [p["x"] for p in pts], [p["y"] for p in pts], color))
+    if not series:
+        return None
+    series.append(charts.line("Perfect calibration", [0, 1], [0, 1], "#71717a", width=1, dash=True))
+    return charts.render_chart(charts.cartesian(series, xtype="value",
+                                                xname="Predicted probability",
+                                                yname="Observed frequency"), height=300)
+
+
 def compute_analytics(ticker):
     try:
         return _compute_analytics_impl(ticker)
@@ -1925,6 +1947,10 @@ def analytics_page():
 
     # Machine-learning Buy/Hold/Sell signal (None until a model is trained)
     data['ml'] = _guard_section("ml", lambda: ml.predict(ticker))
+    # TODO(#139): register the ML signal as a signal in the Signal Lab once
+    # Epic 5 lands (#151 leaves this clause unimplemented until then).
+    data['charts']['ml_reliability'] = _guard_section(
+        "ml_reliability", lambda: get_ml_reliability_chart())
 
     # Attach Institutional Analytics Suite (Microstructure, Macro Conditioning, Higher-Order Greeks, 8-K + Event Study)
     try:
