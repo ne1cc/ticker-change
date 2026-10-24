@@ -11,6 +11,7 @@ import pandas as pd
 import yfinance as yf
 
 import db
+import event_pool
 import providers
 
 EARNINGS_TTL_HOURS = 24
@@ -210,6 +211,7 @@ def compute_earnings_events(stock_df, benchmark_df, events, ticker="UNKNOWN",
     plus session-based reaction/drift metrics (event_metrics; completed windows
     only). Upcoming prints are skipped."""
     out: list[dict] = []
+    pool = event_pool.current_pool()
     ev_win, drift_win = event_study.windows_for("earnings")
     for ev in events or []:
         if ev.get("is_upcoming"):
@@ -221,6 +223,7 @@ def compute_earnings_events(stock_df, benchmark_df, events, ticker="UNKNOWN",
         )
         metrics = event_metrics(stock_df, ev["date"])
         row = dict(ev)
+        row["pool"] = event_pool.pool_percentile(pool, "earnings", res.car if res else None)
         row.update({
             "sessions_since": metrics["sessions_since"],
             "alignment": metrics["alignment"],
@@ -319,6 +322,51 @@ def event_vol_flag(implied_move: float | None, realized_move: float | None) -> s
     return "fair"
 
 
+
+def earnings_surprise_buckets(events: list[dict], n_buckets: int = 5) -> dict:
+    """Group earnings events into standardised surprise quantiles and compute
+    mean surprise, mean announcement CAR, and mean post-earnings announcement drift (PEAD).
+    Consumable by the Signal Lab as PEAD input (#156)."""
+    valid = [
+        e for e in (events or [])
+        if e.get("surprise_pct") is not None and e.get("car") is not None
+    ]
+    if len(valid) < 2:
+        return {"available": False, "state": "Insufficient events with surprise and CAR data"}
+
+    sorted_events = sorted(valid, key=lambda x: x["surprise_pct"])
+    n = len(sorted_events)
+    k = min(n_buckets, n)
+
+    buckets = []
+    chunk_size = n / k
+    for i in range(k):
+        start_idx = int(round(i * chunk_size))
+        end_idx = int(round((i + 1) * chunk_size))
+        group = sorted_events[start_idx:end_idx]
+        if not group:
+            continue
+        mean_surp = sum(e["surprise_pct"] for e in group) / len(group)
+        mean_car = sum(e["car"] for e in group) / len(group)
+        drifts = [e["drift_20d"] for e in group if e.get("drift_20d") is not None]
+        mean_drift = sum(drifts) / len(drifts) if drifts else 0.0
+        buckets.append({
+            "bucket": i + 1,
+            "n": len(group),
+            "mean_surprise_pct": round(mean_surp, 2),
+            "mean_announcement_car": round(mean_car, 4),
+            "mean_drift_car": round(mean_drift, 4),
+            "drift_window": (2, 21),
+            "events": [e["date"] for e in group],
+        })
+
+    return {
+        "available": True,
+        "n_events": n,
+        "n_buckets": len(buckets),
+        "buckets": buckets,
+    }
+
 def build_earnings_section(ticker: str) -> dict | None:
     """Everything the /analytics embed renders. None when no earnings data."""
     from app import compute_options_analysis, get_or_fetch_prices  # late import: app imports earnings at module load
@@ -342,8 +390,10 @@ def build_earnings_section(ticker: str) -> dict | None:
         next_print["date"],
     ) if next_print else None
     realized = realized_earnings_moves(stock_df, events)
+    surprise_buckets = earnings_surprise_buckets(past)
     return {
         "events": past,
+        "surprise_buckets": surprise_buckets,
         "summary": summarize_earnings_drift(past),
         "next_print": next_print,
         "implied_move": implied,

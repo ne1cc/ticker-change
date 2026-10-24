@@ -17,8 +17,8 @@
   {% if ern.summary and ern.summary.n_events %}
   <p class="text-[11px] text-zinc-400 mb-3">
     {{ ern.summary.n_events }} prints studied · {{ ern.summary.n_significant }} significant at 95%
-    {% if ern.summary.avg_car_beat is not none %}· avg CAR after beats {{ '%+.1f%%' | format(ern.summary.avg_car_beat * 100) }}{% endif %}
-    {% if ern.summary.avg_car_miss is not none %}· after misses {{ '%+.1f%%' | format(ern.summary.avg_car_miss * 100) }}{% endif %}
+    {% if ern.summary.get('avg_car_beat') is not none %}· avg CAR after beats {{ '%+.1f%%' | format(ern.summary.avg_car_beat * 100) }}{% endif %}
+    {% if ern.summary.get('avg_car_miss') is not none %}· after misses {{ '%+.1f%%' | format(ern.summary.avg_car_miss * 100) }}{% endif %}
   </p>
   {% endif %}
 
@@ -40,6 +40,7 @@
           <th class="py-1.5 pr-4">Date</th>
           <th class="py-1.5 pr-4 text-right">{{ metric('Surprise %', 'surprise_pct') }}</th>
           <th class="py-1.5 pr-4 text-right">{{ metric('CAR (announcement)', 'event_car') }}</th>
+          <th class="py-1.5 pr-4 text-right">Base rate</th>
           <th class="py-1.5 pr-4 text-right">p</th>
           <th class="py-1.5 pr-4 text-right">{{ metric('Drift 10d', 'pead_drift') }}</th>
           <th class="py-1.5 pr-4 text-right">{{ metric('Drift 20d', 'pead_drift') }}</th>
@@ -52,8 +53,13 @@
           <td class="py-1.5 pr-4 text-right {{ 'text-emerald-600' if (e.surprise_pct or 0) > 0 else 'text-red-500' if (e.surprise_pct or 0) < 0 else 'text-zinc-400' }}">
             {{ '%+.1f%%' | format(e.surprise_pct) if e.surprise_pct is not none else '—' }}
           </td>
-          <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format(e.car * 100) if e.car is not none else '—' }}</td>
-          <td class="py-1.5 pr-4 text-right {{ 'text-amber-500 font-semibold' if e.is_significant_95 else 'text-zinc-400' }}">
+          <td class="py-1.5 pr-4 text-right {% if not e.is_significant_95 %}opacity-50 text-zinc-400{% endif %}">
+            {{ '%+.1f%%' | format(e.car * 100) if e.car is not none else '—' }}
+          </td>
+          <td class="py-1.5 pr-4 text-right font-mono text-xs text-zinc-400">
+            {% if e.pool %}P{{ '%.0f'|format(e.pool.percentile) }} <span class="text-[10px] text-zinc-500">(n={{ e.pool.n }})</span>{% else %}—{% endif %}
+          </td>
+          <td class="py-1.5 pr-4 text-right {{ 'text-amber-500 font-semibold' if e.is_significant_95 else 'opacity-50 text-zinc-400' }}">
             {{ '%.3f' | format(e.car_p_value) if e.car_p_value is not none else '—' }}
           </td>
           <td class="py-1.5 pr-4 text-right">{{ '%+.1f%%' | format(e.drift_10d * 100) if e.drift_10d is not none else '—' }}</td>
@@ -62,6 +68,41 @@
         {% endfor %}
       </tbody>
     </table>
+  </div>
+  {% endif %}
+  {% if ern.surprise_buckets and ern.surprise_buckets.available %}
+  <div class="mt-4 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+    <p class="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1.5">
+      Post-Earnings Announcement Drift (PEAD) by Surprise Bucket
+    </p>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs font-mono">
+        <thead>
+          <tr class="text-left text-[10px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+            <th class="py-1 pr-4">Bucket</th>
+            <th class="py-1 pr-4 text-right">Count</th>
+            <th class="py-1 pr-4 text-right">Avg Surprise</th>
+            <th class="py-1 pr-4 text-right">Avg Announcement CAR</th>
+            <th class="py-1 pr-4 text-right">Avg Drift (21d)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in ern.surprise_buckets.buckets %}
+          <tr class="border-b border-zinc-100 dark:border-zinc-800/50">
+            <td class="py-1 pr-4 text-zinc-400">Q{{ b.bucket }}</td>
+            <td class="py-1 pr-4 text-right">{{ b.n }}</td>
+            <td class="py-1 pr-4 text-right {{ 'text-emerald-500' if b.mean_surprise_pct > 0 else 'text-rose-500' if b.mean_surprise_pct < 0 else 'text-zinc-400' }}">
+              {{ '%+.1f%%' | format(b.mean_surprise_pct) }}
+            </td>
+            <td class="py-1 pr-4 text-right">{{ '%+.2f%%' | format(b.mean_announcement_car * 100) }}</td>
+            <td class="py-1 pr-4 text-right font-semibold {{ 'text-emerald-500' if b.mean_drift_car > 0 else 'text-rose-500' if b.mean_drift_car < 0 else 'text-zinc-400' }}">
+              {{ '%+.2f%%' | format(b.mean_drift_car * 100) }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
   {% endif %}
 </section>
