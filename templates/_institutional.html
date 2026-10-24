@@ -393,6 +393,7 @@
           <th class="py-2 px-3 font-sans">Material Description</th>
           <th class="py-2 px-3 text-center font-sans">Impact Level</th>
           <th class="py-2 px-3 text-right font-sans">{{ metric('CAR', 'car') }}</th>
+          <th class="py-2 px-3 text-right font-sans">Base Rate</th>
           <th class="py-2 px-3 text-right font-sans">t-stat</th>
           <th class="py-2 px-3 text-center font-sans">Significance</th>
           <th class="py-2 pl-3 text-right font-sans">SEC EDGAR Link</th>
@@ -434,11 +435,18 @@
           </td>
           <td class="py-2.5 px-3 text-right font-mono whitespace-nowrap">
             {% if event.car_result %}
-            <span class="font-semibold {% if event.car_result.car > 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
+            <span class="font-semibold {% if not event.car_result.is_significant_95 %}opacity-50 text-zinc-400{% elif event.car_result.car > 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
               {{ "%+.2f"|format(event.car_result.car * 100) }}%
             </span>
             {% else %}
             <span class="text-zinc-400 cursor-help" title="Not enough trading history yet — needs about 140 trading days before the filing and 30 after it.">—</span>
+            {% endif %}
+          </td>
+          <td class="py-2.5 px-3 text-right font-mono text-xs whitespace-nowrap">
+            {% if event.pool %}
+            <span class="text-zinc-400">P{{ '%.0f'|format(event.pool.percentile) }}</span> <span class="text-[10px] text-zinc-500">(n={{ event.pool.n }})</span>
+            {% else %}
+            <span class="text-zinc-400">—</span>
             {% endif %}
           </td>
           <td class="py-2.5 px-3 text-right font-mono text-zinc-500 dark:text-zinc-400 whitespace-nowrap">

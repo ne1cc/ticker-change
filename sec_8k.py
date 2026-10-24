@@ -31,9 +31,56 @@ ITEM_DEFINITIONS = {
     "5.01": "Changes in Control of Registrant",
     "5.02": "Departure/Election of Directors or Principal Officers",
     "5.03": "Amendments to Articles of Incorporation or Bylaws",
+    "5.07": "Submission of Matters to a Vote of Security Holders",
     "7.01": "Regulation FD Disclosure",
     "8.01": "Other Events",
 }
+
+# Event-study taxonomy: each known item maps to an event type, or to
+# "routine" when the item is administrative and carries no market-moving
+# information (shareholder votes, charter/bylaw housekeeping, catch-all
+# "Other Events" absent a content classifier). Only items listed here reach
+# event studies.
+ITEM_EVENT_TYPES = {
+    "1.01": "m&a",
+    "1.02": "m&a",
+    "2.01": "m&a",
+    "2.02": "earnings",
+    "2.03": "financing",
+    "3.01": "listing",
+    "3.02": "financing",
+    "4.01": "auditor",
+    "4.02": "restatement",
+    "5.01": "control",
+    "5.02": "management",
+    "5.03": "routine",
+    "5.07": "routine",
+    "7.01": "reg_fd",
+    "8.01": "routine",
+}
+
+# Mixed-item filings resolve to the first type in this order: highest
+# market-information severity wins, so a 2.02+5.02 filing is "earnings"
+# material and a 2.02+7.01 pair (release + slides) stays "earnings".
+EVENT_TYPE_PRIORITY = [
+    "restatement", "control", "listing", "m&a", "auditor",
+    "management", "earnings", "financing", "reg_fd",
+]
+
+
+def resolve_event_type(items: List[str]) -> Optional[str]:
+    """Taxonomy type for a filing's item set, or None when routine-only.
+
+    Deterministic by construction: the informative item earliest in
+    EVENT_TYPE_PRIORITY wins regardless of item order; a filing whose items
+    are all routine (or unknown) resolves to None and is excluded from
+    event studies.
+    """
+    types = {ITEM_EVENT_TYPES.get(it) for it in (items or [])}
+    for t in EVENT_TYPE_PRIORITY:
+        if t in types:
+            return t
+    return None
 
 
 @dataclass
@@ -48,6 +95,8 @@ class MaterialEvent8K:
     primary_doc_url: str
     description: str = ""
     is_high_impact: bool = False
+    event_type: Optional[str] = None  # None = routine-only: excluded from studies
+    after_close: bool = False  # accepted at/after 16:00 ET → next session reacts
 
 
 def fetch_and_parse_8k_filings(ticker: str, limit: int = 20) -> List[MaterialEvent8K]:
@@ -79,6 +128,7 @@ def fetch_and_parse_8k_filings(ticker: str, limit: int = 20) -> List[MaterialEve
     primary_docs = recent.get("primaryDocument", [])
     items_list = recent.get("items", [])
     descriptions = recent.get("primaryDocDescription", [])
+    acceptances = recent.get("acceptanceDateTime", [])
 
     parsed_events: List[MaterialEvent8K] = []
 
@@ -104,6 +154,17 @@ def fetch_and_parse_8k_filings(ticker: str, limit: int = 20) -> List[MaterialEve
             # High impact categories: 4.02 (restatements), 4.01 (auditor switch), 5.01 (control change), 2.01 (M&A)
             high_impact = any(it in ("4.01", "4.02", "5.01", "2.01", "3.01") for it in found_items)
 
+            # EDGAR acceptanceDateTime carries an ET offset, so .hour is the
+            # local filing time: at/after 16:00 means the market was already
+            # closed and the first reaction session is the next trading day.
+            after_close = False
+            acceptance = acceptances[i] if i < len(acceptances) else ""
+            if acceptance:
+                try:
+                    after_close = datetime.fromisoformat(acceptance).hour >= 16
+                except ValueError:
+                    pass
+
             event = MaterialEvent8K(
                 accession_number=accessions[i] if i < len(accessions) else "",
                 cik=str(cik_str),
@@ -115,6 +176,8 @@ def fetch_and_parse_8k_filings(ticker: str, limit: int = 20) -> List[MaterialEve
                 primary_doc_url=doc_url,
                 description=descriptions[i] if i < len(descriptions) else "Form 8-K Current Report",
                 is_high_impact=high_impact,
+                event_type=resolve_event_type(found_items),
+                after_close=after_close,
             )
             parsed_events.append(event)
             if len(parsed_events) >= limit:

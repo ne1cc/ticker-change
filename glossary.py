@@ -480,10 +480,10 @@ GLOSSARY: dict[str, dict] = {
         "formula": "CAR = Σ (R_it − (α + β·R_mt)) over the event window",
     },
     "event_car": {
-        "term": "Event CAR (−10/+30)",
+        "term": "Event CAR",
         "section": "Institutional Analytics",
         "short": "Cumulative abnormal return around an event vs what beta would predict.",
-        "long": "Market-model event study: abnormal return accumulated from 10 sessions before to 30 after the event, net of the stock's normal beta relationship with SPY. A t-stat with p < 0.05 means the move is unlikely to be noise.",
+        "long": "Market-model event study: abnormal return accumulated over the event type's short announcement window (e.g. −1/+1 sessions for earnings), net of the stock's normal beta relationship with SPY. Post-event drift is measured over a separate window. A t-stat with p < 0.05 means the move is unlikely to be noise.",
     },
     "pead_drift": {
         "term": "Post-Earnings Drift",
