@@ -45,8 +45,7 @@ class TestEarningsEmbed(unittest.TestCase):
                 "earnings", lambda: app_module.earnings.build_earnings_section("AAPL")))
 
     def test_page_renders_section_without_500(self):
-        # Seed prices so compute_analytics renders the full layout (with no
-        # prices it renders the error page, which never includes the partial).
+        # Seed prices so the fragment has a base (no prices -> 404).
         idx = pd.bdate_range("2024-01-01", periods=300)
         close = 100 + np.arange(300)
         frame = pd.DataFrame({"Open": close, "High": close, "Low": close,
@@ -58,7 +57,7 @@ class TestEarningsEmbed(unittest.TestCase):
         with patch.object(app_module.earnings, "build_earnings_section",
                           return_value=FAKE_SECTION), \
              patch.object(app_module, "get_fundamentals", return_value=None):
-            resp = client.get("/analytics?ticker=AAPL")
+            resp = client.get("/analytics/fragment/company?ticker=AAPL")
         html = resp.get_data(as_text=True)
         self.assertEqual(resp.status_code, 200)
         self.assertIn("Earnings Event Study", html)
@@ -84,7 +83,7 @@ class TestEarningsEmbed(unittest.TestCase):
         with patch.object(app_module.earnings, "build_earnings_section",
                           return_value=None), \
              patch.object(app_module, "get_fundamentals", return_value=None):
-            resp = client.get("/analytics?ticker=AAPL")
+            resp = client.get("/analytics/fragment/company?ticker=AAPL")
         html = resp.get_data(as_text=True)
         self.assertEqual(resp.status_code, 200)
         self.assertNotIn("prints studied", html)
