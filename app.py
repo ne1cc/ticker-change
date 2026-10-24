@@ -1963,6 +1963,52 @@ def _rolling_beta_chart(rows) -> str | None:
         charts.cartesian([lo, band, beta], yname='beta',
                          refs=[charts.reference('yAxis', 1.0, 'β = 1.0')]), height=300)
 
+def _build_risk_lab_block(returns: pd.Series) -> dict:
+    """Credible-risk block: tail-honest VaR/ES, EWMA/GARCH forecasts with
+    out-of-sample evaluation, VaR backtests, and horizon scaling."""
+    import risk_backtests
+    r = np.asarray(returns, dtype=float)
+    r = r[np.isfinite(r)]
+    if len(r) < 300:
+        return {"available": False, "state": f"Insufficient history ({len(r)} days; need 300+)."}
+    out: dict = {"available": True, "n": int(len(r))}
+
+    out["tail"] = risk_backtests.tail_honest_var(r)
+
+    realized_60d = float(r[-60:].std() * np.sqrt(252))
+    vf = {
+        "ewma_annualised_pct": round(risk_backtests.ewma_vol_forecast(r) * np.sqrt(252) * 100, 2),
+        "realized_60d_annualised_pct": round(realized_60d * 100, 2),
+    }
+    garch = _guard_section("garch_fit", lambda: risk_backtests.fit_garch11(r))
+    if garch:
+        vf["garch_annualised_pct"] = round(garch["next_var"] ** 0.5 * np.sqrt(252) * 100, 2)
+        vf["garch_params"] = {"alpha": round(garch["alpha"], 3), "beta": round(garch["beta"], 3),
+                              "persistence": round(garch["persistence"], 3)}
+        ev = risk_backtests.forecast_evaluation(r[1:], garch["filtered_var"][1:])
+        vf["evaluation"] = {k: (round(v, 4) if isinstance(v, float) else v) for k, v in ev.items()}
+        out["_garch_filtered"] = {"filtered_var": garch["filtered_var"]}
+    out["vol_forecast"] = vf
+
+    out["backtests"] = {f"var_{int(l * 100)}": risk_backtests.var_backtest(r, l) for l in (0.95, 0.99)}
+    out["horizons"] = risk_backtests.horizon_var(r)
+    return out
+
+
+def _vol_forecast_chart(returns: pd.Series, garch_block: dict | None) -> str | None:
+    """Trailing 20d realised vol vs GARCH filtered vol, annualised %."""
+    if not garch_block or garch_block.get("filtered_var") is None:
+        return None
+    r = np.asarray(returns, dtype=float)
+    dates = returns.index[1:]
+    realized = pd.Series(r).rolling(20).std().mul(np.sqrt(252) * 100)
+    garch_vol = pd.Series(np.sqrt(garch_block["filtered_var"][1:]) * np.sqrt(252) * 100)
+    n = min(len(dates), len(realized), len(garch_vol))
+    dates = dates[-n:]
+    series = charts.line('Realised 20d', dates, realized.iloc[-n:].round(2), '#71717a')
+    series2 = charts.line('GARCH(1,1) filtered', dates, garch_vol.iloc[-n:].round(2), '#f59e0b')
+    return charts.render_chart(charts.cartesian([series, series2], yname='vol %'), height=280)
+
 
 def _trade_type_arg() -> str:
     trade_type = request.args.get('trade_type', 'long_stock')
@@ -2278,8 +2324,23 @@ def analytics_page():
             "cumulative_return", lambda: get_cumulative_return_chart(ticker, price_df),
             timeout=SECTION_TIMEOUT_S)
         prices_receipt = analytics_receipts.receipt("prices", ticker, present=True, as_of=price_df.index[-1])
+
+        # Credible risk: tail honesty, vol forecasts, backtests, horizons.
+        returns_s = price_df['close'].pct_change().dropna()
+        data['risk_lab'] = _guard_section(
+            "risk_lab", lambda: _build_risk_lab_block(returns_s),
+            timeout=SECTION_TIMEOUT_S)
+        data['charts']['vol_forecast'] = _guard_section(
+            "vol_forecast",
+            lambda: _vol_forecast_chart(returns_s, (data.get('risk_lab') or {}).get('_garch_filtered')),
+            timeout=SECTION_TIMEOUT_S)
+        if isinstance(data.get('risk_lab'), dict):
+            data['risk_lab'].pop('_garch_filtered', None)  # numpy payload, not JSON-safe
+
+    position_usd = request.args.get('position', type=float)
     return render_template('analytics.html', data=data, ticker=ticker, lazy=True,
-                           trade_type=_trade_type_arg(), prices_receipt=prices_receipt)
+                           trade_type=_trade_type_arg(), prices_receipt=prices_receipt,
+                           position_usd=position_usd)
 
 
 @app.route('/analytics/fragment/<name>')

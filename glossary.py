@@ -545,6 +545,31 @@ GLOSSARY["dimson_beta"] = {
     "long": "Raw OLS beta against SPY with its standard error; Dimson beta (sums lead and lag benchmark coefficients to correct asynchronous trading); Blume adjustment (2/3 weight toward the market prior of 1); and Vasicek Bayesian shrinkage (weights the raw estimate by its own precision, so noisier betas shrink further). Differences larger than the standard error are a warning that the raw beta is unreliable.",
 }
 
+GLOSSARY["var_tail_honesty"] = {
+    "term": "Tail-Honest VaR / Expected Shortfall",
+    "section": "Risk & Return",
+    "short": "Historical VaR and ES with their tail-observation counts and bootstrap confidence intervals.",
+    "long": "A 99% VaR from 252 observations rests on roughly 2-3 tail points, so the panel shows exactly how many observations the quantile is built from, a bootstrap 95% confidence interval, and flags 'low confidence' below 10 tail observations rather than presenting a false-precision number.",
+}
+GLOSSARY["vol_forecast"] = {
+    "term": "Volatility Forecast (EWMA / GARCH)",
+    "section": "Risk & Return",
+    "short": "Next-day volatility forecasts from RiskMetrics EWMA and a Gaussian GARCH(1,1) maximum-likelihood fit.",
+    "long": "EWMA (lambda 0.94) and GARCH(1,1) are compared with subsequently realised volatility using MSE and QLIKE against a trailing-60-day mean benchmark. If the models do not beat that naive benchmark on QLIKE, the panel says so — sophistication is only credible when it outperforms its cheap alternative.",
+}
+GLOSSARY["var_backtest"] = {
+    "term": "VaR Backtests (Kupiec / Christoffersen)",
+    "section": "Risk & Return",
+    "short": "Statistical tests of whether the rolling VaR's violations match its claimed coverage.",
+    "long": "A 250-day rolling historical VaR is rolled over the history and its exceedances are tested: the Kupiec proportion-of-failures likelihood ratio checks the violation rate, and the Christoffersen independence test checks whether violations cluster (a VaR that is violated in bursts missed volatility regime shifts). Traffic light: green = both accepted at 5%, red = both rejected.",
+}
+GLOSSARY["horizon_var"] = {
+    "term": "Horizon VaR (overlapping windows)",
+    "section": "Risk & Return",
+    "short": "Multi-day VaR computed from overlapping empirical n-day return sums.",
+    "long": "1/10/21-day horizons are estimated from overlapping n-day sum distributions rather than sqrt-time scaling, which is a crude approximation that understates multi-period tails. An optional position size converts the percentages to dollars.",
+}
+
 # Direction semantics for percentile ranking and interpretation (Issue #119)
 _METRIC_DIRECTIONS: dict[str, str] = {
     # Higher is riskier

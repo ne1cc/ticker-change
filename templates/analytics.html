@@ -131,6 +131,117 @@
   </div>
   {% endif %}
 
+  <!-- Row 3b: Credible Risk — tail honesty, vol forecasts, backtests, horizons -->
+  {% if data.risk_lab %}
+  {% set rl = data.risk_lab %}
+  <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+    <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest">{{ metric('Credible Risk — Tail Honesty, Vol Forecasts & Backtests', 'var_tail_honesty') }}</h2>
+      <form method="get" action="/analytics" class="flex items-center gap-1.5 text-xs text-zinc-400">
+        <input type="hidden" name="ticker" value="{{ ticker }}">
+        <label for="position">Position ($)</label>
+        <input id="position" name="position" type="number" min="0" step="1000" value="{{ '%.0f'|format(position_usd) if position_usd else '' }}"
+               class="w-28 rounded border border-zinc-300 dark:border-zinc-700 bg-transparent px-2 py-1 font-mono text-xs" placeholder="e.g. 100000">
+        <button type="submit" class="rounded border border-zinc-300 dark:border-zinc-700 px-2 py-1">Scale</button>
+      </form>
+    </div>
+    {% if not rl.available %}
+    <p class="text-xs font-mono text-zinc-400">{{ rl.state }}</p>
+    {% else %}
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <!-- Tail honesty -->
+      <div class="space-y-3">
+        <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Tail honesty (full-history {{ rl.n }}d)</div>
+        {% for key, t in rl.tail.items() %}
+        <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5">
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] font-semibold text-zinc-400 uppercase">VaR {{ key.replace('var_', '') }} / ES</span>
+            {% if t.low_confidence %}
+            <span class="text-[10px] uppercase tracking-wide text-amber-500 border border-amber-500/40 rounded px-1.5 py-0.5"
+                  title="Only {{ t.tail_obs }} tail observations — this quantile is an order-of-magnitude estimate">low confidence</span>
+            {% endif %}
+          </div>
+          <p class="text-lg font-bold font-mono mt-1">{{ "%.2f"|format(t.var * 100) }}% <span class="text-zinc-400 text-xs">/ {{ "%.2f"|format(t.expected_shortfall * 100) }}%</span></p>
+          <p class="text-[10px] text-zinc-400 mt-1">tail n={{ t.tail_obs }} · bootstrap 95% CI [{{ "%.2f"|format(t.ci95[0] * 100) }}%, {{ "%.2f"|format(t.ci95[1] * 100) }}%]</p>
+          {% if position_usd %}
+          <p class="text-[10px] font-mono text-zinc-500 mt-0.5">${{ "%.0f"|format(t.var * position_usd) }} / ${{ "%.0f"|format(t.expected_shortfall * position_usd) }}</p>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+
+      <!-- Vol forecasts + backtests -->
+      <div class="space-y-3">
+        <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Volatility forecast (next day, annualised)</div>
+        <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5 font-mono text-xs">
+          <div class="flex justify-between"><span class="text-zinc-400">EWMA (λ=0.94)</span><span class="font-bold">{{ "%.1f"|format(rl.vol_forecast.ewma_annualised_pct) }}%</span></div>
+          <div class="flex justify-between mt-1"><span class="text-zinc-400">GARCH(1,1)</span>
+            <span class="font-bold">{% if rl.vol_forecast.garch_annualised_pct %}{{ "%.1f"|format(rl.vol_forecast.garch_annualised_pct) }}%{% if rl.vol_forecast.garch_params %} <span class="text-zinc-400">(α={{ rl.vol_forecast.garch_params.alpha }}, β={{ rl.vol_forecast.garch_params.beta }})</span>{% endif %}{% else %}—{% endif %}</span></div>
+          <div class="flex justify-between mt-1"><span class="text-zinc-400">Realised 60d</span><span class="font-bold">{{ "%.1f"|format(rl.vol_forecast.realized_60d_annualised_pct) }}%</span></div>
+          {% if rl.vol_forecast.evaluation %}
+          <div class="mt-2 pt-2 border-t border-zinc-200/60 dark:border-zinc-800/60 text-[10px] text-zinc-400">
+            QLIKE {{ "%.3f"|format(rl.vol_forecast.evaluation.qlike) }} (naive {{ "%.3f"|format(rl.vol_forecast.evaluation.qlike_naive) }})
+            {% if rl.vol_forecast.evaluation.beats_naive_qlike %}
+            <span class="text-emerald-500">beats trailing-mean benchmark</span>
+            {% else %}
+            <span class="text-amber-500">does NOT beat a trailing-mean benchmark — distrust the sophistication</span>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+        <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">{{ metric('VaR backtests', 'var_backtest') }}</div>
+        <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5 font-mono text-xs">
+          {% for key, bt in rl.backtests.items() %}
+          {% if bt.sufficient %}
+          <div class="flex items-center justify-between mt-1">
+            <span class="text-zinc-400">{{ key.replace('_', ' ') }} ({{ bt.expected_violation_rate_pct }}% expected)</span>
+            <span class="flex items-center gap-2">
+              <span>{{ bt.violation_rate_pct }}% actual · Kupiec p={{ "%.2f"|format(bt.kupiec.p_value) }} · Christ. p={{ "%.2f"|format(bt.christoffersen.p_value) if bt.christoffersen.p_value is not none else '—' }}</span>
+              <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase
+                {% if bt.traffic == 'green' %}bg-emerald-500/20 text-emerald-500
+                {% elif bt.traffic == 'amber' %}bg-amber-500/20 text-amber-500
+                {% elif bt.traffic == 'red' %}bg-rose-500/20 text-rose-500
+                {% else %}bg-zinc-200 dark:bg-zinc-800 text-zinc-400{% endif %}">{{ bt.traffic }}</span>
+            </span>
+          </div>
+          {% endif %}
+          {% endfor %}
+          <p class="text-[10px] text-zinc-400 mt-2">Rolling 250d historical VaR, exceedance tests. Green = coverage accepted; red = both tests reject.</p>
+        </div>
+      </div>
+
+      <!-- Horizons -->
+      <div class="space-y-3">
+        <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">{{ metric('Horizon VaR (overlapping windows)', 'horizon_var') }}</div>
+        <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5 font-mono text-xs">
+          <table class="w-full">
+            <thead><tr class="text-left text-[10px] text-zinc-400 uppercase"><th class="py-1">Horizon</th><th class="text-right">VaR 95</th><th class="text-right">VaR 99</th></tr></thead>
+            <tbody>
+              {% for h in ['h1', 'h10', 'h21'] %}
+              {% if rl.horizons[h ~ '_var_95'] %}
+              <tr class="border-t border-zinc-200/50 dark:border-zinc-800/50">
+                <td class="py-1.5 text-zinc-400">{{ h.replace('h', '') }}d</td>
+                <td class="text-right font-bold">{{ "%.1f"|format(rl.horizons[h ~ '_var_95'].var * 100) }}%</td>
+                <td class="text-right font-bold">{{ "%.1f"|format(rl.horizons[h ~ '_var_99'].var * 100) }}%</td>
+              </tr>
+              {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+          {% if position_usd and rl.horizons['h10_var_95'] %}
+          <p class="text-[10px] font-mono text-zinc-500 mt-2">10d 95% VaR on ${{ "%.0f"|format(position_usd) }}: ${{ "%.0f"|format(rl.horizons['h10_var_95'].var * position_usd) }}</p>
+          {% endif %}
+          <p class="text-[10px] text-zinc-400 mt-2">Empirical overlapping n-day sums — not √-time scaled (that approximation understates tails).</p>
+        </div>
+      </div>
+    </div>
+    {% if data.charts.vol_forecast %}
+    <div class="mt-4">{{ data.charts.vol_forecast | safe }}</div>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+
   <!-- Row 3: Volatility (full width) -->
   <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
     <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Rolling Volatility', 'annualised_vol') }}</h2>
