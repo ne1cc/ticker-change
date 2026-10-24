@@ -1758,11 +1758,23 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
                 m_key, m_val, sector=sec, snapshot=snap
             )
 
+    import signal_lab
+    try:
+        signals_block = {
+            "signals": signal_lab.get_ticker_signal_ranks(ticker),
+            "validation_gates": signal_lab.VALIDATION_GATES,
+            "survivorship_caveat": signal_lab.SURVIVORSHIP_CAVEAT,
+        }
+    except Exception as e:
+        print(f"Error building signals_lab for {ticker}: {e}")
+        signals_block = None
+
     return {
         'ticker': ticker.upper(),
         'current_price': current_price,
         'gics_sector': sec,
         'percentiles': p_map,
+        'signals_lab': signals_block,
         'stats': {
             'mean_daily_return': round(mean_return * 100, 4),
             'daily_std': round(std_return * 100, 4),
@@ -3577,6 +3589,31 @@ def radar_page():
                            warming=warming, tunables=tunables,
                            updated_pt=updated_pt,
                            excluded_summary=excluded_summary)
+
+
+# --- Signal Lab (Epic 5, issue #139) ---------------------------------------
+@app.route('/signal-lab')
+def signal_lab_page():
+    """Institutional Signal Lab: Rank IC, decay, decile long-short, turnover, DSR."""
+    import signal_lab
+    try:
+        cost_bps = float(request.args.get('cost_bps', 10.0))
+    except (ValueError, TypeError):
+        cost_bps = 10.0
+    payload = signal_lab.build_signal_lab_payload(cost_bps=cost_bps)
+    return render_template('signal_lab.html', data=payload)
+
+
+@app.route('/api/signal-lab')
+def signal_lab_api():
+    """API endpoint for Signal Lab payload."""
+    import signal_lab
+    try:
+        cost_bps = float(request.args.get('cost_bps', 10.0))
+    except (ValueError, TypeError):
+        cost_bps = 10.0
+    payload = signal_lab.build_signal_lab_payload(cost_bps=cost_bps)
+    return jsonify(payload)
 
 
 _RADAR_UNCOVERED_REASON = {"drift": "no-earnings", "squeeze": "assumed-si"}
