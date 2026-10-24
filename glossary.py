@@ -110,15 +110,8 @@ GLOSSARY: dict[str, dict] = {
     "seasonality": {
         "term": "Seasonality",
         "section": "Risk & Return",
-        "short": "Average return by calendar month over the full history — recurring strong/weak periods.",
-        "long": "The mean daily return grouped by calendar month across all available history. It surfaces recurring patterns (e.g. the historical weakness of September). Treat it as descriptive, not predictive — with limited years of data, monthly averages are noisy and prone to overfitting.",
-    },
-    "monte_carlo": {
-        "term": "Monte Carlo Projection",
-        "section": "Risk & Return",
-        "short": "1,000 simulated future price paths, showing the range of plausible outcomes — not a forecast.",
-        "long": "Simulates forward prices using geometric Brownian motion calibrated to the stock's own historical drift and volatility. The shaded bands are the 5–95% and 25–75% outcome ranges across simulations. It assumes returns are normally distributed and that the past drift/vol persist — both strong assumptions, so read it as a distribution of scenarios, not a target.",
-        "formula": "S_t = S_0 · exp(Σ (μ − ½σ²) + σ·Z)",
+        "short": "Average monthly return for each calendar month over the available history — descriptive, not predictive.",
+        "long": "Closes are compounded into month-over-month returns (the in-progress month is excluded) and averaged by calendar month. With about five observations per month the averages are noisy and untested for significance, so treat them as descriptive, not predictive.",
     },
     "cumulative_return": {
         "term": "Cumulative Return",
@@ -409,13 +402,6 @@ GLOSSARY: dict[str, dict] = {
     },
 
     # ----------------------------------------------------------------- Institutional Analytics
-    "vpin": {
-        "term": "VPIN (Order Flow Toxicity)",
-        "section": "Institutional Analytics",
-        "short": "Volume-Synchronized Probability of Toxicity measuring informed trader order flow imbalances.",
-        "long": "Easley-Kiefer-O'Hara Volume-Synchronized Probability of Toxicity. Measures toxicity by bucketing trading volume and quantifying directional order flow asymmetry. High VPIN flags aggressive informed trading and elevated short-term volatility or flash crash risk.",
-        "formula": "VPIN = Σ|V_buy - V_sell| / (2 × N × V_bucket)",
-    },
     "corwin_schultz": {
         "term": "Corwin-Schultz Bid-Ask Spread",
         "section": "Institutional Analytics",
@@ -426,25 +412,31 @@ GLOSSARY: dict[str, dict] = {
         "term": "Short Squeeze Risk Score",
         "section": "Institutional Analytics",
         "short": "Multi-factor composite score [0-100] quantifying short squeeze vulnerability.",
-        "long": "Multi-factor squeeze risk metric combining Short Interest % Float, Days to Cover (Short Ratio), Cost to Borrow (CTB), and Negative Dealer Gamma Exposure (GEX) acceleration.",
+        "long": "Multi-factor squeeze risk metric combining Short Interest % Float, Days to Cover (Short Ratio), and Negative Dealer Gamma Exposure (GEX) acceleration. Cost-to-borrow is excluded unless a reported value exists (no free CTB feed); component weights renormalise over the inputs actually used, and assumed inputs are flagged on the panel.",
     },
     "dual_betas": {
-        "term": "Regime-Conditional Dual Betas",
+        "term": "Up/Down-Market Betas",
         "section": "Institutional Analytics",
-        "short": "Bull Beta vs Bear Beta measuring asymmetric systematic market sensitivity.",
-        "long": "Separates historical covariance against the benchmark (SPY) into Bull market days (SPY > 0) versus Bear market days (SPY < 0), revealing upside participation versus downside exposure.",
+        "short": "Up-market vs down-market beta measuring asymmetric systematic sensitivity to SPY's daily direction.",
+        "long": "Separates historical covariance against the benchmark (SPY) into up-market days (SPY daily return >= 0) versus down-market days (SPY < 0), revealing upside participation versus downside exposure. These are market-DIRECTION betas, not macro-regime betas; sample size per side (n days) is shown alongside.",
+    },
+    "regime_betas": {
+        "term": "Macro-Regime-Conditional Betas",
+        "section": "Institutional Analytics",
+        "short": "Beta estimated only over days sharing the same FRED macro regime.",
+        "long": "Betas conditional on the regime actually prevailing on each historical date: yield-curve buckets from the sign of the 10Y-2Y spread, and rate-direction buckets from the 63-trading-day change in the fed funds rate (tightening/easing beyond +/-25bp, otherwise pause). Each bucket shows its sample size; betas are withheld below 60 observations, and declared unavailable when FRED history is missing.",
     },
     "upside_capture": {
         "term": "Upside Capture Ratio",
         "section": "Institutional Analytics",
         "short": "Percentage of benchmark gains captured when the market is rising (>100% outperforms up-markets).",
-        "long": "Compound return of the stock divided by compound return of benchmark during positive benchmark periods. Above 100% means the asset generates alpha during market rallies.",
+        "long": "Geometric mean of the asset's compounded monthly returns in up-market months (benchmark return > 0) divided by the benchmark's geometric mean in those same months — the Morningstar convention. Above 100% means the asset outparticipates market rallies; declared as insufficient history below six up-market months.",
     },
     "downside_capture": {
         "term": "Downside Capture Ratio",
         "section": "Institutional Analytics",
         "short": "Percentage of benchmark losses suffered when the market is falling (<100% protects capital).",
-        "long": "Compound return of the asset divided by benchmark return during negative benchmark periods. Below 100% signals superior downside protection.",
+        "long": "Geometric mean of the asset's compounded monthly returns in down-market months (benchmark return < 0) divided by the benchmark's geometric mean in those same months — the Morningstar convention. Below 100% signals superior downside protection; declared as insufficient history below six down-market months.",
     },
     "vanna": {
         "term": "Vanna (dDelta / dVol)",
@@ -470,9 +462,9 @@ GLOSSARY: dict[str, dict] = {
     "vrp": {
         "term": "Variance Risk Premium (VRP)",
         "section": "Institutional Analytics",
-        "short": "Spread between ATM Implied Volatility and 30-Day Realized Historical Volatility.",
-        "long": "VRP = Implied Volatility - Realized Volatility. Positive VRP indicates expensive option premiums suitable for volatility sellers; negative VRP indicates underpriced option convexity favouring buyers.",
-        "formula": "VRP = IV_ATM - HV_30d",
+        "short": "Spread between ATM implied volatility (~30 days out) and 21-day Yang–Zhang realized volatility.",
+        "long": "VRP = ATM implied volatility (average of call and put on the strike nearest spot, expiry nearest 30 days) minus 21-session Yang–Zhang realized volatility. Positive VRP indicates expensive option premiums suitable for volatility sellers; negative VRP indicates underpriced option convexity favouring buyers.",
+        "formula": "VRP = IV_ATM(~30d) - RV_YZ(21d)",
     },
     "sec_8k": {
         "term": "SEC Form 8-K Filings",

@@ -89,10 +89,11 @@ def compute_higher_order_greeks(
     vanna = -pdf_d1 * d2 / volatility
 
     # 6. Charm (Delta decay per year): -pdf(d1) * (2*r*T - d2*vol*sqrt(T)) / (2*T*vol*sqrt(T))
+    #    With zero dividend yield put charm equals call charm (put delta = call delta - 1).
     charm_annual = pdf_d1 * (
         (2.0 * risk_free_rate * time_to_exp - d2 * volatility * t_sqrt) / (2.0 * time_to_exp * volatility * t_sqrt)
     )
-    charm = float(-charm_annual / 365.0 if is_call else (1.0 - charm_annual) / 365.0)
+    charm = float(-charm_annual / 365.0)
 
     # 7. Vomma / Volga: dVega / dVol = Vega * d1 * d2 / vol
     vomma = vega * d1 * d2 / volatility
@@ -109,15 +110,15 @@ def compute_higher_order_greeks(
 
 
 def calculate_variance_risk_premium(
-    atm_implied_vol: float, realized_vol_30d: float
+    atm_implied_vol: float, realized_vol: float
 ) -> Dict[str, Any]:
-    """Variance Risk Premium (VRP) calculation and mispricing regime.
+    """Volatility risk premium (IV - realized vol, both decimal annualised) and its regime.
 
     VRP > 0: Options implied volatility trades at a premium over realized movement (Seller's market).
     VRP < 0: Options underpriced relative to realized price fluctuations (Buyer's market).
     """
-    vrp_spread = atm_implied_vol - realized_vol_30d
-    vrp_ratio = atm_implied_vol / max(realized_vol_30d, 1e-4)
+    vrp_spread = atm_implied_vol - realized_vol
+    vrp_ratio = atm_implied_vol / max(realized_vol, 1e-4)
 
     if vrp_spread > 0.08:
         regime = "RICH_VOLATILITY (Strong Premium Selling Edge)"
@@ -130,7 +131,7 @@ def calculate_variance_risk_premium(
 
     return {
         "atm_implied_vol": round(atm_implied_vol * 100, 2),
-        "realized_vol_30d": round(realized_vol_30d * 100, 2),
+        "realized_vol": round(realized_vol * 100, 2),
         "vrp_spread_pct": round(vrp_spread * 100, 2),
         "vrp_ratio": round(vrp_ratio, 2),
         "regime": regime,

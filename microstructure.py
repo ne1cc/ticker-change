@@ -1,16 +1,16 @@
 """Microstructure, Liquidity & Squeeze Vulnerability Engine.
 
 Implements:
-1. Easley-Kiefer-O'Hara VPIN (Volume-Synchronized Probability of Toxicity)
-2. Corwin-Schultz (2012) High-Low Bid-Ask Spread Estimator
-3. Roll (1984) Effective Spread from Serial Covariance of Price Changes
+1. Corwin-Schultz (2012) High-Low Bid-Ask Spread Estimator
+2. Roll (1984) Effective Spread from Serial Covariance of Price Changes
+3. Amihud (2002) illiquidity
 4. Squeeze Risk Index (Multi-factor: DTC, Short Interest % Float, CTB, Negative GEX)
 """
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -21,10 +21,9 @@ class MicrostructureAnalytics:
     corwin_schultz_spread_pct: float
     roll_effective_spread_pct: float
     amihud_illiquidity: float
-    vpin_toxicity: float  # [0.0, 1.0]
-    toxicity_regime: str  # LOW, MODERATE, HIGH, CRITICAL
     squeeze_risk_score: float  # [0, 100]
     squeeze_risk_level: str  # LOW, ELEVATED, HIGH, EXTREME
+    squeeze_inputs_assumed: list = field(default_factory=list)  # inputs the squeeze index assumed (e.g. ["SI % float", "DTC"])
 
 
 def calculate_corwin_schultz_spread(df: pd.DataFrame, window: int = 2) -> float:
@@ -122,77 +121,22 @@ def calculate_amihud_illiquidity(df: pd.DataFrame) -> float:
     return float(illiq)
 
 
-def calculate_vpin(trades: List[Dict[str, Any]], num_buckets: int = 50, bucket_size: Optional[int] = None) -> float:
-    """Calculate Easley-Kiefer-O'Hara VPIN from trade ticks or volume bars.
-
-    trades: list of dicts with {'price': float, 'volume': int, 'side': 'buy'|'sell' (or inferred via tick rule)}
-    """
-    if not trades:
-        return 0.20  # Neutral baseline
-
-    total_vol = sum(t.get("volume", 0) for t in trades)
-    if total_vol <= 0:
-        return 0.20
-
-    if not bucket_size:
-        bucket_size = max(int(total_vol / max(num_buckets, 1)), 100)
-
-    bucket_imbalances = []
-    curr_buy_vol = 0
-    curr_sell_vol = 0
-    curr_bucket_vol = 0
-
-    last_p = None
-    for t in trades:
-        p = t.get("price", 0.0)
-        v = t.get("volume", 0)
-        side = t.get("side")
-
-        # Inferred side via Tick Rule if missing
-        if not side:
-            if last_p is None or p >= last_p:
-                side = "buy"
-            else:
-                side = "sell"
-        last_p = p
-
-        while v > 0:
-            space = bucket_size - curr_bucket_vol
-            fill = min(v, space)
-            if side == "buy":
-                curr_buy_vol += fill
-            else:
-                curr_sell_vol += fill
-            curr_bucket_vol += fill
-            v -= fill
-
-            if curr_bucket_vol >= bucket_size:
-                bucket_imbalances.append(abs(curr_buy_vol - curr_sell_vol))
-                curr_buy_vol = 0
-                curr_sell_vol = 0
-                curr_bucket_vol = 0
-
-    if not bucket_imbalances:
-        return 0.20
-
-    vpin = sum(bucket_imbalances) / (len(bucket_imbalances) * bucket_size)
-    return float(np.clip(vpin, 0.0, 1.0))
-
-
 def compute_squeeze_risk_index(
     short_pct_float: float,
     days_to_cover: float,
-    cost_to_borrow_pct: float = 2.5,
+    cost_to_borrow_pct: float | None = None,
     is_negative_gex: bool = False,
     realized_vol_30d: float = 0.35,
 ) -> Tuple[float, str]:
     """Multi-factor Short Squeeze Risk Composite (0 - 100).
 
-    Components:
+    Components (weights renormalise over the inputs actually used):
     - Short Interest % Float (0-40 pts): >20% heavily penalized
     - Days to Cover (0-30 pts): >5 days heavily penalized
-    - Cost to Borrow (0-15 pts): >10% annualized fee
     - Negative Gamma Dealer Exposure (0-15 pts): Accelerates price upside cascades
+    - Cost to Borrow (0-15 pts): >10% annualized fee — only when a reported CTB
+      is supplied. There is no free CTB feed, so callers omit it (None) rather
+      than scoring every ticker on an invented constant.
     """
     # 1. Short Float Score
     si = max(short_pct_float, 0.0)
@@ -202,15 +146,17 @@ def compute_squeeze_risk_index(
     dtc = max(days_to_cover, 0.0)
     dtc_score = min(dtc / 7.0, 1.0) * 30.0
 
-    # 3. Cost to Borrow Score
-    ctb = max(cost_to_borrow_pct, 0.0)
-    ctb_score = min(ctb / 20.0, 1.0) * 15.0
-
-    # 4. Negative GEX Accelerator
+    # 3. Negative GEX Accelerator
     gex_score = 15.0 if is_negative_gex else 5.0
 
-    raw_score = si_score + dtc_score + ctb_score + gex_score
-    score = round(float(np.clip(raw_score, 0.0, 100.0)), 1)
+    raw_score = si_score + dtc_score + gex_score
+    weight_sum = 85.0
+    if cost_to_borrow_pct is not None:
+        ctb = max(cost_to_borrow_pct, 0.0)
+        raw_score += min(ctb / 20.0, 1.0) * 15.0
+        weight_sum += 15.0
+
+    score = round(float(np.clip(raw_score / weight_sum * 100.0, 0.0, 100.0)), 1)
 
     if score >= 75.0:
         level = "EXTREME"
@@ -229,30 +175,18 @@ def get_microstructure_analytics(
     short_pct_float: float = 3.0,
     days_to_cover: float = 2.0,
     is_negative_gex: bool = False,
+    assumed_si_inputs: list | None = None,
 ) -> MicrostructureAnalytics:
-    """Unified entry-point for quantitative microstructure analysis."""
+    """Unified entry-point for quantitative microstructure analysis.
+
+    `assumed_si_inputs` names the squeeze inputs that fell back to defaults
+    (e.g. ["SI % float", "DTC"] when no short-interest feed reported) so the UI
+    can flag them; cost-to-borrow is always absent (no free source) and is
+    never scored on an invented value.
+    """
     cs_spread = calculate_corwin_schultz_spread(df)
     roll_spread = calculate_roll_effective_spread(df)
     amihud = calculate_amihud_illiquidity(df)
-
-    # Convert OHLCV bars into simulated volume buckets for VPIN
-    pseudo_trades = []
-    if not df.empty:
-        closes = df["close"].values if "close" in df.columns else df["Close"].values
-        vols = df["volume"].values if "volume" in df.columns else df["Volume"].values
-        for i in range(1, len(closes)):
-            side = "buy" if closes[i] >= closes[i - 1] else "sell"
-            pseudo_trades.append({"price": float(closes[i]), "volume": int(vols[i]), "side": side})
-
-    vpin = calculate_vpin(pseudo_trades)
-    if vpin >= 0.65:
-        vpin_regime = "CRITICAL"
-    elif vpin >= 0.45:
-        vpin_regime = "HIGH"
-    elif vpin >= 0.25:
-        vpin_regime = "MODERATE"
-    else:
-        vpin_regime = "LOW"
 
     sq_score, sq_level = compute_squeeze_risk_index(
         short_pct_float=short_pct_float,
@@ -264,8 +198,7 @@ def get_microstructure_analytics(
         corwin_schultz_spread_pct=round(cs_spread * 100, 3),
         roll_effective_spread_pct=round(roll_spread * 100, 3),
         amihud_illiquidity=round(amihud, 4),
-        vpin_toxicity=round(vpin, 3),
-        toxicity_regime=vpin_regime,
         squeeze_risk_score=sq_score,
         squeeze_risk_level=sq_level,
+        squeeze_inputs_assumed=list(assumed_si_inputs or []),
     )

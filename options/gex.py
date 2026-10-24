@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
 import numpy as np
 import pandas as pd
@@ -10,6 +11,28 @@ from scipy.stats import norm
 from .models import Convention, GexProfile
 
 CONTRACT_MULTIPLIER = 100.0
+
+
+def get_risk_free_rate() -> Tuple[float, str]:
+    """Retrieve current risk-free rate from FRED (DTB3 or DFF) with declared fallback."""
+    try:
+        from macro_engine import fetch_fred_series
+        # Try 3-Month Treasury Bill (DTB3)
+        obs = fetch_fred_series("DTB3", limit=5)
+        if obs and obs[0].get("value") not in (".", None):
+            val = float(obs[0]["value"])
+            if 0.0 <= val <= 25.0:
+                return val / 100.0, f"FRED DTB3 ({val:.2f}%)"
+
+        # Try Fed Funds Effective Rate (DFF)
+        obs_dff = fetch_fred_series("DFF", limit=5)
+        if obs_dff and obs_dff[0].get("value") not in (".", None):
+            val = float(obs_dff[0]["value"])
+            if 0.0 <= val <= 25.0:
+                return val / 100.0, f"FRED DFF ({val:.2f}%)"
+    except Exception:
+        pass
+    return 0.045, "Fallback 4.5% (FRED rate unavailable)"
 
 
 def _invert_bs_iv(
@@ -193,10 +216,12 @@ def find_gamma_flip(
     hi: float = 1.5,
     n: int = 201,
     r: float = 0.045,
+    iv_model: Literal["sticky_strike", "sticky_moneyness"] = "sticky_strike",
 ) -> Optional[float]:
     """Find spot level where net GEX crosses zero via 201-point continuous grid revaluation.
 
     Revalues Black-Scholes gamma at every spot price rather than assuming static gamma.
+    Supports both 'sticky_strike' (constant strike IV) and 'sticky_moneyness' (IV shifts with moneyness K/S).
     Returns None if net GEX maintains a single sign across the entire range (no flip).
     """
     df = clean_chain(chain, spot=spot)
@@ -208,7 +233,29 @@ def find_gamma_flip(
     ws = weights * signs
 
     grid = spot * np.linspace(lo, hi, n)  # shape (n,)
-    gammas = _bs_gamma_matrix(grid, k, t, iv, r)  # shape (n, M)
+
+    if iv_model == "sticky_moneyness":
+        # Base moneyness at current spot S0
+        m_base = k / spot
+        sort_idx = np.argsort(m_base)
+        m_sorted = m_base[sort_idx]
+        iv_sorted = iv[sort_idx]
+
+        # For each grid spot s_j, each contract strike k has moneyness m = k / s_j
+        m_grid = k[None, :] / grid[:, None]  # shape (n, M)
+        sig_grid = np.interp(
+            m_grid.ravel(), m_sorted, iv_sorted, left=iv_sorted[0], right=iv_sorted[-1]
+        ).reshape(n, len(k))
+        sig_grid = np.clip(sig_grid, 0.05, 5.0)
+
+        s_2d = grid[:, None]
+        k_2d = k[None, :]
+        t_2d = np.maximum(t[None, :], 1.0 / 365.0)
+        sq_t = np.sqrt(t_2d)
+        d1 = (np.log(s_2d / k_2d) + (r + 0.5 * sig_grid ** 2) * t_2d) / (sig_grid * sq_t)
+        gammas = norm.pdf(d1) / (s_2d * sig_grid * sq_t)
+    else:
+        gammas = _bs_gamma_matrix(grid, k, t, iv, r)  # shape (n, M)
 
     # Dollar gamma per 1% move in $M
     gex_grid = (gammas * ws[None, :] * CONTRACT_MULTIPLIER * (grid[:, None] ** 2) * 0.01 / 1e6).sum(axis=1)
@@ -236,9 +283,15 @@ def compute_gex_profile(
     spot: float,
     *,
     convention: Convention = "naive",
-    r: float = 0.045,
+    r: Optional[float] = None,
+    rate_source: Optional[str] = None,
 ) -> GexProfile:
     """Compute complete dealer GEX profile across all strikes with walls and gamma flip."""
+    if r is None or rate_source is None:
+        inferred_r, inferred_src = get_risk_free_rate()
+        r = r if r is not None else inferred_r
+        rate_source = rate_source or inferred_src
+
     df = clean_chain(chain, spot=spot)
 
     k = df["strike"].to_numpy()
@@ -316,8 +369,13 @@ def compute_gex_profile(
         hvl = float(agg.loc[idx_h, "strike"])
         hvl_val = round(float(agg.loc[idx_h, "net_gex"]), 2)
 
-    # Compute continuous gamma flip level
-    gamma_flip = find_gamma_flip(df, spot, convention=convention, r=r)
+    # Compute continuous gamma flip levels under both IV models
+    gamma_flip_strike = find_gamma_flip(df, spot, convention=convention, r=r, iv_model="sticky_strike")
+    gamma_flip_moneyness = find_gamma_flip(df, spot, convention=convention, r=r, iv_model="sticky_moneyness")
+
+    flip_diff = None
+    if gamma_flip_strike is not None and gamma_flip_moneyness is not None:
+        flip_diff = round(float(gamma_flip_moneyness - gamma_flip_strike), 2)
 
     # Top concentration nodes
     gross_gex = sum(abs(v) for v in net_gex_series) or 1.0
@@ -344,7 +402,7 @@ def compute_gex_profile(
         call_gex=round(float(sum(call_gex_series)), 2),
         put_gex=round(float(sum(put_gex_series)), 2),
         regime=regime,
-        gamma_flip=gamma_flip,
+        gamma_flip=gamma_flip_strike,
         call_wall=call_wall,
         call_wall_val=call_wall_val,
         put_wall=put_wall,
@@ -359,4 +417,8 @@ def compute_gex_profile(
         vanna_series=vanna_series,
         charm_series=charm_series,
         top_nodes=top_nodes,
+        gamma_flip_sticky_moneyness=gamma_flip_moneyness,
+        gamma_flip_diff=flip_diff,
+        rate_source=rate_source,
+        rf_rate=r,
     )

@@ -28,21 +28,22 @@ HTTP_TIMEOUT = 90
 
 SYSTEM = """You are a seasoned sell-side equity research analyst writing a concise \
 desk note for an experienced investor. You are given a structured snapshot of one \
-stock — price action, volatility and tail-risk statistics, a Monte-Carlo path \
-forecast, valuation multiples, dealer gamma-exposure (GEX) positioning, and a \
-machine-learning signal. Write a balanced, professional, and scientifically rigorous briefing.
+stock — price action, volatility and tail-risk statistics, valuation multiples, \
+dealer gamma-exposure (GEX) positioning, and a machine-learning signal. Write a \
+balanced, professional, and scientifically rigorous briefing.
 
 Rules:
 - Ground every claim in the numbers provided. Do not invent figures, news, \
 earnings results, or price targets that aren't in the data. If something isn't \
 given, say it's not available rather than guessing.
+- Fields under `_provenance` are assumed defaults or unavailable feeds: never \
+state numbers for them — describe them as unavailable or assumed, never as facts.
 - Be even-handed: state the bull case and the bear case. Never cheerlead.
 - Synthesize the indicators into clear "Buyer Signals" using statistical rigor:
   * For GEX: Assess the market micro-structure. Is the GEX regime positive (vol-dampening, supportive of mean reversion/support at walls) or negative (vol-expanding, trend-amplifying)? Analyze the Call Wall, Put Wall, and Zero-Gamma flip relative to the Spot price to explain where dealer hedging could accelerate or cap price action.
   * For Valuation & Fundamentals: Analyze how multiple metrics (P/E, PEG, EV/EBITDA) compare to growth rates and estimates to see if valuation is supported.
   * For Technical & Volatility: Connect realized volatility, Sharpe, Beta, and the ML signal.
   * For Key Risks: Weigh the 1-day Value-at-Risk (VaR) and Expected Shortfall (ES) at 95%/99% confidence to detail potential tail risk.
-  * For Monte Carlo: Detail the path projections and the probability of upward movement over time.
 - If an `ml_signal` is present, work it into the Technical & Volatility Picture and \
 the Bottom Line: state its action and confidence, name the specific feature drivers \
 it cites (e.g. momentum, RSI, distance to moving averages, volatility), and say \
@@ -59,18 +60,57 @@ not financial advice.*"""
 
 def _context(ticker: str, data: dict) -> str:
     """Compact JSON of the fields worth reasoning over (skip chart HTML)."""
+    data = _sanitize_payload(data)
     payload = {
         "ticker": ticker,
         "current_price": data.get("current_price"),
         "statistics": data.get("stats"),
-        "forward_estimates": data.get("forward_estimates"),
         "fundamentals": data.get("fundamentals"),
         "price_ranges": data.get("price_ranges"),
         "dealer_gex": data.get("gex"),
         "ml_signal": data.get("ml"),
+        "institutional": data.get("institutional"),
     }
     payload = {k: v for k, v in payload.items() if v}
     return json.dumps(payload, default=str, indent=2)
+
+
+# Fields removed from the product in the honesty pass; if any of them ever
+# reappear in page data, they must still never reach an LLM.
+_AI_REMOVED_FIELDS = ("forward_estimates", "monte_carlo")
+
+
+def _sanitize_payload(data: dict) -> dict:
+    """Defence-in-depth for anything fed to an LLM.
+
+    - Drops removed/fabricated fields so deleted metrics cannot reappear in prose.
+    - Adds a `_provenance` block naming assumed defaults and unavailable feeds so
+      the model cannot narrate them as reported facts (enforced by SYSTEM rules).
+    """
+    clean = {k: v for k, v in (data or {}).items() if k not in _AI_REMOVED_FIELDS}
+    stats = clean.get("stats")
+    if isinstance(stats, dict):
+        clean["stats"] = {k: v for k, v in stats.items() if not str(k).startswith("mc_")}
+
+    inst = clean.get("institutional")
+    if isinstance(inst, dict):
+        inst = {k: v for k, v in inst.items() if k not in _AI_REMOVED_FIELDS}
+        provenance = {}
+        si = inst.get("short_interest") or {}
+        if si.get("si_source") == "assumed":
+            provenance["short_interest"] = (
+                "assumed defaults (no reported short interest); not reported data"
+            )
+        macro = inst.get("macro_conditioning") or {}
+        unavailable = sorted(k for k, v in macro.items() if v is None)
+        if unavailable:
+            provenance["macro_conditioning"] = (
+                f"unavailable (no FRED feed): {', '.join(unavailable)}; state no numbers for these"
+            )
+        if provenance:
+            inst["_provenance"] = provenance
+        clean["institutional"] = inst
+    return clean
 
 
 def _preprocess_markdown_tables(md: str) -> str:
@@ -370,6 +410,7 @@ Format your response in GitHub-Flavoured Markdown. Use the following structured 
 Rules:
 - Be extremely thorough and precise. Cover EVERY data point provided.
 - Do not invent any numbers. If a data point is missing or empty, mark it as 'N/A' in the tables and explain that it is not available.
+- Fields under `_provenance` are assumed defaults or unavailable feeds: never state numbers for them — mark them N/A and say the data is unavailable or assumed, never present them as reported facts.
 - Treat every indicator with scientific skepticism, detailing the limits of the models (e.g. backtest overfitting, delayed yfinance data, option model approximations).
 """
 
@@ -387,7 +428,7 @@ def generate_comprehensive_report(ticker: str, data: dict) -> tuple[str | None, 
 
     user_msg = (
         f"Write the comprehensive quantitative strategy report for {ticker} from this dataset:\n\n"
-        f"{json.dumps(data, default=str, indent=2)}"
+        f"{json.dumps(_sanitize_payload(data), default=str, indent=2)}"
     )
 
     errors = []

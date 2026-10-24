@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .models import RealizedVolCones
+from .storage import compute_iv_rank_and_percentile
 
 
 def compute_close_to_close_hv(returns: np.ndarray, window: int) -> float:
@@ -38,31 +39,29 @@ def compute_yang_zhang_vol(df: pd.DataFrame, window: int = 30) -> float:
     high = sub[h_col].to_numpy(dtype=np.float64)
     low = sub[l_col].to_numpy(dtype=np.float64)
 
-    # 1. Overnight jump variance (open_t vs close_{t-1})
-    log_oc = np.log(open_p[1:] / close[:-1])
-    var_o = float(np.var(log_oc, ddof=1))
+    # Overnight jump variance (close[t-1] to open[t])
+    o_ret = np.log(open_p[1:] / close[:-1])
+    var_o = float(np.var(o_ret, ddof=1))
 
-    # 2. Open-to-close variance
-    log_co = np.log(close[1:] / open_p[1:])
-    var_c = float(np.var(log_co, ddof=1))
+    # Open-to-close continuous variance (open[t] to close[t])
+    c_ret = np.log(close[1:] / open_p[1:])
+    var_c = float(np.var(c_ret, ddof=1))
 
-    # 3. Rogers-Satchell intraday variance
-    h = high[1:]
-    l = low[1:]
-    c = close[1:]
-    o = open_p[1:]
-    rs = np.log(h / c) * np.log(h / o) + np.log(l / c) * np.log(l / o)
+    # Rogers-Satchell intraday drift-independent variance
+    u = np.log(high[1:] / open_p[1:])
+    d = np.log(low[1:] / open_p[1:])
+    c = np.log(close[1:] / open_p[1:])
+    rs = u * (u - c) + d * (d - c)
     var_rs = float(np.mean(rs))
 
     # Yang-Zhang weighting factor k
-    n = float(window)
-    k = 0.34 / (1.34 + (n + 1.0) / (n - 1.0))
+    k = 0.34 / (1.34 + (window + 1) / (window - 1))
 
+    # Total Yang-Zhang annualized variance
     var_yz = var_o + k * var_c + (1.0 - k) * var_rs
-    if var_yz <= 0:
-        return 0.0
+    yz_vol = math.sqrt(max(0.0, var_yz)) * math.sqrt(252) * 100.0
 
-    return round(math.sqrt(var_yz * 252.0) * 100.0, 2)
+    return round(yz_vol, 2)
 
 
 def compute_expected_move_coverage(
@@ -70,10 +69,7 @@ def compute_expected_move_coverage(
     current_iv: float,
     window: int = 30,
 ) -> float:
-    """Measure empirical coverage of theoretical 1-sigma expected moves over past N days.
-
-    Under Black-Scholes normal assumptions, 1-sigma daily moves should bracket ~68.2% of sessions.
-    """
+    """Measure empirical % of days the stock's absolute 1D return stayed inside implied 1-sigma cone."""
     if len(df) < window + 1 or current_iv <= 0:
         return 68.0
 
@@ -91,16 +87,22 @@ def compute_expected_move_coverage(
 def compute_vol_cones_and_vrp(
     daily_df: pd.DataFrame,
     current_iv: float,
+    ticker: Optional[str] = None,
     history_days: int = 252,
 ) -> RealizedVolCones:
-    """Compile multi-window realized volatility cones, VRP, and IV rank."""
+    """Compile multi-window realized volatility cones, VRP, and IV rank.
+    
+    IV rank and percentile are strictly evaluated against stored IV history (never proxying
+    with historical realized volatility). When history is under 63 days, is_accumulating is True
+    and iv_rank/iv_percentile are None.
+    """
     if daily_df is None or daily_df.empty:
         return RealizedVolCones(
             current_iv=current_iv,
             hv10=0.0, hv20=0.0, hv30=0.0, hv60=0.0, hv90=0.0,
             yang_zhang_30=0.0, yang_zhang_90=0.0,
             vrp=0.0, vrp_regime="Data Unavailable",
-            iv_rank=0.0, iv_percentile=0.0,
+            iv_rank=None, iv_percentile=None,
             iv_min_52w=current_iv, iv_max_52w=current_iv,
             expected_move_1d=0.0, expected_move_straddle=0.0,
             coverage_68_pct=68.0, is_accumulating=True, history_days=0,
@@ -122,38 +124,29 @@ def compute_vol_cones_and_vrp(
     # Volatility Risk Premium (VRP) = ATM IV - HV30
     vrp = round(current_iv - (hv30 or yz30), 2)
     if vrp > 5.0:
-        vrp_regime = "Positive VRP (Expensive Vol · Net Short Premium Favored)"
+        vrp_regime = "Positive VRP (Expensive Vol \u00b7 Net Short Premium Favored)"
     elif vrp < -5.0:
-        vrp_regime = "Negative VRP (Underpriced Vol · Net Long Gamma Favored)"
+        vrp_regime = "Negative VRP (Underpriced Vol \u00b7 Net Long Gamma Favored)"
     else:
         vrp_regime = "Neutral / Fairly Priced Volatility"
 
-    # 52-week IV range proxy from realized volatility bands + current IV
-    # Rolling 30D volatility over past 252 days as proxy for annual IV distribution
-    if len(returns) >= 30:
-        roll_30 = []
-        for i in range(30, len(returns) + 1):
-            w = returns[i - 30:i]
-            roll_30.append(float(np.std(w, ddof=1) * math.sqrt(252) * 100.0))
-        iv_min = round(float(min(roll_30)), 2)
-        iv_max = round(float(max(roll_30)), 2)
-        
-        # IV Rank
-        if iv_max > iv_min:
-            iv_rank = round(max(0.0, min(100.0, ((current_iv - iv_min) / (iv_max - iv_min)) * 100.0)), 1)
-        else:
-            iv_rank = 50.0
+    # Compute real IV rank/percentile from stored IV history
+    iv_rank = None
+    iv_percentile = None
+    iv_min = round(current_iv * 0.7, 2)
+    iv_max = round(current_iv * 1.4, 2)
+    is_accumulating = True
+    hist_days_count = 0
 
-        # IV Percentile
-        pct_count = sum(1 for v in roll_30 if v < current_iv)
-        iv_percentile = round((pct_count / len(roll_30)) * 100.0, 1)
-        is_accumulating = len(roll_30) < 180
-    else:
-        iv_min = round(current_iv * 0.7, 2)
-        iv_max = round(current_iv * 1.4, 2)
-        iv_rank = 50.0
-        iv_percentile = 50.0
-        is_accumulating = True
+    if ticker:
+        iv_stats = compute_iv_rank_and_percentile(ticker, current_iv, min_obs=63)
+        hist_days_count = iv_stats["n_obs"]
+        if iv_stats["available"]:
+            iv_rank = iv_stats["iv_rank"]
+            iv_percentile = iv_stats["iv_percentile"]
+            iv_min = iv_stats["min_iv"]
+            iv_max = iv_stats["max_iv"]
+            is_accumulating = False
 
     spot = float(prices[-1]) if len(prices) > 0 else 100.0
     expected_move_1d = round(spot * (current_iv / 100.0) * math.sqrt(1.0 / 252.0), 2)
@@ -180,5 +173,5 @@ def compute_vol_cones_and_vrp(
         expected_move_straddle=expected_move_straddle,
         coverage_68_pct=coverage_68,
         is_accumulating=is_accumulating,
-        history_days=len(returns),
+        history_days=hist_days_count,
     )
