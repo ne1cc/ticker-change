@@ -42,6 +42,7 @@ def _spy_closes(n=400, seed=100):
 class TestAiSummaryValSheet(unittest.TestCase):
 
     def setUp(self):
+        self._orig_db = db.DB_PATH
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self.temp_db_path = path
@@ -62,6 +63,7 @@ class TestAiSummaryValSheet(unittest.TestCase):
         self.client.testing = True
 
     def tearDown(self):
+        db.DB_PATH = getattr(self, "_orig_db", db.DB_PATH)
         try:
             os.remove(self.temp_db_path)
         except OSError:

@@ -52,6 +52,9 @@ import heatmap
 import options_flow
 import indices
 from glossary import GLOSSARY
+import gics
+import percentiles
+import universe_metrics
 
 def _get_yf_ticker(symbol: str) -> yf.Ticker:
     """Return a yfinance Ticker instance.
@@ -1736,9 +1739,30 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
     else:
         poc_price = None
 
+    # Cross-sectional percentiles (Epic 2)
+    sec = gics.sector_of(ticker)
+    snap = universe_metrics.current_universe_metrics()
+    p_map = {}
+    stats_to_score = {
+        'annualised_vol': round(std_return * np.sqrt(252) * 100, 2),
+        'max_drawdown': round(max_drawdown, 2),
+        'skewness': round(skewness, 3),
+        'kurtosis': round(kurtosis, 3),
+        'beta': beta,
+        'var_95': latest_var_95,
+        'var': latest_var_95,
+    }
+    for m_key, m_val in stats_to_score.items():
+        if m_val is not None:
+            p_map[m_key] = percentiles.calculate_metric_percentile(
+                m_key, m_val, sector=sec, snapshot=snap
+            )
+
     return {
         'ticker': ticker.upper(),
         'current_price': current_price,
+        'gics_sector': sec,
+        'percentiles': p_map,
         'stats': {
             'mean_daily_return': round(mean_return * 100, 4),
             'daily_std': round(std_return * 100, 4),
@@ -1779,6 +1803,26 @@ def analytics_page():
     # Attach fundamentals
     data['fundamentals'] = _guard_section(
         "fundamentals", lambda: get_fundamentals(ticker))
+
+    # Cross-sectional percentiles for fundamentals multiples
+    if data.get('fundamentals') and isinstance(data['fundamentals'], dict):
+        snap = universe_metrics.current_universe_metrics()
+        sec = data.get('gics_sector') or gics.sector_of(ticker)
+        fund_keys = {
+            'Price / Book': 'price_book',
+            'Forward P/E': 'forward_pe',
+            'Price / Sales': 'price_sales',
+            'Revenue Growth': 'growth',
+            'Short % Float': 'short_float',
+            'Short Ratio': 'short_ratio',
+            'Dividend Yield': 'dividend_yield',
+        }
+        for f_label, m_key in fund_keys.items():
+            val = data['fundamentals'].get(f_label)
+            if val is not None and isinstance(val, (int, float)):
+                data.setdefault('percentiles', {})[m_key] = percentiles.calculate_metric_percentile(
+                    m_key, val, sector=sec, snapshot=snap
+                )
 
     # Attach options smile
     data['charts']['options_smile'] = _guard_section(
@@ -4546,6 +4590,10 @@ def _warm_brief_universe(watchlist=None, sp500=None, background=True,
                     print(f"[brief] progress write failed at {ticker}: {e}")
             print(f"[brief] done ({len(tiers)} tickers, {published} published, "
                   f"{skipped} fresh-skipped, {failed} failed)")
+            try:
+                universe_metrics.warm_universe_metrics()
+            except Exception as e:
+                print(f"[universe_metrics] warmer error: {e}")
         except Exception as e:
             print(f"[brief] warmer error: {e}")
 
