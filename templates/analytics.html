@@ -538,7 +538,7 @@
   <!-- Row 5c: Dealer Gamma Exposure (GEX) profile -->
   {% if data.charts.gex %}
   <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-    <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Dealer Gamma Exposure (GEX)', 'gex') }}</h2>
+    <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1 flex items-center justify-between"><span>{{ metric('Dealer Gamma Exposure (GEX)', 'gex') }}</span><span class="text-[10px] font-mono text-zinc-400 font-normal">Rate: {{ data.gex.rate_source | default('4.5%') }}</span></h2>
     <p class="text-xs text-zinc-400 mb-3">
       Estimated market-maker gamma at each strike across the nearest {{ data.gex.n_expirations }} expirations ({{ data.gex.dte_range }} to expiry), using the standard dealer convention (long calls <span class="text-emerald-400">+</span>, short puts <span class="text-rose-400">−</span>). Γ is computed via Black-Scholes from open interest &amp; implied volatility. Units: $M of gamma per 1% move.
     </p>
@@ -560,6 +560,11 @@
         <p class="font-mono text-sm font-bold text-zinc-900 dark:text-zinc-50">
           {% if data.gex.gamma_flip %}${{ '%g'|format(data.gex.gamma_flip) }}{% else %}<span class="text-zinc-400">—</span>{% endif %}
         </p>
+        {% if data.gex.gamma_flip_sticky_moneyness %}
+        <p class="text-[9px] font-mono text-zinc-400 mt-0.5" title="Sticky-moneyness IV flip vs Sticky-strike flip">
+          Moneyness: ${{ '%g'|format(data.gex.gamma_flip_sticky_moneyness) }}{% if data.gex.gamma_flip_diff %} ({{ '%+g'|format(data.gex.gamma_flip_diff) }}){% endif %}
+        </p>
+        {% endif %}
       </div>
       <div class="rounded-lg border border-rose-300/60 dark:border-rose-500/30 bg-rose-50/60 dark:bg-rose-500/10 px-3 py-2">
         <p class="text-[10px] font-semibold uppercase tracking-widest text-rose-600 dark:text-rose-400">Put Wall · Support</p>
@@ -625,6 +630,9 @@
     {% endif %}
   </div>
   {% endif %}
+
+  <!-- Options-Implied Institutional Suite -->
+  {% include "_options_implied.html" %}
 
   <!-- Row 8: Institutional Quantitative Analytics (Microstructure, Macro, Higher-Order Greeks, 8-K) -->
   {% include "_institutional.html" %}

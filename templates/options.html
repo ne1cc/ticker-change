@@ -281,12 +281,16 @@
         {% endif %}
       </div>
       <div class="mt-2 flex items-baseline justify-between">
+        {% if data.cones.is_accumulating %}
+        <span class="text-sm font-mono text-zinc-500">accumulating ({{ data.cones.history_days }}/252)</span>
+        {% else %}
         <span class="text-2xl font-mono font-bold text-zinc-900 dark:text-zinc-100">{{ '%.1f'|format(data.cones.iv_rank) }}</span>
         <span class="text-xs font-mono text-zinc-500">Percentile: <strong>{{ '%.1f'|format(data.cones.iv_percentile) }}%</strong></span>
+        {% endif %}
       </div>
       <!-- Progress Bar -->
       <div class="w-full bg-zinc-100 dark:bg-zinc-800 rounded-full h-1.5 mt-2 overflow-hidden">
-        <div class="bg-amber-500 h-1.5 rounded-full" style="width: {{ data.cones.iv_rank }}%"></div>
+        <div class="bg-amber-500 h-1.5 rounded-full" style="width: {{ data.cones.iv_rank | default(0) }}%"></div>
       </div>
       <div class="mt-1.5 flex justify-between text-[10px] font-mono text-zinc-400">
         <span>Min {{ '%.1f'|format(data.cones.iv_min_52w) }}%</span>

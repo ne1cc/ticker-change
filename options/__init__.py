@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 import pandas as pd
+import db
 
 from .models import (
     Convention,
@@ -14,10 +15,26 @@ from .models import (
     VolTermStructure,
 )
 from .greeks import calculate_greeks, vectorized_greeks
-from .gex import clean_chain, compute_gex_profile, find_gamma_flip
+from .gex import clean_chain, compute_gex_profile, find_gamma_flip, get_risk_free_rate
 from .vol import compute_vol_term_structure, compute_25d_skew, build_surface_grid
 from .cones import compute_vol_cones_and_vrp, compute_yang_zhang_vol
-from .storage import init_options_db, record_snapshot, get_snapshot_history, get_history_status
+from .storage import (
+    init_options_db,
+    record_snapshot,
+    get_snapshot_history,
+    get_history_status,
+    get_history_count,
+    compute_iv_rank_and_percentile,
+    get_vrp_history_with_bands,
+    get_term_structure_and_skew_history,
+)
+from .svi import select_otm_wings, fit_svi, svi_total_variance, check_durrleman_arbitrage
+from .density import breeden_litzenberger_density
+from .earnings_move import (
+    compute_atm_straddle_move,
+    compute_historical_earnings_moves,
+    get_earnings_implied_vs_realized,
+)
 
 __all__ = [
     "Convention",
@@ -31,6 +48,7 @@ __all__ = [
     "clean_chain",
     "compute_gex_profile",
     "find_gamma_flip",
+    "get_risk_free_rate",
     "compute_vol_term_structure",
     "compute_25d_skew",
     "build_surface_grid",
@@ -40,6 +58,18 @@ __all__ = [
     "record_snapshot",
     "get_snapshot_history",
     "get_history_status",
+    "get_history_count",
+    "compute_iv_rank_and_percentile",
+    "get_vrp_history_with_bands",
+    "get_term_structure_and_skew_history",
+    "select_otm_wings",
+    "fit_svi",
+    "svi_total_variance",
+    "check_durrleman_arbitrage",
+    "breeden_litzenberger_density",
+    "compute_atm_straddle_move",
+    "compute_historical_earnings_moves",
+    "get_earnings_implied_vs_realized",
     "compute_options_terminal",
 ]
 
@@ -50,7 +80,7 @@ def compute_options_terminal(
     chain_df: Optional[pd.DataFrame],
     daily_df: Optional[pd.DataFrame],
     convention: Convention = "naive",
-    rf_rate: float = 0.045,
+    rf_rate: Optional[float] = None,
     record_db: bool = False,
 ) -> OptionsTerminalResult:
     """Compute complete institutional options suite for a ticker.
@@ -63,7 +93,7 @@ def compute_options_terminal(
     # If options chain is unavailable (e.g. non-optionable stock)
     if chain_df is None or chain_df.empty:
         # Fall back gracefully to Realized Volatility Cones from daily_prices
-        cones = compute_vol_cones_and_vrp(daily_df, current_iv=25.0)
+        cones = compute_vol_cones_and_vrp(daily_df, current_iv=25.0, ticker=ticker)
         return OptionsTerminalResult(
             ticker=ticker.upper(),
             spot_price=spot,
@@ -95,11 +125,10 @@ def compute_options_terminal(
         front_atm_iv = vol.atm_ivs[0] if vol.atm_ivs else (cleaned_df["iv"].median() * 100.0)
 
         # 5. Compute Realized Volatility Cones, Yang-Zhang, & 68% Coverage
-        cones = compute_vol_cones_and_vrp(daily_df, current_iv=front_atm_iv)
+        cones = compute_vol_cones_and_vrp(daily_df, current_iv=front_atm_iv, ticker=ticker)
 
         # 6. Format tabular contracts for Greek matrix
         contracts_list = []
-        # Group by strike for matrix view
         strikes = sorted(cleaned_df["strike"].unique())
         for k in strikes:
             sub = cleaned_df[cleaned_df["strike"] == k]
@@ -156,6 +185,7 @@ def compute_options_terminal(
 
         # 8. Optionally record snapshot into SQLite
         if record_db:
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             record_snapshot(
                 symbol=ticker,
                 spot=spot,
@@ -167,8 +197,21 @@ def compute_options_terminal(
                 gamma_flip=gex.gamma_flip,
                 total_gex=gex.total_gex,
                 skew_25d=vol.skew_25d,
+                term_slope=vol.slope,
                 convention=convention,
             )
+            # Idempotently write daily GEX snapshot to gex_snapshots
+            try:
+                db.insert_gex_snapshot(
+                    ticker=ticker,
+                    date=today_str,
+                    gamma_flip=gex.gamma_flip,
+                    call_wall=gex.call_wall,
+                    put_wall=gex.put_wall,
+                    spot=spot,
+                )
+            except Exception as e:
+                print(f"[options-terminal] Error recording gex_snapshots: {e}")
 
         return OptionsTerminalResult(
             ticker=ticker.upper(),
@@ -186,7 +229,7 @@ def compute_options_terminal(
     except Exception as e:
         import traceback
         traceback.print_exc()
-        cones = compute_vol_cones_and_vrp(daily_df, current_iv=25.0)
+        cones = compute_vol_cones_and_vrp(daily_df, current_iv=25.0, ticker=ticker)
         return OptionsTerminalResult(
             ticker=ticker.upper(),
             spot_price=spot,
