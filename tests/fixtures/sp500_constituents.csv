@@ -1,0 +1,24 @@
+Symbol,Security,GICS Sector,GICS Sub-Industry,Headquarters Location,Date added,CIK,Founded
+AAPL,Apple Inc.,Information Technology,Technology Hardware Storage & Peripherals,"Cupertino, California",1982-11-30,320193,1977
+MSFT,Microsoft,Information Technology,Systems Software,"Redmond, Washington",1994-06-01,789019,1975
+NVDA,Nvidia,Information Technology,Semiconductors,"Santa Clara, California",2001-11-30,1045810,1993
+XOM,ExxonMobil,Energy,Integrated Oil & Gas,"Spring, Texas",1957-03-04,34088,1870
+CVX,Chevron Corporation,Energy,Integrated Oil & Gas,"San Ramon, California",1957-03-04,93410,1879
+JPM,JPMorgan Chase,Financials,Diversified Banks,"New York City, New York",1975-06-30,19617,1799
+BRK.B,Berkshire Hathaway,Financials,Multi-Sector Holdings,"Omaha, Nebraska",2010-02-16,1067983,1839
+JNJ,Johnson & Johnson,Health Care,Pharmaceuticals,"New Brunswick, New Jersey",1973-06-30,200406,1886
+ABBV,AbbVie,Health Care,Biotechnology,"North Chicago, Illinois",2012-12-31,1551152,2013 (1888)
+AMZN,Amazon,Consumer Discretionary,Broadline Retail,"Seattle, Washington",2005-11-18,1018724,1994
+TSLA,Tesla Inc.,Consumer Discretionary,Automobile Manufacturers,"Austin, Texas",2020-12-21,1318605,2003
+PG,Procter & Gamble,Consumer Staples,Household Products,"Cincinnati, Ohio",1957-03-04,80424,1837
+KO,The Coca-Cola Company,Consumer Staples,Soft Drinks & Non-alcoholic Beverages,"Atlanta, Georgia",1957-03-04,21344,1886
+CAT,Caterpillar Inc.,Industrials,Construction Machinery & Heavy Transportation,"Irving, Texas",1957-03-04,18230,1925
+MMM,3M,Industrials,Industrial Conglomerates,"Saint Paul, Minnesota",1957-03-04,66740,1902
+LIN,Linde plc,Materials,Industrial Gases,"Woking, United Kingdom",1992-07-01,1707925,1879
+APD,Air Products and Chemicals,Materials,Industrial Gases,"Allentown, Pennsylvania",1985-04-30,2969,1940
+GOOGL,Alphabet Inc. (Class A),Communication Services,Interactive Media & Services,"Mountain View, California",2014-04-03,1652044,1998
+META,Meta Platforms,Communication Services,Interactive Media & Services,"Menlo Park, California",2013-12-23,1326801,2004
+NEE,NextEra Energy,Utilities,Multi-Utilities,"Juno Beach, Florida",1976-06-30,753308,1984
+SO,Southern Company,Utilities,Electric Utilities,"Atlanta, Georgia",1957-03-04,92122,1945
+PLD,Prologis,Real Estate,Industrial REITs,"San Francisco, California",2003-03-20,1045609,1983
+AMT,American Tower,Real Estate,Telecom Tower REITs,"Boston, Massachusetts",2007-11-19,1053507,1995
