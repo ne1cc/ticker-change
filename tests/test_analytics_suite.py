@@ -3,7 +3,7 @@
 Tests:
 1. Event Study & CAR Engine (`event_study.py`)
 2. SEC EDGAR 8-K Parser & Item Classification (`sec_8k.py`)
-3. Microstructure Analytics: VPIN, Corwin-Schultz, Squeeze Risk (`microstructure.py`)
+3. Microstructure Analytics: Corwin-Schultz, Roll, Squeeze Risk (`microstructure.py`)
 4. Macro-Financial Conditioning & Dual Betas (`macro_engine.py`)
 5. Higher-Order Black-Scholes Greeks: Vanna, Charm, Vomma, VRP (`derivatives_alpha.py`)
 6. Signal Walk-Forward Backtester (`backtest_engine.py`)
@@ -18,7 +18,6 @@ from sec_8k import ITEM_DEFINITIONS
 from microstructure import (
     calculate_corwin_schultz_spread,
     calculate_roll_effective_spread,
-    calculate_vpin,
     compute_squeeze_risk_index,
     get_microstructure_analytics,
 )
@@ -70,23 +69,14 @@ class TestAnalyticalModules(unittest.TestCase):
         self.assertIsInstance(res.car_t_stat, float)
         self.assertEqual(len(res.daily_abnormal_returns), 16)  # -5 to +10 = 16 days
 
-    def test_microstructure_spreads_and_vpin(self):
-        """Verify Corwin-Schultz, Roll Spread, VPIN, and Squeeze Index."""
+    def test_microstructure_spreads_and_squeeze(self):
+        """Verify Corwin-Schultz, Roll Spread, and Squeeze Index."""
         cs = calculate_corwin_schultz_spread(self.stock_df)
         self.assertGreaterEqual(cs, 0.0)
         self.assertLessEqual(cs, 0.20)
 
         roll = calculate_roll_effective_spread(self.stock_df)
         self.assertGreaterEqual(roll, 0.0)
-
-        trades = [
-            {"price": 100.0, "volume": 500, "side": "buy"},
-            {"price": 100.5, "volume": 500, "side": "buy"},
-            {"price": 99.5, "volume": 200, "side": "sell"},
-        ]
-        vpin = calculate_vpin(trades, num_buckets=2, bucket_size=500)
-        self.assertGreaterEqual(vpin, 0.0)
-        self.assertLessEqual(vpin, 1.0)
 
         sq_score, sq_level = compute_squeeze_risk_index(
             short_pct_float=28.0, days_to_cover=6.5, cost_to_borrow_pct=15.0, is_negative_gex=True
@@ -124,7 +114,7 @@ class TestAnalyticalModules(unittest.TestCase):
         self.assertIsInstance(greeks.charm, float)
         self.assertIsInstance(greeks.vomma, float)
 
-        vrp = calculate_variance_risk_premium(atm_implied_vol=0.32, realized_vol_30d=0.20)
+        vrp = calculate_variance_risk_premium(atm_implied_vol=0.32, realized_vol=0.20)
         self.assertEqual(vrp["vrp_spread_pct"], 12.0)
         self.assertIn("RICH_VOLATILITY", vrp["regime"])
 
@@ -163,10 +153,8 @@ class TestAnalyticalModules(unittest.TestCase):
                 'charts': {},
                 'institutional': {
                     'microstructure': {
-                        'vpin_toxicity': 0.28,
-                        'toxicity_regime': 'MODERATE',
-                        'corwin_schultz_spread_pct': 0.0012,
-                        'roll_effective_spread_pct': 0.0009,
+                        'corwin_schultz_spread_pct': 0.12,
+                        'roll_effective_spread_pct': 0.09,
                         'squeeze_risk_score': 32.5,
                         'squeeze_risk_level': 'LOW',
                         'amihud_illiquidity': 0.000012,
@@ -192,7 +180,7 @@ class TestAnalyticalModules(unittest.TestCase):
                     },
                     'vrp': {
                         'atm_implied_vol': 26.5,
-                        'realized_vol_30d': 21.2,
+                        'realized_vol': 21.2,
                         'vrp_spread_pct': 5.3,
                         'vrp_ratio': 1.25,
                         'regime': 'NORMAL_PREMIUM (Moderate Variance Spread)',
@@ -212,7 +200,7 @@ class TestAnalyticalModules(unittest.TestCase):
 
             rendered_html = render_template('analytics.html', data=mock_payload, ticker='AAPL')
             self.assertIn('Institutional Quantitative Analytics', rendered_html)
-            self.assertIn('VPIN Toxicity', rendered_html)
+            self.assertNotIn('VPIN', rendered_html)
             self.assertIn('Bull Beta (Up Market)', rendered_html)
             self.assertIn('Vanna', rendered_html)
             self.assertIn('SEC Form 8-K Material Events', rendered_html)

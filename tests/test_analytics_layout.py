@@ -17,8 +17,8 @@ def _payload():
         beta='<div id="beta-chart"></div>',
         cumulative_return='<div id="cumulative-chart"></div>',
         var='<div id="var-chart"></div>', volatility='<div id="volatility-chart"></div>',
-        drawdown='<div id="drawdown-chart"></div>', forward_estimates=None,
-        volume_profile=None, monte_carlo=None,
+        drawdown='<div id="drawdown-chart"></div>',
+        volume_profile=None,
         options_smile='<div id="options-chart"></div>', gex=None,
         price_target=None, sharpe='<div id="sharpe-chart"></div>',
         seasonality='<div id="seasonality-chart"></div>', insider=None,
@@ -32,7 +32,7 @@ def _payload():
     return SimpleNamespace(
         ticker='MU', current_price=762.35, stats=stats, charts=charts,
         fundamentals=fundamentals, checklist=None, ai_sections=None,
-        forward_estimates=None, ml=None, gex=None, ai_report=None,
+        ml=None, gex=None, ai_report=None,
         insider_summary=None, institutional=None, earnings=None,
     )
 

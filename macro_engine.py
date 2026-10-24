@@ -20,11 +20,11 @@ import db
 
 @dataclass
 class MacroRegimeReport:
-    current_regime: str  # TIGHTENING_INVERTED, EASING_STEEP, NEUTRAL_NORMAL, etc.
-    fed_funds_rate: float
-    yield_curve_2s10s_spread: float
-    is_yield_curve_inverted: bool
-    cpi_inflation_yoy: float
+    current_regime: Optional[str]  # None when FRED data is unavailable
+    fed_funds_rate: Optional[float]
+    yield_curve_2s10s_spread: Optional[float]
+    is_yield_curve_inverted: Optional[bool]
+    cpi_inflation_yoy: Optional[float]
     regime_conditional_betas: Dict[str, float]
     upside_capture_ratio: float
     downside_capture_ratio: float
@@ -129,20 +129,19 @@ def get_macro_financial_report(
     betas = calculate_regime_conditional_betas(s_ret, b_ret)
     up_cap, down_cap = calculate_capture_ratios(s_ret, b_ret)
 
-    # Defaults if FRED is unconfigured or in local offline mode
+    # FRED unconfigured/offline -> None; never substitute stale placeholder values.
     dff_obs = fetch_fred_series("DFF", limit=5)
     t10y2y_obs = fetch_fred_series("T10Y2Y", limit=5)
     cpi_obs = fetch_fred_series("CPIAUCSL", limit=15)
 
-    effr = float(dff_obs[0]["value"]) if dff_obs and dff_obs[0].get("value") not in (".", None) else 5.33
-    t10y2y = (
-        float(t10y2y_obs[0]["value"])
-        if t10y2y_obs and t10y2y_obs[0].get("value") not in (".", None)
-        else 0.15
-    )
-    is_inverted = t10y2y < 0.0
+    def _latest(obs):
+        return float(obs[0]["value"]) if obs and obs[0].get("value") not in (".", None) else None
 
-    cpi_val = 3.1
+    effr = _latest(dff_obs)
+    t10y2y = _latest(t10y2y_obs)
+    is_inverted = t10y2y < 0.0 if t10y2y is not None else None
+
+    cpi_val = None
     if len(cpi_obs) >= 13:
         try:
             latest_cpi = float(cpi_obs[0]["value"])
@@ -151,17 +150,19 @@ def get_macro_financial_report(
         except Exception:
             pass
 
-    if effr >= 4.5 and is_inverted:
-        regime = "RESTRICTIVE_INVERTED (Late Cycle / Recession Risk)"
-    elif effr >= 4.5:
-        regime = "TIGHT_MONETARY_POLICY (High Rate Plateau)"
-    elif is_inverted:
-        regime = "CURVE_INVERTED_EASING"
-    else:
-        regime = "NORMAL_EXPANSION"
+    regime = None
+    if effr is not None and is_inverted is not None:
+        if effr >= 4.5 and is_inverted:
+            regime = "RESTRICTIVE_INVERTED (Late Cycle / Recession Risk)"
+        elif effr >= 4.5:
+            regime = "TIGHT_MONETARY_POLICY (High Rate Plateau)"
+        elif is_inverted:
+            regime = "CURVE_INVERTED_EASING"
+        else:
+            regime = "NORMAL_EXPANSION"
 
     # Cross asset correlation proxy (Stock vs Benchmark)
-    corr_bench = float(s_ret.corr(b_ret)) if len(s_ret) > 10 else 0.85
+    corr_bench = float(s_ret.corr(b_ret)) if len(s_ret) > 10 else None
 
     return MacroRegimeReport(
         current_regime=regime,
@@ -172,5 +173,5 @@ def get_macro_financial_report(
         regime_conditional_betas=betas,
         upside_capture_ratio=up_cap,
         downside_capture_ratio=down_cap,
-        cross_asset_correlations={"SPY": round(corr_bench, 3)},
+        cross_asset_correlations={"SPY": round(corr_bench, 3)} if corr_bench is not None else {},
     )
