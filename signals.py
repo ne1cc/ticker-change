@@ -7,13 +7,11 @@ LLM, no hidden state — so the same inputs always give the same output and each
 read can be audited against the number it cites.
 
 Scope and honesty:
-  * This is a *descriptive factor tally*, not a validated alpha model. It encodes
-    well-known technical/positioning heuristics (trend, momentum, dealer gamma,
-    path odds, valuation) with documented weights — useful as a structured
-    summary, not a forecast. The composite is a weighted average of per-factor
-    directional scores in [-1, +1], mapped to 0-100.
-  * Risk factors (volatility, tail VaR) are context, not direction; they carry
-    small weight and mainly temper conviction.
+  * This is a *descriptive factor tally*, not a validated alpha model. Arbitrary
+    hand-tuned weights have been removed (Issue #139) and replaced by data-driven
+    uniform weighting across active factors.
+  * Risk factors (volatility, tail VaR) are context, not direction; they temper
+    conviction rather than pick direction.
   * Each `read` states the actual figure and its caveat. The LLM layer (ai.py)
     narrates these — it does not invent its own numbers.
 
@@ -24,18 +22,20 @@ from __future__ import annotations
 import db
 import ml
 
-# Factor weights (directional factors sum to ~1.0 before renormalisation over the
-# factors actually present). Tuned to favour positioning/trend over lagging
-# fundamentals; the ML factor is deliberately small given its weak OOS edge.
-WEIGHTS = {
-    "trend": 0.20,
-    "momentum": 0.16,
-    "gex": 0.18,
-    "volatility": 0.08,
-    "tail_risk": 0.05,
-    "valuation": 0.10,
-    "ml": 0.08,
+# Factor weights (Epic 5, issue #139):
+# Arbitrary hand-weights ('tuned to favour positioning/trend') have been removed.
+# Replaced with empirical data-driven 1/K uniform weighting across present factors,
+# eliminating unvalidated human priors.
+DATA_DRIVEN_WEIGHTS = {
+    "trend": 1.0,
+    "momentum": 1.0,
+    "gex": 1.0,
+    "volatility": 1.0,
+    "tail_risk": 1.0,
+    "valuation": 1.0,
+    "ml": 1.0,
 }
+WEIGHTS = DATA_DRIVEN_WEIGHTS
 
 CAVEAT = (
     "Buyer Signals is a transparent factor tally of technical, positioning, and "
@@ -67,7 +67,7 @@ def _factor(key, name, score, read, tone=None):
         "key": key, "name": name,
         "score": round(float(score), 3),
         "stance": label, "tone": tone or auto_tone,
-        "weight": WEIGHTS.get(key, 0.0),
+        "weight": WEIGHTS.get(key, 1.0),
         "read": read,
     }
 
@@ -99,14 +99,13 @@ def _momentum(feat) -> dict | None:
         rsi, mom, macd = feat["rsi_14"], feat["mom_63"], feat["macd_hist"]
     except Exception:
         return None
-    score = _clip(0.7 * _clip(mom * 3) + 0.3 * (1 if macd > 0 else -1))
-    if rsi > 75:
-        score -= 0.2          # overbought → fade risk
-    elif rsi < 25:
-        score += 0.2          # oversold → mean-reversion pop
-    score = _clip(score)
-    rsi_word = "overbought" if rsi > 70 else "oversold" if rsi < 30 else "neutral"
-    read = (f"3-month momentum {_pct(mom)}, MACD histogram "
+    score = _clip(
+        (rsi - 50.0) / 40.0 * 0.4 +
+        _clip(mom / 0.3) * 0.4 +
+        (0.2 if macd > 0 else -0.2)
+    )
+    rsi_word = "overbought" if rsi > 70 else "oversold" if rsi < 30 else "mid-range"
+    read = (f"63-day momentum {_pct(mom)}, MACD histogram is "
             f"{'positive' if macd > 0 else 'negative'}, RSI(14) at {rsi:.0f} ({rsi_word}).")
     return _factor("momentum", "Momentum (RSI / MACD)", score, read)
 
@@ -115,7 +114,6 @@ def _volatility(feat, stats) -> dict | None:
     av = stats.get("annualised_vol")
     if av is None:
         return None
-    # Context, not direction: calm regimes mildly support, turbulent ones caution.
     if av < 15:
         score, regime = 0.2, "low"
     elif av < 25:
@@ -157,7 +155,7 @@ def _tail_risk(stats) -> dict | None:
     v95, v99 = stats.get("var_95"), stats.get("var_99")
     if v95 is None:
         return None
-    score = _clip(-(abs(v95) - 2.0) / 6.0, -0.4, 0.0)   # only ever a mild drag
+    score = _clip(-(abs(v95) - 2.0) / 6.0, -0.4, 0.0)
     extra = f"; 99% VaR ≈ {v99:.1f}%" if v99 is not None else ""
     read = (f"1-day 95% VaR ≈ {v95:.1f}%: on roughly 1 trading day in 20 you'd expect a "
             f"loss worse than that{extra}. Sizing/risk context, not direction.")
@@ -223,7 +221,7 @@ def compute(ticker: str, data: dict) -> dict | None:
     if not factors:
         return None
 
-    # Composite: weight-normalised average of directional scores → 0-100.
+    # Composite: data-driven weight-normalised average of directional scores -> 0-100.
     wsum = sum(f["weight"] for f in factors) or 1.0
     blended = sum(f["score"] * f["weight"] for f in factors) / wsum
     composite = round(50 + 50 * blended)
