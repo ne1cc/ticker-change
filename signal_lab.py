@@ -20,6 +20,7 @@ import signal_metrics
 import signal_trials
 import signals_options_si
 import signals_price
+import percentiles
 
 SURVIVORSHIP_CAVEAT = signal_dataset.SURVIVORSHIP_CAVEAT
 
@@ -127,6 +128,17 @@ SIGNAL_CATALOG: dict[str, dict] = {
 }
 
 
+def _cached_universe_prices(ticker: str | None = None) -> dict[str, pd.DataFrame]:
+    """Load cached S&P 500 prices, optionally including the requested ticker."""
+    constituents = db.cache_get("sp500", "constituents", ttl_hours=24) or []
+    symbols = {str(row.get("symbol", "")).strip().upper()
+               for row in constituents if isinstance(row, dict)}
+    symbols.discard("")
+    if ticker:
+        symbols.add(ticker.upper())
+    return db.get_prices_batch(sorted(symbols))
+
+
 def evaluate_signal_gates(metrics: dict) -> tuple[bool, str, list[str]]:
     """Evaluate whether computed signal metrics pass all institutional gates."""
     reasons = []
@@ -164,9 +176,7 @@ def evaluate_price_signals_lab(
 ) -> dict[str, dict]:
     """Run full Signal Lab evaluation across price-based signals."""
     if prices_map is None:
-        # Load cached S&P 500 constituents prices from db
-        all_tickers = ["SPY", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA"]
-        prices_map = db.get_prices_batch(all_tickers)
+        prices_map = _cached_universe_prices()
 
     if spy_df is None and "SPY" in prices_map:
         spy_df = prices_map["SPY"]
@@ -337,10 +347,14 @@ def get_ticker_signal_ranks(
     RULE: Unvalidated signals never contribute a rank to /analytics.
     They are returned with rank=None, percentile=None, and status="unvalidated".
     """
+    ticker = ticker.upper()
+    if prices_map is None:
+        prices_map = _cached_universe_prices(ticker)
     lab_payload = build_signal_lab_payload(prices_map=prices_map)
     signals_eval = {s["key"]: s for s in lab_payload["signals"]}
 
     ticker_ranks = []
+    panel = None
 
     for key, defn in SIGNAL_CATALOG.items():
         eval_meta = signals_eval.get(key, {})
@@ -359,10 +373,33 @@ def get_ticker_signal_ranks(
             "reasons": eval_meta.get("validation_reasons", []),
         }
 
-        # If and only if the signal is validated, compute this ticker's cross-sectional rank
-        if is_validated and prices_map and ticker in prices_map:
-            # Cross-sectional computation across cached universe
-            pass  # Will be populated when signal passes validation gates
+        # 1. Keep ranks behind the same validation gate as the displayed status.
+        if is_validated and ticker in prices_map:
+            if panel is None:
+                panel = signal_dataset.build_research_panel(prices_map, min_history=63)["panel"]
+                panel = signals_price.add_price_signals_to_panel(
+                    panel, spy_df=prices_map.get("SPY")
+                )
+            if key in panel:
+                target = panel[(panel["ticker"] == ticker) & panel[key].notna()]
+                if not target.empty:
+                    as_of = target.index.max()
+                    cross_section = panel.loc[as_of]
+                    if isinstance(cross_section, pd.Series):
+                        cross_section = cross_section.to_frame().T
+                    cross_section = cross_section[
+                        cross_section[key].notna() & cross_section["is_liquid"]
+                    ]
+                    values = cross_section.set_index("ticker")[key]
+                    if ticker in values.index and len(values) >= 2:
+                        entry["value"] = float(values[ticker])
+                        entry["rank"] = int(values.rank(
+                            method="min", ascending=False
+                        )[ticker])
+                        entry["percentile"] = round(
+                            percentiles.percentile_rank(values.tolist(), entry["value"], min_peers=2),
+                            1,
+                        )
 
         ticker_ranks.append(entry)
 

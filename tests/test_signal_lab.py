@@ -53,6 +53,45 @@ class TestSignalLab(unittest.TestCase):
                     f"Unvalidated signal '{s['name']}' illegally contributed a numeric percentile!",
                 )
 
+    def test_validated_signal_returns_ticker_rank_and_percentile(self):
+        """Validated signal rankings use the ticker's latest cross-section."""
+        dates = pd.date_range("2024-01-01", periods=80, freq="B")
+        prices_map = {}
+        for i in range(10):
+            close = 50 + i + np.arange(len(dates)) * (0.02 - i * 0.001)
+            prices_map[f"T{i}"] = pd.DataFrame({
+                "close": close,
+                "volume": np.full(len(dates), 100_000.0),
+            }, index=dates)
+
+        validated_signal = {
+            "short_term_reversal": {
+                "key": "short_term_reversal",
+                "name": "Short-Term Reversal",
+                "category": "Price",
+                "description": "",
+                "validated": True,
+                "status": "validated",
+                "validation_reasons": [],
+            }
+        }
+        with patch.object(signal_lab, "evaluate_price_signals_lab", return_value=validated_signal):
+            ranks = signal_lab.get_ticker_signal_ranks("T9", prices_map=prices_map)
+
+        reversal = next(s for s in ranks if s["key"] == "short_term_reversal")
+        self.assertEqual(reversal["rank"], 1)
+        self.assertIsNotNone(reversal["value"])
+        self.assertEqual(reversal["percentile"], 95.0)
+
+    def test_default_signal_universe_uses_cached_constituents(self):
+        db.cache_set("sp500", "constituents", [
+            {"symbol": "MSFT"}, {"symbol": "NVDA"},
+        ])
+        with patch.object(db, "get_prices_batch", return_value={}) as get_prices_batch:
+            signal_lab.get_ticker_signal_ranks("AAPL")
+
+        get_prices_batch.assert_called_once_with(["AAPL", "MSFT", "NVDA"])
+
     def test_hand_weighted_composite_removed_or_replaced_by_data_driven_weights(self):
         """Hand-weighted composite is removed and replaced by data-driven weights."""
         # signals.WEIGHTS should match signals.DATA_DRIVEN_WEIGHTS
