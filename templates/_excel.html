@@ -2,7 +2,7 @@
    (context processor in app.py) and GLOSSARY are visible:
        {% from "_excel.html" import panel, stat_grid with context %}
    Each macro renders the existing card markup in light/dark mode and true
-   spreadsheet structure (row numbers, column letters, gridlines) in Excel
+   spreadsheet structure (row numbers and gridlines) in Excel
    mode. Paint lives in static/excel-mode.css.
    See docs/EXCEL_MODE_ARCHITECTURE.md. #}
 {% from "_macros.html" import metric %}
@@ -26,19 +26,13 @@
 
 {# Grid of stat metrics. `stats` is a list of (label, value, extra_class, key)
    tuples — the shape analytics.html already builds. Card mode: the existing
-   responsive stat-card grid. Excel mode: a sheet table, two metrics per row,
-   with A-D column letters, numbered rows, and accounting-style negatives. #}
+   responsive stat-card grid. Excel mode: a sheet table with numbered rows
+   and accounting-style negatives. #}
 {% macro stat_grid(stats, title='Risk Stats') %}
 {% if excel_mode %}
 <div class="xl-sheet mb-6">
   <div class="xl-titlebar"><span>{{ title }}</span><span class="xl-titlebar-tag">Sheet</span></div>
   <table class="xl-grid">
-    <thead>
-      <tr>
-        <th class="xl-corner"></th>
-        {% for letter in ['A', 'B', 'C', 'D', 'E', 'F'] %}<th class="xl-colhead">{{ letter }}</th>{% endfor %}
-      </tr>
-    </thead>
     <tbody>
       {% for row in stats|batch(3) %}
       <tr>
