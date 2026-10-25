@@ -93,6 +93,7 @@ def analysis(monkeypatch, payload):
                         (pd.DataFrame(payload['calls']), pd.DataFrame(payload['puts']), 100.0))
     monkeypatch.setattr(app_module, 'get_or_fetch_prices', lambda symbol: pd.DataFrame())
     monkeypatch.setattr(app_module, '_options_terminal_run', lambda *args, **kwargs: (None, None, None))
+    monkeypatch.setattr(app_module.earnings, 'get_earnings_history', lambda ticker: None)
     return lambda: app_module.app.test_client().get('/api/options-analysis/SPY').get_json()
 
 
@@ -390,3 +391,55 @@ def test_hv_null_when_history_too_short(monkeypatch, analysis):
     monkeypatch.setattr(app_module, 'get_or_fetch_prices', lambda symbol: prices(20))
     result = analysis()
     assert result['hv30'] is None and result['hv90'] is None
+
+
+def _vrp(spread, exp):
+    return {'atm_implied_vol': 30.0, 'realized_vol': 30.0 - spread, 'vrp_spread_pct': spread,
+            'vrp_ratio': 1.2, 'regime': 'x', 'contract_expiration': exp, 'contract_dte': 30,
+            'realized_basis': '21-session Yang-Zhang'}
+
+
+def _banner(monkeypatch, analysis, vrp, earnings):
+    monkeypatch.setattr(app_module, '_vrp_30d', vrp)
+    monkeypatch.setattr(app_module, '_next_earnings', earnings)
+    return analysis()
+
+
+def test_no_sell_verdict_when_earnings_precede_the_horizon(monkeypatch, analysis):
+    soon = (datetime.now() + timedelta(days=10)).strftime('%Y-%m-%d')
+    far = (datetime.now() + timedelta(days=90)).strftime('%Y-%m-%d')
+    result = _banner(monkeypatch, analysis, lambda *a: _vrp(5.0, far), lambda t: (soon, 'known'))
+    assert result['strategy_recommendation'].startswith('No sell verdict')
+    assert soon in result['strategy_rationale'] and 'Inputs:' in result['strategy_rationale']
+    assert result['strategy_is_heuristic'] is True
+    after = (datetime.now() + timedelta(days=200)).strftime('%Y-%m-%d')
+    result = _banner(monkeypatch, analysis, lambda *a: _vrp(5.0, far), lambda t: (after, 'known'))
+    assert result['strategy_recommendation'].startswith('Sell Premium')
+
+
+def test_unknown_earnings_date_withholds_sell_verdict(monkeypatch, analysis):
+    result = _banner(monkeypatch, analysis, lambda *a: _vrp(5.0, '2099-01-01'), lambda t: (None, 'unknown'))
+    assert 'earnings date unknown' in result['strategy_recommendation']
+    # A buy verdict needs no earnings gate.
+    result = _banner(monkeypatch, analysis, lambda *a: _vrp(-3.0, '2099-01-01'), lambda t: (None, 'unknown'))
+    assert result['strategy_recommendation'].startswith('Buy Premium')
+
+
+def test_failing_vrp_lookup_leaves_the_rest_intact(monkeypatch, analysis):
+    def boom(*args):
+        raise RuntimeError('chain down')
+    result = _banner(monkeypatch, analysis, boom, lambda t: (None, 'known'))
+    assert result['vrp'] is None
+    assert result['strategy_recommendation'] == 'Insufficient volatility history'
+    assert result['atm_iv'] == 26.0 and result['total_call_oi'] == 100
+
+
+def test_failing_earnings_lookup_leaves_the_rest_intact(monkeypatch, analysis):
+    def boom(ticker):
+        raise RuntimeError('yfinance down')
+    monkeypatch.setattr(app_module.earnings, 'get_earnings_history', boom)
+    monkeypatch.setattr(app_module, '_vrp_30d', lambda *a: _vrp(5.0, '2099-01-01'))
+    result = analysis()
+    assert result['earnings_status'] == 'unknown' and result['vrp']['vrp_spread_pct'] == 5.0
+    assert 'earnings date unknown' in result['strategy_recommendation']
+    assert result['atm_iv'] == 26.0

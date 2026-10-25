@@ -926,7 +926,7 @@
             </svg>
           </div>
           <div>
-            <span class="text-[10px] font-bold text-amber-500 uppercase tracking-wider block">Quantitative Options Posture</span>
+            <span class="text-[10px] font-bold text-amber-500 uppercase tracking-wider block">Heuristic Options Posture (not a forecast)</span>
             <h4 id="opt-ai-strategy-rec" class="text-sm font-bold text-zinc-900 dark:text-zinc-50 mt-0.5">Calculating...</h4>
             <p id="opt-ai-strategy-rationale" class="text-xs text-zinc-550 dark:text-zinc-400 mt-1.5 leading-relaxed">Gathering option chain dynamics to formulate optimal trade structures...</p>
           </div>
@@ -1792,10 +1792,10 @@
       document.getElementById('opt-ai-iv-rank').innerText = fmt(optionsAnalysisData.iv_rank, 1, '', '%');
       document.getElementById('opt-ai-iv-pct').innerText = fmt(optionsAnalysisData.iv_percentile, 1, '', '%');
 
-      const vrp = Number.isFinite(optionsAnalysisData.atm_iv) && Number.isFinite(optionsAnalysisData.hv30)
-        ? optionsAnalysisData.atm_iv - optionsAnalysisData.hv30 : null;
+      const vrp = optionsAnalysisData.vrp && Number.isFinite(optionsAnalysisData.vrp.vrp_spread_pct)
+        ? optionsAnalysisData.vrp.vrp_spread_pct : null;
       document.getElementById('opt-ai-vrp').innerText = vrp === null ? 'N/A'
-        : `${vrp >= 0 ? '+' : ''}${vrp.toFixed(1)}% (${vrp >= 0 ? 'Rich Premium' : 'Discounted'})`;
+        : `${vrp >= 0 ? '+' : ''}${vrp.toFixed(1)}% (${vrp >= 0 ? 'Rich Premium' : 'Discounted'}, 30d)`;
       document.getElementById('opt-ai-vrp').className = `font-mono font-semibold ${vrp === null ? 'text-zinc-500' : vrp >= 0 ? 'text-emerald-500' : 'text-rose-500'}`;
 
       // Expected range
@@ -1804,9 +1804,11 @@
 
       const gex = optionsAnalysisData.gex_stats;
       if (gex) {
-        document.getElementById('opt-ai-call-wall').innerText = `$${gex.call_wall} (${gex.call_wall_val >= 0 ? '+' : ''}${gex.call_wall_val.toFixed(1)}M)`;
-        document.getElementById('opt-ai-put-wall').innerText = `$${gex.put_wall} (${gex.put_wall_val.toFixed(1)}M)`;
-        document.getElementById('opt-ai-gamma-flip').innerText = `$${gex.gamma_flip}`;
+        const wall = (strike, val) => strike == null ? 'N/A'
+          : `$${strike}${val == null ? '' : ` (${val >= 0 ? '+' : ''}${val.toFixed(1)}M)`}`;
+        document.getElementById('opt-ai-call-wall').innerText = wall(gex.call_wall, gex.call_wall_val);
+        document.getElementById('opt-ai-put-wall').innerText = wall(gex.put_wall, gex.put_wall_val);
+        document.getElementById('opt-ai-gamma-flip').innerText = gex.gamma_flip == null ? 'N/A' : `$${gex.gamma_flip}`;
       } else {
         document.getElementById('opt-ai-call-wall').innerText = 'N/A';
         document.getElementById('opt-ai-put-wall').innerText = 'N/A';
