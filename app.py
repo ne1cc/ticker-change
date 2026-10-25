@@ -5134,6 +5134,49 @@ def _start_brief_warmer():
     threading.Thread(target=_recurring, daemon=True, name="brief-recurring").start()
 
 
+def _warm_factors(background: bool = True):
+    """Download and cache Ken French FF5 + Momentum daily factor returns in SQLite.
+
+    Cross-worker locked so only one gunicorn worker downloads at a time.
+    """
+    def _worker():
+        try:
+            if not db.try_claim_lock("factors_warmer_lock", ttl_hours=6.0):
+                return
+            import factors
+            print("[factors] warming FF5 + Momentum daily factor returns ...")
+            df, as_of = factors.load_factor_returns()
+            if df is not None:
+                print(f"[factors] done ({len(df)} factor days, as-of {as_of})")
+            else:
+                print("[factors] download failed and nothing cached")
+        except Exception as e:
+            print(f"[factors] warmer error: {e}")
+
+    if background:
+        threading.Thread(target=_worker, daemon=True, name="factors-warmer").start()
+    else:
+        _worker()
+
+
+def _start_factor_warmer():
+    """Warm once on boot in the background, then refresh every 24 hours.
+
+    Import-time call like the other warmers; the test suite sets
+    FACTORS_WARM_ON_BOOT=0 to keep pytest offline.
+    """
+    if os.environ.get("FACTORS_WARM_ON_BOOT", "1") != "1":
+        return
+    _warm_factors(background=True)
+
+    def _recurring():
+        while True:
+            time.sleep(24 * 3600)
+            _warm_factors(background=True)
+
+    threading.Thread(target=_recurring, daemon=True, name="factors-recurring").start()
+
+
 @app.route('/api/warm-cache', methods=['POST'])
 def api_warm_cache():
     """Trigger a forced EOD options-chain warm (see .github/workflows/warm-cache.yml).
@@ -5149,7 +5192,8 @@ def api_warm_cache():
     if not hmac.compare_digest(provided, expected):
         return jsonify({"error": "unauthorized"}), 403
     _warm_options_cache(force=True)
-    return jsonify({"status": "accepted", "detail": "EOD options cache warm started in background"}), 202
+    _warm_factors(background=True)
+    return jsonify({"status": "accepted", "detail": "EOD options and factor cache warm started in background"}), 202
 
 
 @app.route('/api/corporate-actions/<ticker>')
@@ -5367,6 +5411,7 @@ _start_options_cache_warmer()
 _start_heatmap_warmer()
 _start_radar_warmer()
 _start_brief_warmer()
+_start_factor_warmer()
 
 
 if __name__ == '__main__':
