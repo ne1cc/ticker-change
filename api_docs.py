@@ -882,8 +882,28 @@ def get_openapi_spec() -> Dict[str, Any]:
                                 "data_points": {"type": "integer", "example": 504},
                                 "var_95": {"type": "number", "nullable": True, "example": -1.85},
                                 "var_99": {"type": "number", "nullable": True, "example": -2.95},
-                                "poc_price": {"type": "number", "nullable": True, "example": 220.00}
+                                "poc_price": {"type": "number", "nullable": True, "example": 220.00},
+                                "sharpe_stats": {
+                                    "type": "object",
+                                    "nullable": True,
+                                    "description": "Rolling Sharpe ratio with Lo (2002) SE and PSR"
+                                }
                             }
+                        },
+                        "gics_sector": {
+                            "type": "string",
+                            "nullable": True,
+                            "example": "Information Technology"
+                        },
+                        "percentiles": {
+                            "type": "object",
+                            "nullable": True,
+                            "description": "Cross-sectional peer percentiles against S&P 500 and sector"
+                        },
+                        "signals_lab": {
+                            "type": "object",
+                            "nullable": True,
+                            "description": "Signal ranks and validation status"
                         },
                         "seasonality_obs": {
                             "type": "array",
