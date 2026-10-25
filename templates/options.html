@@ -52,6 +52,12 @@
     top: var(--chain-head-h, 30px);
   }
 
+  /* Expand-all toggle: drop the fixed card height and the scroll-box cap so
+     every strike renders in the page flow. The box keeps overflow-auto (so
+     sticky stays well-defined) but no longer scrolls since content fits. */
+  .chain-expanded#chain-card { height: auto !important; }
+  .chain-expanded #option-chain-scroll { max-height: none !important; }
+
   /* Scoped styling for AI Options Report */
   .opt-ai-report {
     font-size: 0.875rem;
@@ -367,7 +373,7 @@
 
     <!-- Tab 0: Live Option Chain -->
     <div id="workspace-tab-chain" class="hidden p-4 sm:p-6 space-y-6">
-      <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm flex flex-col h-[700px] overflow-hidden">
+      <div id="chain-card" class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm flex flex-col h-[700px] overflow-hidden">
 
         <!-- Controls Header -->
         <div class="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 flex flex-wrap gap-4 items-center justify-between bg-zinc-50 dark:bg-zinc-900/50">
@@ -399,9 +405,14 @@
             </div>
           </div>
 
-          <div class="text-right">
-            <span class="text-[10px] font-bold text-zinc-400 uppercase block">Days to Expiration</span>
-            <span id="dte-val" class="font-mono text-sm font-bold text-zinc-800 dark:text-zinc-200">--</span>
+          <div class="flex items-center gap-4 text-right">
+            <button id="chain-expand-btn" onclick="toggleChainExpand()" class="px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:border-zinc-300 dark:hover:border-zinc-600 transition" title="Toggle between a fixed-height scroll box and the full strike list">
+              Expand all
+            </button>
+            <div>
+              <span class="text-[10px] font-bold text-zinc-400 uppercase block">Days to Expiration</span>
+              <span id="dte-val" class="font-mono text-sm font-bold text-zinc-800 dark:text-zinc-200">--</span>
+            </div>
           </div>
         </div>
 
@@ -1266,6 +1277,16 @@
     if (h > 0) box.style.setProperty('--chain-head-h', `${Math.round(h)}px`);
   }
   window.addEventListener('resize', syncChainHeaderOffset);
+
+  // Expand/collapse the chain card: expanded shows every strike in the page
+  // flow instead of inside the fixed-height scroll box.
+  function toggleChainExpand() {
+    const card = document.getElementById('chain-card');
+    const btn = document.getElementById('chain-expand-btn');
+    if (!card || !btn) return;
+    const expanded = card.classList.toggle('chain-expanded');
+    btn.textContent = expanded ? 'Collapse' : 'Expand all';
+  }
 
   // Selected strike window, as the /api/options-greeks `strikes` param.
   // Empty string means "use the server default band", so it is omitted.
