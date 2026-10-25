@@ -4491,6 +4491,46 @@ def options_greeks_api(ticker):
     return jsonify(data)
 
 
+def _terminal_gex_stats(ticker):
+    """GEX stats for the AI tab from the same engine and inputs as the /options page.
+
+    Returns the legacy `gex_stats` keys (no per-strike series) plus `convention`,
+    or None when the terminal reports an error so its placeholder values never
+    reach the response.
+    """
+    spot = get_current_price_yfinance(ticker)
+    if not spot:
+        spot = _spot_price(ticker, _get_yf_ticker(ticker))
+    chain_df = get_full_option_chain_df(ticker, stock=_get_yf_ticker(ticker), current_price=spot)
+    res = compute_options_terminal(
+        ticker=ticker, spot=spot, chain_df=chain_df,
+        daily_df=get_or_fetch_prices(ticker), convention='naive')
+    if res.error:
+        return None
+    g = res.gex
+    has_chain = chain_df is not None and not chain_df.empty
+    return {
+        'total_gex': round(g.total_gex, 1),
+        'regime': g.regime,
+        'call_wall': g.call_wall,
+        'call_wall_val': g.call_wall_val,
+        'put_wall': g.put_wall,
+        'put_wall_val': g.put_wall_val,
+        'gamma_flip': g.gamma_flip,
+        'gamma_flip_sticky_moneyness': g.gamma_flip_sticky_moneyness,
+        'gamma_flip_diff': g.gamma_flip_diff,
+        'rate_source': g.rate_source,
+        'rf_rate': g.rf_rate,
+        'hvl': g.hvl,
+        'hvl_val': g.hvl_val,
+        'spot': round(float(spot), 2),
+        'top_nodes': g.top_nodes,
+        'dte_range': f"{chain_df['dte'].min()}–{chain_df['dte'].max()}d" if has_chain else None,
+        'n_expirations': int(chain_df['expiration'].nunique()) if has_chain else 0,
+        'convention': g.convention,
+    }
+
+
 def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
     """Compile options statistics and quantitative posture metrics."""
     try:
@@ -4505,16 +4545,14 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
         
         # Spot price history for HV30/90
         df = get_or_fetch_prices(ticker)
-        hv30, hv90, iv_rank, iv_percentile = 0.0, 0.0, 0.0, 0.0
-        vol_history = pd.Series(dtype=float)
-        if df is not None and not df.empty and len(df) > 30:
-            returns = df['close'].pct_change()
-            hv30 = float(returns.tail(30).std() * np.sqrt(252)) * 100
-            hv90 = float(returns.tail(90).std() * np.sqrt(252)) * 100
-            
-            rolling_30d = returns.rolling(30).std() * np.sqrt(252) * 100
-            vol_history = rolling_30d.dropna().tail(252)
-        
+        hv30, hv90 = None, None  # None (not 0.0) when there are too few daily returns
+        if df is not None and not df.empty:
+            returns = df['close'].pct_change().dropna()
+            if len(returns) >= 30:
+                hv30 = float(returns.tail(30).std() * np.sqrt(252)) * 100
+            if len(returns) >= 90:
+                hv90 = float(returns.tail(90).std() * np.sqrt(252)) * 100
+
         # Use the nearest usable near-ATM IV independently on each side.
         strikes = [r['strike'] for r in rows]
         atm_row = min(rows, key=lambda r: abs(r['strike'] - spot_price)) if rows else None
@@ -4576,11 +4614,10 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
         max_pain = min(pains, key=pains.get) if pains and has_oi else None
         
         # GEX stats
-        gex_profile = get_gex_profile(ticker, spot_price, rf_rate)
-        gex_stats = gex_profile['stats'] if gex_profile else None
+        gex_stats = _guard_section('options-analysis gex', lambda: _terminal_gex_stats(ticker))
         
         # Strategy recommendations
-        selling_environment = atm_iv > hv30 if atm_iv is not None else None
+        selling_environment = atm_iv > hv30 if atm_iv is not None and hv30 is not None else None
         strategy_recommendation = ""
         strategy_rationale = ""
         if atm_iv is None:
@@ -4607,8 +4644,8 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
             'selected_expiration': selected_expiration,
             'days_to_expiration': days_to_exp,
             'expirations': greeks_data['expirations'],
-            'hv30': round(hv30, 2),
-            'hv90': round(hv90, 2),
+            'hv30': round(hv30, 2) if hv30 is not None else None,
+            'hv90': round(hv90, 2) if hv90 is not None else None,
             'atm_iv': round(atm_iv, 2) if atm_iv is not None else None,
             'iv_rank': round(iv_rank, 1) if iv_rank is not None else None,
             'iv_percentile': round(iv_percentile, 1) if iv_percentile is not None else None,
