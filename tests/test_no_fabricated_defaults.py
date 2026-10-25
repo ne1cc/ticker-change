@@ -39,9 +39,16 @@ def empty_providers(monkeypatch, tmp_path):
     monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "guard.db"))
     db_module.init_db()
     captured = {}
+    full_data = {}
 
     def _capture(template, **kw):
         captured.update(kw)
+        if "data" in kw and isinstance(kw["data"], dict):
+            for k, v in kw["data"].items():
+                if k == "charts" and isinstance(v, dict):
+                    full_data.setdefault("charts", {}).update(v)
+                else:
+                    full_data[k] = v
         return ""
 
     with contextlib.ExitStack() as stack:
@@ -58,13 +65,15 @@ def empty_providers(monkeypatch, tmp_path):
             patch.object(app_module, "render_template", side_effect=_capture),
         ):
             stack.enter_context(p)
-        resp = app_module.app.test_client().get("/analytics?ticker=TEST")
+        client = app_module.app.test_client()
+        resp = client.get("/analytics?ticker=TEST")
         assert resp.status_code == 200
         assert "error" not in captured, f"pipeline failed: {captured.get('error')}"
-        data = captured["data"]
-    assert data["institutional"] is not None, \
+        client.get("/analytics/fragment/company?ticker=TEST")
+        client.get("/analytics/fragment/options?ticker=TEST")
+    assert full_data.get("institutional") is not None, \
         "institutional block crashed; asserts would be vacuous"
-    yield data
+    yield full_data
 
 
 def test_fred_fields_are_none_without_fred(empty_providers):
