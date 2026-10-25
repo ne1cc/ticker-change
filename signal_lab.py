@@ -130,7 +130,20 @@ SIGNAL_CATALOG: dict[str, dict] = {
 
 def _cached_universe_prices(ticker: str | None = None) -> dict[str, pd.DataFrame]:
     """Load cached S&P 500 prices, optionally including the requested ticker."""
-    constituents = db.cache_get("sp500", "constituents", ttl_hours=24) or []
+    constituents = db.cache_get("sp500", "constituents", ttl_hours=24)
+    if not constituents:
+        # Fall back to stale constituents if available (offline/graceful degradation)
+        with db.get_conn() as conn:
+            row = conn.execute(
+                "SELECT payload FROM api_cache WHERE provider = 'sp500' AND key = 'constituents'"
+            ).fetchone()
+            if row:
+                try:
+                    import json
+                    constituents = json.loads(row["payload"])
+                except Exception:
+                    constituents = []
+    constituents = constituents or []
     symbols = {str(row.get("symbol", "")).strip().upper()
                for row in constituents if isinstance(row, dict)}
     symbols.discard("")

@@ -14,6 +14,7 @@ import os
 os.environ["HEATMAP_WARM_ON_BOOT"] = "0"
 os.environ["RADAR_WARM_ON_BOOT"] = "0"
 os.environ["BRIEF_WARM_ON_BOOT"] = "0"
+os.environ["FACTORS_WARM_ON_BOOT"] = "0"
 
 for _ai_key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY",
                 "GEMINI_API_KEY", "OPENROUTER_API_KEY"):
