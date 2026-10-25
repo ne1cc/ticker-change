@@ -1,0 +1,9 @@
+name: PR template check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+
+jobs:
+  pr-template:
+    uses: ne1cc/.github/.github/workflows/pr-template-check.yml@v1
