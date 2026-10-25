@@ -443,7 +443,7 @@ def get_openapi_spec() -> Dict[str, Any]:
                             "description": "Full analytics payload",
                             "content": {
                                 "application/json": {
-                                    "schema": {"type": "object"}
+                                    "schema": {"": "#/components/schemas/AnalyticsResponse"}
                                 }
                             }
                         },
@@ -718,15 +718,40 @@ def get_openapi_spec() -> Dict[str, Any]:
                                                       "description": "Geometric monthly convention; null below 6 down-market months."}
                             }
                         },
+                        "short_interest": {
+                            "type": "object",
+                            "properties": {
+                                "shares_short": {"type": "integer", "nullable": True},
+                                "short_pct_float": {"type": "number", "nullable": True, "example": 0.024},
+                                "days_to_cover": {"type": "number", "nullable": True, "example": 1.8},
+                                "shares_short_prior_month": {"type": "integer", "nullable": True},
+                                "si_mom_change": {"type": "number", "nullable": True},
+                                "as_of": {"type": "string", "nullable": True},
+                                "source": {"type": "string", "nullable": True, "example": "reported"},
+                                "si_source": {"type": "string", "enum": ["reported", "assumed"], "example": "reported"}
+                            }
+                        },
                         "signals_backtest": {
                             "type": "object",
                             "properties": {
                                 "total_return_pct": {"type": "number", "example": 28.5},
+                                "cagr_pct": {"type": "number", "example": 14.2},
                                 "benchmark_return_pct": {"type": "number", "example": 15.2},
+                                "alpha_pct": {"type": "number", "example": 13.3},
                                 "annualized_sharpe": {"type": "number", "example": 1.65},
+                                "annualized_sortino": {"type": "number", "example": 2.15},
                                 "max_drawdown_pct": {"type": "number", "example": -8.4},
+                                "calmar_ratio": {"type": "number", "example": 1.69},
                                 "win_rate_pct": {"type": "number", "example": 58.2},
-                                "trade_count": {"type": "integer", "example": 42}
+                                "profit_factor": {"type": "number", "example": 1.45},
+                                "total_trades": {"type": "integer", "example": 42},
+                                "factors_used": {"type": "array", "items": {"type": "string"}, "example": ["MOM_12_1", "VOL_60D"]},
+                                "n_folds": {"type": "integer", "example": 5},
+                                "oos_sharpe_mean": {"type": "number", "example": 1.25},
+                                "oos_sharpe_std": {"type": "number", "example": 0.35},
+                                "fold_returns": {"type": "array", "items": {"type": "number"}},
+                                "deflated_sharpe": {"type": "number", "example": 0.92},
+                                "n_trials_assumed": {"type": "integer", "example": 10}
                             }
                         },
                         "permutation_test": {
@@ -835,6 +860,59 @@ def get_openapi_spec() -> Dict[str, Any]:
                                     "put_delta": {"type": "number", "example": -0.48}
                                 }
                             }
+                        }
+                    }
+                },
+                "AnalyticsResponse": {
+                    "type": "object",
+                    "required": ["ticker", "current_price", "stats"],
+                    "properties": {
+                        "ticker": {"type": "string", "example": "AAPL"},
+                        "current_price": {"type": "number", "example": 225.50},
+                        "stats": {
+                            "type": "object",
+                            "properties": {
+                                "mean_daily_return": {"type": "number", "example": 0.082},
+                                "daily_std": {"type": "number", "example": 1.25},
+                                "annualised_vol": {"type": "number", "example": 19.84},
+                                "skewness": {"type": "number", "example": -0.15},
+                                "kurtosis": {"type": "number", "example": 3.42},
+                                "max_drawdown": {"type": "number", "example": -14.2},
+                                "beta": {"type": "number", "nullable": True, "example": 1.12},
+                                "data_points": {"type": "integer", "example": 504},
+                                "var_95": {"type": "number", "nullable": True, "example": -1.85},
+                                "var_99": {"type": "number", "nullable": True, "example": -2.95},
+                                "poc_price": {"type": "number", "nullable": True, "example": 220.00},
+                                "sharpe_stats": {
+                                    "type": "object",
+                                    "nullable": True,
+                                    "description": "Rolling Sharpe ratio with Lo (2002) SE and PSR"
+                                }
+                            }
+                        },
+                        "gics_sector": {
+                            "type": "string",
+                            "nullable": True,
+                            "example": "Information Technology"
+                        },
+                        "percentiles": {
+                            "type": "object",
+                            "nullable": True,
+                            "description": "Cross-sectional peer percentiles against S&P 500 and sector"
+                        },
+                        "signals_lab": {
+                            "type": "object",
+                            "nullable": True,
+                            "description": "Signal ranks and validation status"
+                        },
+                        "seasonality_obs": {
+                            "type": "array",
+                            "nullable": True,
+                            "minItems": 2,
+                            "maxItems": 2,
+                            "items": {"type": "integer"},
+                            "description": "[min_observations, max_observations] per calendar month",
+                            "example": [10, 10]
                         }
                     }
                 },

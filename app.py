@@ -623,6 +623,16 @@ def glossary_page():
         sections.setdefault(g['section'], []).append({**g, 'key': key})
     return render_template('glossary.html', sections=sections)
 
+
+@app.route('/methodology')
+@app.route('/analytics/methodology')
+def methodology_page():
+    """Methodology & analytical limitations reference, grouped by section."""
+    sections: dict[str, list] = {}
+    for key, g in GLOSSARY.items():
+        sections.setdefault(g['section'], []).append({**g, 'key': key})
+    return render_template('methodology.html', sections=sections)
+
 @app.route('/api/stock/<ticker>')
 def stock_api(ticker):
     data = get_stock_data(ticker)
