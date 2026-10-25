@@ -7,7 +7,7 @@ first commit. If this file and any other instruction disagree, this file wins.
 
 - Work only from the issue you were given. Branch: `feat/<short-slug>` or `fix/<short-slug>`.
 - PR body starts with `Closes #N`. Fill in EVERY section of `pull_request_template.md` —
-  CI fails on empty sections. The PR body is the permanent record; no separate retro comment.
+  CI fails on empty sections. Keep the full PR body and post one retained Development Retrospective comment using `~/.qoder/templates/pr-retrospective.md`. Start the comment with `<!-- development-retrospective -->`; update it on retries instead of duplicating it. Record the reviewed head SHA and publication date, not a transient open/merged status.
 - Paste real command output in **Verification**. Never write "should pass" or "tested locally".
 
 ## Verify before you claim done
