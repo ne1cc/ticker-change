@@ -235,6 +235,44 @@
         </div>
       </div>
     </div>
+
+    <!-- Historical Stress Test Library (issue #145) -->
+    {% if rl.stress_scenarios %}
+    <div class="mt-4 pt-4 border-t border-zinc-200/60 dark:border-zinc-800/60">
+      <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">Historical Stress Test Library (GFC, COVID, Fed Hiking, Volmageddon)</div>
+      <div class="overflow-x-auto">
+        <table class="w-full font-mono text-xs">
+          <thead>
+            <tr class="text-left text-[10px] text-zinc-400 uppercase border-b border-zinc-200 dark:border-zinc-800">
+              <th class="py-1.5 pr-2">Scenario</th>
+              <th class="py-1.5 px-2">Dates</th>
+              <th class="py-1.5 px-2 text-right">Max Drop</th>
+              <th class="py-1.5 px-2 text-right">SPY Benchmark</th>
+              <th class="py-1.5 px-2 text-right">Recovery (T+63d)</th>
+              <th class="py-1.5 pl-2">Estimation Method</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-zinc-200/40 dark:divide-zinc-800/40">
+            {% for sc in rl.stress_scenarios %}
+            <tr>
+              <td class="py-2 pr-2 font-semibold text-zinc-700 dark:text-zinc-200">{{ sc.name }}</td>
+              <td class="py-2 px-2 text-zinc-400 text-[11px]">{{ sc.dates }}</td>
+              <td class="py-2 px-2 text-right font-bold {% if sc.drop_pct is not none and sc.drop_pct < 0 %}text-rose-500{% elif sc.drop_pct is not none %}text-emerald-500{% else %}text-zinc-400{% endif %}">
+                {% if sc.drop_pct is not none %}{{ '%+.1f'|format(sc.drop_pct) }}%{% else %}—{% endif %}
+              </td>
+              <td class="py-2 px-2 text-right text-zinc-400">{{ '%+.1f'|format(sc.benchmark_drop_pct) }}%</td>
+              <td class="py-2 px-2 text-right text-zinc-400">
+                {% if sc.recovery_pct is not none %}{{ '%+.1f'|format(sc.recovery_pct) }}%{% else %}—{% endif %}
+              </td>
+              <td class="py-2 pl-2 text-zinc-400 text-[11px] italic">{{ sc.method }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
     {% if data.charts.vol_forecast %}
     <div class="mt-4">{{ data.charts.vol_forecast | safe }}</div>
     {% endif %}
@@ -259,8 +297,16 @@
   <!-- Row 6: Sharpe + Seasonality -->
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
     <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-      <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Rolling Sharpe Ratio', 'sharpe') }}</h2>
-      <p class="text-xs text-zinc-400 mb-3">1-year rolling Sharpe (risk-free ≈ 0). Above 1 is generally considered strong risk-adjusted return.</p>
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+        <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest">{{ metric('Rolling Sharpe Ratio', 'sharpe') }}</h2>
+        {% if data.stats.sharpe_stats and data.stats.sharpe_stats.psr is not none %}
+        <span class="text-[11px] font-mono text-zinc-400">
+          PSR: <span class="font-bold text-amber-500">{{ (data.stats.sharpe_stats.psr * 100) | round(1) }}%</span>
+          (SE &plusmn;{{ data.stats.sharpe_stats.latest_se }}, &rho;<sub>1</sub>={{ data.stats.sharpe_stats.rho1 }})
+        </span>
+        {% endif %}
+      </div>
+      <p class="text-xs text-zinc-400 mb-3">1-year rolling Sharpe on excess returns with Lo (2002) autocorrelation-adjusted 95% confidence bands and Probabilistic Sharpe Ratio (PSR).</p>
       {{ data.charts.sharpe | safe }}
     </div>
 
@@ -305,7 +351,7 @@
     <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
       <h2 class="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1">{{ metric('Volume Profile (2 yr)', 'poc') }}</h2>
       <p class="text-xs text-zinc-400 mb-3">
-        Cumulative volume traded at each price level over the past two years.
+        Cumulative volume traded across bar [low, high] ranges over the past two years.
         High-volume nodes act as institutional support/resistance.
         <span class="text-indigo-400 font-mono">POC ${{ data.stats.poc_price }}</span> = Point of Control (highest-volume price).
       </p>

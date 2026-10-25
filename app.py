@@ -1759,12 +1759,28 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
     max_drawdown = float(df['drawdown'].min())
     dd_chart = charts.render_chart(charts.cartesian([charts.line('Drawdown', df.index, df['drawdown'], '#ef4444', area='rgba(239,68,68,.15)')], yname='Drawdown (%)'), height=300)
 
-    # --- Rolling Sharpe (252-day, risk-free ≈ 0) ---
-    df['rolling_sharpe'] = (
-        df['returns'].rolling(252).mean() /
-        df['returns'].rolling(252).std()
-    ) * np.sqrt(252)
-    sharpe_chart = charts.render_chart(charts.cartesian([charts.line('Sharpe', df.index, df['rolling_sharpe'], '#10b981')], yname='Sharpe Ratio', refs=[charts.reference('y', 1, 'Sharpe = 1')]), height=300)
+    # --- Rolling Sharpe with Lo (2002) SE and CI band (issue #146) ---
+    import risk_backtests
+    sharpe_res = risk_backtests.rolling_sharpe_with_lo_se(df['returns'], window=252)
+    if sharpe_res and sharpe_res.get('dates') and any(s is not None for s in sharpe_res['sharpe']):
+        sharpe_chart = charts.render_chart(charts.cartesian([
+            charts.line('Sharpe (Lo 2002)', sharpe_res['dates'], sharpe_res['sharpe'], '#10b981', width=2),
+            charts.line('95% CI Upper', sharpe_res['dates'], sharpe_res['ci_upper'], '#10b981', dash=True, width=1),
+            charts.line('95% CI Lower', sharpe_res['dates'], sharpe_res['ci_lower'], '#10b981', dash=True, width=1),
+        ], yname='Sharpe Ratio', refs=[charts.reference('y', 1, 'Sharpe = 1', '#71717a')]), height=300)
+        sharpe_stats = {
+            'latest_sharpe': sharpe_res['latest_sharpe'],
+            'latest_se': sharpe_res['latest_se'],
+            'psr': sharpe_res['psr'],
+            'rho1': sharpe_res['autocorrelation_rho1'],
+        }
+    else:
+        df['rolling_sharpe'] = (
+            df['returns'].rolling(252).mean() /
+            df['returns'].rolling(252).std()
+        ) * np.sqrt(252)
+        sharpe_chart = charts.render_chart(charts.cartesian([charts.line('Sharpe', df.index, df['rolling_sharpe'], '#10b981')], yname='Sharpe Ratio', refs=[charts.reference('y', 1, 'Sharpe = 1')]), height=300)
+        sharpe_stats = None
 
     # --- Seasonality: average compounded return by calendar month ---
     monthly_avg, season_obs = _monthly_seasonality(df['close'])
@@ -1816,33 +1832,23 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
     latest_var_95 = round(float(df['var_95'].dropna().iloc[-1]), 3) if not df['var_95'].dropna().empty else None
     latest_var_99 = round(float(df['var_99'].dropna().iloc[-1]), 3) if not df['var_99'].dropna().empty else None
 
-    # --- Volume Profile (last 2 years) ---
-    vp_cutoff = df.index[-1] - pd.DateOffset(years=2)
-    vp_df = df[df.index >= vp_cutoff].copy()
-    vp_chart = None
-    if len(vp_df) > 30:
-        price_min, price_max = vp_df['low'].min(), vp_df['high'].max()
-        if price_min == price_max:
-            poc_price = None
-        else:
-            n_bins = 50
-            bins = np.linspace(price_min, price_max, n_bins + 1)
-            bin_centers = (bins[:-1] + bins[1:]) / 2
-            vp_df['_bin'] = pd.cut(vp_df['close'], bins=bins, labels=False)
-            vol_by_price = vp_df.groupby('_bin')['volume'].sum().reindex(range(n_bins), fill_value=0)
-            vp_colors = [
-                '#f59e0b' if bc >= current_price else '#6366f1'
-                for bc in bin_centers
-            ]
-            poc_bin = int(vol_by_price.idxmax())
-            poc_price = round(float(bin_centers[poc_bin]), 2)
-
-            vp_option = charts.cartesian([charts.bar('Volume at Price', vol_by_price.values, bin_centers, vp_colors)], xtype='value', xname='Cumulative Volume (2 yr)', yname='Price ($)', refs=[charts.reference('y', current_price, 'Current', '#f59e0b'), charts.reference('y', poc_price, f'POC ${poc_price}', '#6366f1')])
-            vp_option['terminalHorizontalBars'] = True
-            vp_option['xAxis']['scale'] = False
-            vp_chart = charts.render_chart(vp_option, height=420)
+    # --- Volume Profile across bar [low, high] ranges (issue #147) ---
+    vp_res = risk_backtests.bar_range_volume_profile(df, n_bins=50, years=2)
+    if vp_res and vp_res.get('bin_centers'):
+        bin_centers = vp_res['bin_centers']
+        vol_vals = vp_res['volumes']
+        poc_price = vp_res['poc_price']
+        vp_colors = [
+            '#f59e0b' if bc >= current_price else '#6366f1'
+            for bc in bin_centers
+        ]
+        vp_option = charts.cartesian([charts.bar('Volume at Price', vol_vals, bin_centers, vp_colors)], xtype='value', xname='Cumulative Volume (2 yr)', yname='Price ($)', refs=[charts.reference('y', current_price, 'Current', '#f59e0b'), charts.reference('y', poc_price, f'POC ${poc_price}', '#6366f1')])
+        vp_option['terminalHorizontalBars'] = True
+        vp_option['xAxis']['scale'] = False
+        vp_chart = charts.render_chart(vp_option, height=420)
     else:
         poc_price = None
+        vp_chart = None
 
     # Cross-sectional percentiles (Epic 2)
     sec = gics.sector_of(ticker)
@@ -1892,6 +1898,7 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
             'var_95': latest_var_95,
             'var_99': latest_var_99,
             'poc_price': poc_price,
+            'sharpe_stats': sharpe_stats,
         },
         'seasonality_obs': [int(season_obs.min()), int(season_obs.max())] if len(season_obs) else None,
         'charts': {
@@ -1963,9 +1970,10 @@ def _rolling_beta_chart(rows) -> str | None:
         charts.cartesian([lo, band, beta], yname='beta',
                          refs=[charts.reference('yAxis', 1.0, 'β = 1.0')]), height=300)
 
-def _build_risk_lab_block(returns: pd.Series) -> dict:
+def _build_risk_lab_block(returns: pd.Series, price_df: pd.DataFrame | None = None,
+                          factor_loadings: dict | None = None) -> dict:
     """Credible-risk block: tail-honest VaR/ES, EWMA/GARCH forecasts with
-    out-of-sample evaluation, VaR backtests, and horizon scaling."""
+    out-of-sample evaluation, VaR backtests, horizon scaling, and stress scenarios."""
     import risk_backtests
     r = np.asarray(returns, dtype=float)
     r = r[np.isfinite(r)]
@@ -1992,6 +2000,12 @@ def _build_risk_lab_block(returns: pd.Series) -> dict:
 
     out["backtests"] = {f"var_{int(l * 100)}": risk_backtests.var_backtest(r, l) for l in (0.95, 0.99)}
     out["horizons"] = risk_backtests.horizon_var(r)
+
+    # Historical stress scenarios (#145)
+    if price_df is not None:
+        out["stress_scenarios"] = risk_backtests.historical_stress_scenarios(
+            price_df, factor_loadings=factor_loadings
+        )
     return out
 
 
@@ -2325,10 +2339,15 @@ def analytics_page():
             timeout=SECTION_TIMEOUT_S)
         prices_receipt = analytics_receipts.receipt("prices", ticker, present=True, as_of=price_df.index[-1])
 
-        # Credible risk: tail honesty, vol forecasts, backtests, horizons.
+        # Credible risk: tail honesty, vol forecasts, backtests, horizons, stress tests.
         returns_s = price_df['close'].pct_change().dropna()
+        fac_block = _build_factor_block(ticker)
+        fac_loadings = None
+        if fac_block and fac_block.get('available') and fac_block.get('exposures'):
+            fac_loadings = {f: exp['beta'] for f, exp in fac_block['exposures'].items() if isinstance(exp, dict) and 'beta' in exp}
+
         data['risk_lab'] = _guard_section(
-            "risk_lab", lambda: _build_risk_lab_block(returns_s),
+            "risk_lab", lambda: _build_risk_lab_block(returns_s, price_df=price_df, factor_loadings=fac_loadings),
             timeout=SECTION_TIMEOUT_S)
         data['charts']['vol_forecast'] = _guard_section(
             "vol_forecast",

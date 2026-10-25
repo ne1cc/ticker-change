@@ -115,3 +115,90 @@ def test_position_scaling():
     assert rb.scale_to_position(-2.0, -3.5, 10_000) == {
         "position_usd": 10000.0, "var_usd": -200.0, "es_usd": -350.0}
     assert rb.scale_to_position(-2.0, -3.5, 0) == {}
+
+
+# --- 6.5 Historical stress tests (#145) ------------------------------------------
+def test_historical_stress_scenarios_direct_history_and_factor_implied():
+    import pandas as pd
+    # Stock with history covering COVID crash (2020-02 to 2020-03)
+    idx = pd.bdate_range("2020-01-01", "2020-09-01")
+    # Base price 100, drops to 65 during March 2020, recovers to 85 by June
+    prices = pd.Series(100.0, index=idx)
+    prices.loc["2020-03-23":] = 65.0
+    prices.loc["2020-06-25":] = 85.0
+    df = pd.DataFrame({"close": prices, "high": prices * 1.01, "low": prices * 0.99, "volume": 1000}, index=idx)
+
+    # 1. Direct historical replay for COVID-19 Crash
+    res = rb.historical_stress_scenarios(df, factor_loadings={"Mkt-RF": 1.1, "HML": -0.2})
+    covid = next(s for s in res if s["id"] == "covid_crash_2020")
+    assert covid["method"] == "historical replay"
+    assert covid["drop_pct"] == pytest.approx(-35.0, abs=1.0)
+    assert covid["recovery_pct"] is not None
+
+    # 2. Factor-implied fallback for 2008 GFC (no 2008 price history)
+    gfc = next(s for s in res if s["id"] == "gfc_2008")
+    assert gfc["method"] == "factor-implied (no direct history)"
+    assert gfc["drop_pct"] is not None
+    assert gfc["drop_pct"] < 0  # Market shock is negative
+
+    # 3. Insufficient history and no factor loadings
+    res_no_factors = rb.historical_stress_scenarios(df, factor_loadings=None)
+    gfc_empty = next(s for s in res_no_factors if s["id"] == "gfc_2008")
+    assert gfc_empty["method"] == "insufficient history"
+    assert gfc_empty["drop_pct"] is None
+
+
+# --- 6.6 Rolling Sharpe with Lo (2002) SE & PSR (#146) ---------------------------
+def test_rolling_sharpe_with_lo_se_and_psr():
+    import pandas as pd
+    idx = pd.bdate_range("2023-01-01", periods=400)
+    rng = np.random.default_rng(42)
+    # Autocorrelated returns
+    e = rng.normal(0.0008, 0.01, 400)
+    for i in range(1, 400):
+        e[i] += 0.3 * e[i-1]
+    returns = pd.Series(e, index=idx)
+
+    out = rb.rolling_sharpe_with_lo_se(returns, window=252)
+    assert len(out["dates"]) == 400
+    valid_sharpes = [s for s in out["sharpe"] if s is not None]
+    assert len(valid_sharpes) == 400 - 252 + 1
+    assert out["latest_sharpe"] is not None
+    assert out["latest_se"] is not None and out["latest_se"] > 0
+    assert out["psr"] is not None and 0.0 <= out["psr"] <= 1.0
+    assert out["autocorrelation_rho1"] is not None
+
+    # Confidence intervals bracket the estimate
+    latest_u = out["ci_upper"][-1]
+    latest_l = out["ci_lower"][-1]
+    assert latest_l < out["latest_sharpe"] < latest_u
+
+    # Short history returns empty
+    short_out = rb.rolling_sharpe_with_lo_se(returns.iloc[:100], window=252)
+    assert short_out["latest_sharpe"] is None
+
+
+# --- 6.7 Bar-range Volume Profile (#147) ----------------------------------------
+def test_bar_range_volume_profile_distributes_across_spread():
+    import pandas as pd
+    idx = pd.bdate_range("2025-01-01", periods=50)
+    # Bars oscillating around 100 with [95, 105] ranges, highest volume at center
+    vols = np.concatenate([np.linspace(100, 1000, 25), np.linspace(1000, 100, 25)])
+    df = pd.DataFrame({
+        "open": np.full(50, 100.0),
+        "high": np.full(50, 105.0),
+        "low": np.full(50, 95.0),
+        "close": np.full(50, 100.0),
+        "volume": vols,
+    }, index=idx)
+
+    vp = rb.bar_range_volume_profile(df, n_bins=20, years=2)
+    assert vp["n_bins"] == 20
+    assert len(vp["bin_centers"]) == 20
+    assert len(vp["volumes"]) == 20
+    assert sum(vp["volumes"]) == pytest.approx(vols.sum(), rel=1e-2)
+    # POC is within the spread
+    assert 95.0 <= vp["poc_price"] <= 105.0
+    # Multiple bins received volume (not just the single bin at close=100)
+    non_zero_bins = sum(1 for v in vp["volumes"] if v > 0)
+    assert non_zero_bins >= 15
