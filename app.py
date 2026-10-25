@@ -2407,6 +2407,12 @@ def analytics_page():
         if fac_block and fac_block.get('available') and fac_block.get('exposures'):
             fac_loadings = {f: exp['beta'] for f, exp in fac_block['exposures'].items() if isinstance(exp, dict) and 'beta' in exp}
 
+        data['factors'] = fac_block
+        data['charts']['rolling_beta'] = _guard_section(
+            "rolling_beta",
+            lambda: _rolling_beta_chart((fac_block or {}).get('rolling_beta')),
+            timeout=SECTION_TIMEOUT_S)
+
         data['risk_lab'] = _guard_section(
             "risk_lab", lambda: _build_risk_lab_block(returns_s, price_df=price_df, factor_loadings=fac_loadings),
             timeout=SECTION_TIMEOUT_S)
