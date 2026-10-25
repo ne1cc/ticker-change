@@ -1875,7 +1875,18 @@
 
     try {
       const res = await fetch(`/api/options-ai-report/${ticker}?expiration=${date}&rf_rate=${rfRate}`);
-      const data = await res.json();
+      // nginx/gunicorn can answer with an HTML error page (502 on container
+      // swap, 504 past proxy_read_timeout); res.json() would surface a raw
+      // "Unexpected token '<'" — parse defensively and say something useful.
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (parseErr) {
+        throw new Error(res.ok
+          ? "The server returned a non-JSON response (it may have restarted mid-request). Try again in a minute."
+          : "The server timed out or restarted before the report finished. Try again in a minute.");
+      }
 
       if (!res.ok) {
         throw new Error(data.error || "Failed to generate report");
