@@ -3,11 +3,21 @@
            {{ metric('Annualised Vol', 'annualised_vol') }}
    The tooltip text and the glossary entry both come from the GLOSSARY Jinja
    global (registered in app.py), so there is a single source of truth.
-   `label_cls` styles the label text; pass the classes the bare label used to have. #}
-{% macro metric(label, key, label_cls='') -%}
+   `label_cls` styles the label text; pass the classes the bare label used to have.
+   `p` optionally carries pre-computed cross-sectional percentiles (Issue #119). #}
+{% macro metric(label, key, label_cls='', p=none) -%}
 {%- set g = GLOSSARY.get(key) -%}
-<span class="inline-flex items-center gap-1 relative group align-middle">
+{%- if p is none and data is defined and data and data.percentiles -%}
+  {%- set p = data.percentiles.get(key) -%}
+{%- endif -%}
+<span class="inline-flex items-center gap-1.5 relative group align-middle flex-wrap">
   <span class="{{ label_cls }}">{{ label }}</span>
+  {%- if p and p.universe and p.universe.percentile is not none -%}
+  <span class="percentile-chip inline-flex items-center text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 ring-1 ring-zinc-200 dark:ring-zinc-700 select-none cursor-help"
+        title="S&P 500: {{ p.universe.percentile }}th percentile (n={{ p.universe.peer_count }}, as of {{ p.universe.as_of }}){% if p.sector and p.sector.percentile is not none %} · Sector ({{ p.sector.name }}): {{ p.sector.percentile }}th percentile (n={{ p.sector.peer_count }}){% elif p.sector and p.sector.status == 'not meaningful' %} · Sector ({{ p.sector.name }}): not meaningful (n={{ p.sector.peer_count }} < 5){% endif %}">
+    P{{ "%.0f"|format(p.universe.percentile) }}{% if p.sector and p.sector.percentile is not none %} · S:{{ "%.0f"|format(p.sector.percentile) }}{% elif p.sector and p.sector.status == 'not meaningful' %} · S:NM{% endif %}
+  </span>
+  {%- endif -%}
   {%- if g %}
   <a href="/glossary#{{ key }}" tabindex="0" aria-label="About {{ label }}"
      class="text-zinc-300 dark:text-zinc-600 hover:text-amber-500 focus:text-amber-500 focus:outline-none transition-colors leading-none shrink-0">
@@ -19,6 +29,19 @@
   <span role="tooltip"
         class="pointer-events-none absolute top-full left-0 mt-1.5 w-60 px-3 py-2 rounded-lg bg-zinc-900 dark:bg-zinc-800 ring-1 ring-white/10 text-zinc-100 text-[11px] font-normal normal-case tracking-normal leading-snug text-left shadow-xl opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150 z-50">
     {{ g.short }}
+    {%- if p and p.universe and p.universe.percentile is not none %}
+    <span class="block mt-1 text-zinc-300 text-[10px]">
+      S&P 500: {{ p.universe.percentile }}th pct (n={{ p.universe.peer_count }}, as of {{ p.universe.as_of }})
+      {% if p.sector and p.sector.percentile is not none %}
+      <br>Sector ({{ p.sector.name }}): {{ p.sector.percentile }}th pct (n={{ p.sector.peer_count }})
+      {% elif p.sector and p.sector.status == 'not meaningful' %}
+      <br>Sector ({{ p.sector.name }}): not meaningful (n={{ p.sector.peer_count }} &lt; 5)
+      {% endif %}
+    </span>
+    {%- endif %}
+    {%- if g.direction %}
+    <span class="block mt-1 text-[10px] text-zinc-400 font-mono">Direction: {{ g.direction }}</span>
+    {%- endif %}
     <span class="block mt-1 text-amber-400 text-[10px] font-semibold uppercase tracking-wide">Details →</span>
   </span>
   {%- endif %}

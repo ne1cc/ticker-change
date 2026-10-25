@@ -519,3 +519,97 @@ GLOSSARY: dict[str, dict] = {
     },
 }
 
+
+GLOSSARY["factor_exposure"] = {
+    "term": "Factor Exposure (FF5 + Momentum)",
+    "section": "Institutional Analytics",
+    "short": "Regression beta of the stock's daily excess return on each Fama-French factor.",
+    "long": "Excess-return OLS on MKT-RF, SMB, HML, RMW, CMA and momentum, with Newey-West (HAC) standard errors that stay valid under autocorrelated and heteroskedastic residuals. Betas whose 95% confidence interval excludes zero are highlighted; the window and the factor file's as-of date are shown because French data lags live markets.",
+}
+GLOSSARY["factor_alpha"] = {
+    "term": "Annualised Alpha (factor model)",
+    "section": "Institutional Analytics",
+    "short": "Annualised intercept of the factor regression — return unexplained by market, size, value, profitability, investment and momentum factors.",
+    "long": "The regression intercept compounded to a yearly rate, with a Newey-West t-stat. A t-stat inside +/-1.96 means the alpha is indistinguishable from zero at the 5% level — treat it as noise, not edge.",
+}
+GLOSSARY["residual_vol"] = {
+    "term": "Residual (Idiosyncratic) Volatility",
+    "section": "Institutional Analytics",
+    "short": "Annualised standard deviation of the factor regression residuals.",
+    "long": "The stock-specific risk left after removing exposure to the six factors: the risk a diversified portfolio actually keeps, and the raw material of residual-momentum and residual-reversal signals.",
+}
+GLOSSARY["dimson_beta"] = {
+    "term": "Beta Hygiene (OLS / Dimson / Blume / Vasicek)",
+    "section": "Institutional Analytics",
+    "short": "The page's market beta under three standard corrections, shown side by side.",
+    "long": "Raw OLS beta against SPY with its standard error; Dimson beta (sums lead and lag benchmark coefficients to correct asynchronous trading); Blume adjustment (2/3 weight toward the market prior of 1); and Vasicek Bayesian shrinkage (weights the raw estimate by its own precision, so noisier betas shrink further). Differences larger than the standard error are a warning that the raw beta is unreliable.",
+}
+
+# Direction semantics for percentile ranking and interpretation (Issue #119)
+_METRIC_DIRECTIONS: dict[str, str] = {
+    # Higher is riskier
+    "annualised_vol": "higher_is_riskier",
+    "max_drawdown": "higher_is_riskier",
+    "kurtosis": "higher_is_riskier",
+    "beta": "higher_is_riskier",
+    "var": "higher_is_riskier",
+    "expected_shortfall": "higher_is_riskier",
+    "implied_volatility": "higher_is_riskier",
+    "gamma": "higher_is_riskier",
+    "event_vol_flag": "higher_is_riskier",
+    "implied_earnings_move": "higher_is_riskier",
+    "spread": "higher_is_riskier",
+    "realized_vol": "higher_is_riskier",
+    "short_pct_float": "higher_is_riskier",
+    "days_to_cover": "higher_is_riskier",
+    "si_mom_change": "higher_is_riskier",
+    "squeeze_composite": "higher_is_riskier",
+    "short_float": "higher_is_riskier",
+    "short_ratio": "higher_is_riskier",
+    "corwin_schultz": "higher_is_riskier",
+    "squeeze_risk": "higher_is_riskier",
+    "dual_betas": "higher_is_riskier",
+    "regime_betas": "higher_is_riskier",
+    "downside_capture": "higher_is_riskier",
+    "vrp": "higher_is_riskier",
+    "residual_vol": "higher_is_riskier",
+    # Higher is better
+    "sharpe": "higher_is_better",
+    "sortino": "higher_is_better",
+    "calmar": "higher_is_better",
+    "info_ratio": "higher_is_better",
+    "alpha": "higher_is_better",
+    "factor_alpha": "higher_is_better",
+    "risk_adj_mom": "higher_is_better",
+    "sma_spread": "higher_is_better",
+    "cumulative_return": "higher_is_better",
+    "open_interest": "higher_is_better",
+    "payoff": "higher_is_better",
+    "market_depth": "higher_is_better",
+    "dividend_yield": "higher_is_better",
+    "price_target": "higher_is_better",
+    "mspr": "higher_is_better",
+    "institutional_holders": "higher_is_better",
+    "consensus_estimates": "higher_is_better",
+    "growth": "higher_is_better",
+    "surprise_pct": "higher_is_better",
+    "peer_percentile": "higher_is_better",
+    "upside_capture": "higher_is_better",
+    "car": "higher_is_better",
+    "event_car": "higher_is_better",
+    "pead_drift": "higher_is_better",
+    "skewness": "higher_is_better",
+    "heatmap_coverage": "higher_is_better",
+    "market_breadth": "higher_is_better",
+    "heatmap_period_change": "higher_is_better",
+    "heatmap_sector_change": "higher_is_better",
+    # Higher is more expensive (valuation multiples)
+    "trailing_pe": "higher_is_more_expensive",
+    "forward_pe": "higher_is_more_expensive",
+    "ev_ebitda": "higher_is_more_expensive",
+    "price_book": "higher_is_more_expensive",
+    "peg": "higher_is_more_expensive",
+}
+
+for _key, _entry in GLOSSARY.items():
+    _entry["direction"] = _METRIC_DIRECTIONS.get(_key, "neutral")

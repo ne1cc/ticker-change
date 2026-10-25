@@ -179,7 +179,7 @@
 </details>
 {% endif %}
 
-{% if lazy or data.charts.volume_profile or data.charts.options_smile or data.ml or data.charts.gex or data.institutional %}
+{% if lazy or data.charts.volume_profile or data.charts.options_smile or data.ml or data.charts.gex or data.institutional or data.factors or data.signals_lab or data.options_implied %}
 <details class="analytics-section rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 mb-4" data-analytics-section="options">
   <summary class="flex min-h-[44px] cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 text-sm font-semibold text-zinc-800 dark:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500">
     <span class="min-w-0">Options and positioning<span class="mt-0.5 block text-xs font-normal text-zinc-500 dark:text-zinc-400">Volume, options pricing, gamma exposure, and institutional context</span></span>

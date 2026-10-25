@@ -6,7 +6,7 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, R
 from flask_cors import CORS
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
 import numpy as np
 import charts
@@ -44,6 +44,16 @@ from option_chain_data import (chain_quality, valid_iv, valid_quote, finite_numb
                                 get_cboe_snapshot, cboe_chain)
 from options import compute_options_terminal, calculate_greeks
 from options.cones import compute_yang_zhang_vol
+from options.gex import get_risk_free_rate, find_gamma_flip
+from options.vol import compute_vol_term_structure
+from options.storage import (
+    compute_iv_rank_and_percentile,
+    get_vrp_history_with_bands,
+    get_term_structure_and_skew_history,
+)
+from options.svi import select_otm_wings, fit_svi
+from options.density import breeden_litzenberger_density
+from options.earnings_move import get_earnings_implied_vs_realized
 import derivatives_alpha
 import backtest_engine
 import api_docs
@@ -53,6 +63,9 @@ import heatmap
 import options_flow
 import indices
 from glossary import GLOSSARY
+import gics
+import percentiles
+import universe_metrics
 
 def _get_yf_ticker(symbol: str) -> yf.Ticker:
     """Return a yfinance Ticker instance.
@@ -983,7 +996,7 @@ def get_cached_chain(ticker: str, expiration: str, stock=None, spot_hint=None, f
 
 
 def get_options_smile(ticker: str, current_price: float) -> str | None:
-    """Build an IV smile chart from cached option chains across 3-4 expirations."""
+    """Build an IV smile chart with OTM wing selection (OTM puts below spot, OTM calls above spot) and SVI fit overlay."""
     try:
         stock = _get_yf_ticker(ticker)
         expirations = get_cached_expirations(ticker, stock)
@@ -995,22 +1008,51 @@ def get_options_smile(ticker: str, current_price: float) -> str | None:
 
         chart_series = []
         plotted = 0
+        today = datetime.now().date()
         for exp in selected:
             cached = get_cached_chain(ticker, exp, stock=stock, spot_hint=current_price)
             if cached is None:
                 continue
-            calls, _, _ = cached
-            if calls.empty or 'impliedVolatility' not in calls.columns:
+            calls, puts, _ = cached
+            try:
+                exp_date = datetime.strptime(exp, '%Y-%m-%d').date()
+                dte = max(1, (exp_date - today).days)
+            except Exception:
+                dte = 30
+            t_years = dte / 365.0
+
+            # OTM wing selection: puts below spot, calls above spot
+            wings = select_otm_wings(calls, puts, current_price, t_years, min_oi=0)
+            if wings.empty or len(wings) < 3:
                 continue
-            calls = calls[
-                (calls['strike'] >= current_price * 0.70) &
-                (calls['strike'] <= current_price * 1.50) &
-                (calls['impliedVolatility'] > 0.01)
-            ].sort_values('strike')
-            if len(calls) < 3:
-                continue
-            chart_series.append(charts.line(exp, calls['strike'] / current_price,
-                                            calls['impliedVolatility'] * 100, palette[plotted % len(palette)]))
+
+            m_points = wings['strike'] / current_price
+            iv_points = wings['iv'] * 100.0
+            chart_series.append(charts.line(
+                exp,
+                m_points,
+                iv_points,
+                palette[plotted % len(palette)],
+                showSymbol=True,
+                symbolSize=5,
+                width=1.0,
+            ))
+
+            # Fit SVI per expiry when sufficient liquidity/observations exist (>= 5 points)
+            if len(wings) >= 5:
+                svi_res = fit_svi(wings['log_moneyness'].to_numpy(), wings['total_variance'].to_numpy(), t_years)
+                if svi_res.get('success') and 'dense_k' in svi_res:
+                    dense_m = np.exp(np.array(svi_res['dense_k']))
+                    dense_iv_pct = np.array(svi_res['dense_iv']) * 100.0
+                    chart_series.append(charts.line(
+                        f"{exp} (SVI fit RMSE={svi_res['rmse']:.3f})",
+                        dense_m,
+                        dense_iv_pct,
+                        palette[plotted % len(palette)],
+                        dash=True,
+                        width=2.0,
+                    ))
+
             plotted += 1
 
         if plotted == 0:
@@ -1062,7 +1104,7 @@ def get_atm_contract(ticker: str, spot: float) -> dict | None:
             'iv': float(np.mean([r['impliedVolatility'] for r in rows]))}
 
 
-def _atm_derivatives(atm: dict | None, price_df: pd.DataFrame | None) -> dict | None:
+def _atm_derivatives(atm: dict | None, price_df: pd.DataFrame | None, ticker: str = "") -> dict | None:
     """VRP and call Greeks for the real ATM contract; None when either input is missing.
 
     Realized vol is the 21-session Yang-Zhang estimate (~30 calendar days, the
@@ -1073,10 +1115,11 @@ def _atm_derivatives(atm: dict | None, price_df: pd.DataFrame | None) -> dict | 
     rv = compute_yang_zhang_vol(price_df, 21)
     if rv <= 0:
         return None
+    rf_rate, rate_source = get_risk_free_rate()
     greeks = derivatives_alpha.compute_higher_order_greeks(
         spot=float(price_df['close'].iloc[-1]), strike=atm['strike'],
         time_to_exp=max(atm['dte'], 1) / 365.0, volatility=atm['iv'],
-        risk_free_rate=0.045, is_call=True)
+        risk_free_rate=rf_rate, is_call=True)
     return {
         'atm_contract': atm,
         'higher_order_greeks': greeks.__dict__,
@@ -1084,7 +1127,7 @@ def _atm_derivatives(atm: dict | None, price_df: pd.DataFrame | None) -> dict | 
     }
 
 
-def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -> dict | None:
+def get_gex_profile(ticker: str, current_price: float, rf_rate: float | None = None) -> dict | None:
     """Build a dealer Gamma Exposure (GEX) profile from yfinance option chains.
 
     Per strike:  GEX = Γ × OpenInterest × 100 × Spot² × 0.01, signed by the
@@ -1099,6 +1142,11 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
     assumptions) — directional, not an institutional low-latency feed.
     """
     try:
+        inferred_r, rate_source = get_risk_free_rate()
+        if rf_rate is None or rf_rate == 0.045:
+            rf_rate = inferred_r
+        else:
+            rate_source = f"Custom ({rf_rate*100:.2f}%)"
         stock = _get_yf_ticker(ticker)
         expirations = get_cached_expirations(ticker, stock)
         if not expirations or not current_price:
@@ -1209,41 +1257,20 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
         call_wall = _wall(call_gex, want_above=True,  pick=max)
         put_wall  = _wall(put_gex,  want_above=False, pick=min)
 
-        # Gamma flip: spot price where total net GEX crosses zero.
-        # Below it dealers are net-short gamma (vol-expanding);
-        # above it net-long gamma (vol-dampening).
-        def calc_total_gex(s):
-            total = 0.0
-            for k, t_years, side, oi, iv in options_data:
-                if s <= 0.01:
-                    continue
-                try:
-                    d1 = (math.log(s / k) + (rf_rate + 0.5 * iv * iv) * t_years) / (iv * math.sqrt(t_years))
-                    pdf_d1 = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
-                    gamma = pdf_d1 / (s * iv * math.sqrt(t_years))
-                    sign = 1.0 if side == 'call' else -1.0
-                    gex = sign * gamma * oi * 100 * (s ** 2) * 0.01 / 1e6
-                    total += gex
-                except Exception:
-                    continue
-            return total
-
-        gamma_flip = None
-        if strikes:
-            y_lo, y_hi = strikes[0], strikes[-1]
-            grid_spots = np.linspace(y_lo, y_hi, 100)
-            grid_gex = [calc_total_gex(s) for s in grid_spots]
-            
-            crossings = []
-            for i in range(1, len(grid_gex)):
-                if (grid_gex[i - 1] <= 0 < grid_gex[i]) or (grid_gex[i - 1] >= 0 > grid_gex[i]):
-                    s0, s1 = grid_spots[i - 1], grid_spots[i]
-                    y0, y1 = grid_gex[i - 1], grid_gex[i]
-                    val = float(s0 + (s1 - s0) * (-y0) / (y1 - y0)) if y1 != y0 else float(s1)
-                    crossings.append(val)
-            
-            if crossings:
-                gamma_flip = round(min(crossings, key=lambda c: abs(c - current_price)), 2)
+        # Continuous gamma flip search under both sticky-strike and sticky-moneyness (Issue #131)
+        flip_rows = [{
+            'strike': k,
+            'cp': 'C' if side == 'call' else 'P',
+            'dte': int(t_years * 365.0),
+            'iv': iv,
+            'open_interest': oi,
+            'volume': 0,
+            'bid': 1.0,
+        } for k, t_years, side, oi, iv in options_data]
+        flip_df = pd.DataFrame(flip_rows)
+        gamma_flip = find_gamma_flip(flip_df, current_price, convention='naive', r=rf_rate, iv_model='sticky_strike')
+        gamma_flip_moneyness = find_gamma_flip(flip_df, current_price, convention='naive', r=rf_rate, iv_model='sticky_moneyness')
+        gamma_flip_diff = round(gamma_flip_moneyness - gamma_flip, 2) if (gamma_flip is not None and gamma_flip_moneyness is not None) else None
 
         total_gex = float(np.sum(net_gex))
 
@@ -1318,6 +1345,19 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
         views += [_gex_view(bin_strikes, bin_call, bin_put, bin_net, bin_cum, split) for split in [False, True]]
         gex_option = {**views[0]}
         gex_option['terminalViews'] = {'labels': ['Net', 'Call / Put', 'Net · $5', 'Call / Put · $5'], 'options': views.copy()}
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            db.insert_gex_snapshot(
+                ticker=ticker,
+                date=today_str,
+                gamma_flip=gamma_flip,
+                call_wall=call_wall,
+                put_wall=put_wall,
+                spot=current_price,
+            )
+        except Exception:
+            pass
+
         return {
             'chart': charts.render_chart(gex_option, height=520),
             'stats': {
@@ -1328,6 +1368,10 @@ def get_gex_profile(ticker: str, current_price: float, rf_rate: float = 0.045) -
                 'put_wall': put_wall,
                 'put_wall_val': put_wall_val,
                 'gamma_flip': gamma_flip,
+                'gamma_flip_sticky_moneyness': gamma_flip_moneyness,
+                'gamma_flip_diff': gamma_flip_diff,
+                'rate_source': rate_source,
+                'rf_rate': rf_rate,
                 'hvl': hvl,
                 'hvl_val': hvl_val,
                 'spot': round(float(current_price), 2),
@@ -1635,6 +1679,28 @@ def _guard_section(label, fn, default=None, timeout=None, status=None):
         print(f"[analytics:{label}] {outcome} in {(time.perf_counter() - started) * 1000:.0f}ms")
 
 
+def get_ml_reliability_chart() -> str | None:
+    """Reliability diagram from the OOS predictions stored in the model card
+    (#150): observed class frequency vs predicted probability, per class."""
+    bins = ml.reliability_from_bundle()
+    if not bins:
+        return None
+    series = []
+    for entry in bins:
+        pts = entry.get("points") or []
+        if len(pts) < 2:
+            continue
+        name = {1: "Buy", 0: "Hold", -1: "Sell"}.get(entry.get("class"), str(entry.get("class")))
+        color = {1: "#10b981", 0: "#a1a1aa", -1: "#f43f5e"}.get(entry.get("class"), "#6366f1")
+        series.append(charts.line(f"{name}", [p["x"] for p in pts], [p["y"] for p in pts], color))
+    if not series:
+        return None
+    series.append(charts.line("Perfect calibration", [0, 1], [0, 1], "#71717a", width=1, dash=True))
+    return charts.render_chart(charts.cartesian(series, xtype="value",
+                                                xname="Predicted probability",
+                                                yname="Observed frequency"), height=300)
+
+
 def compute_analytics(ticker):
     try:
         return _compute_analytics_impl(ticker)
@@ -1778,9 +1844,42 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
     else:
         poc_price = None
 
+    # Cross-sectional percentiles (Epic 2)
+    sec = gics.sector_of(ticker)
+    snap = universe_metrics.current_universe_metrics()
+    p_map = {}
+    stats_to_score = {
+        'annualised_vol': round(std_return * np.sqrt(252) * 100, 2),
+        'max_drawdown': round(max_drawdown, 2),
+        'skewness': round(skewness, 3),
+        'kurtosis': round(kurtosis, 3),
+        'beta': beta,
+        'var_95': latest_var_95,
+        'var': latest_var_95,
+    }
+    for m_key, m_val in stats_to_score.items():
+        if m_val is not None:
+            p_map[m_key] = percentiles.calculate_metric_percentile(
+                m_key, m_val, sector=sec, snapshot=snap
+            )
+
+    import signal_lab
+    try:
+        signals_block = {
+            "signals": signal_lab.get_ticker_signal_ranks(ticker),
+            "validation_gates": signal_lab.VALIDATION_GATES,
+            "survivorship_caveat": signal_lab.SURVIVORSHIP_CAVEAT,
+        }
+    except Exception as e:
+        print(f"Error building signals_lab for {ticker}: {e}")
+        signals_block = None
+
     return {
         'ticker': ticker.upper(),
         'current_price': current_price,
+        'gics_sector': sec,
+        'percentiles': p_map,
+        'signals_lab': signals_block,
         'stats': {
             'mean_daily_return': round(mean_return * 100, 4),
             'daily_std': round(std_return * 100, 4),
@@ -1806,6 +1905,63 @@ def _compute_analytics_impl(ticker: str) -> dict | None:
             'volume_profile': vp_chart,
         }
     }
+
+def _build_factor_block(ticker: str) -> dict | None:
+    """FF5+momentum factor decomposition and beta hygiene for /analytics.
+
+    Returns {"available": False, "state": ...} declared states rather than
+    blanks when factor data or overlap history is missing."""
+    import factors
+    px = get_or_fetch_prices(ticker)
+    if px is None or px.empty or len(px) < 60:
+        return None
+    fac_df, fac_as_of = factors.load_factor_returns()
+    if fac_df is None:
+        return {"available": False,
+                "state": "Factor data unavailable (French download failed and nothing cached)."}
+    out = factors.compute_factor_exposures(px, fac_df, factor_as_of=fac_as_of)
+    if out.get("insufficient"):
+        return {"available": False, "factor_as_of": fac_as_of,
+                "state": f"Insufficient price/factor overlap ({out['n']} days; need {out['min_obs']})."}
+    out["available"] = True
+
+    # Beta hygiene against SPY (same benchmark as the page's beta stat).
+    spy = get_or_fetch_prices("SPY", period="5y")
+    if spy is not None and not spy.empty:
+        s = px['close'].pct_change().dropna()
+        b = spy['close'].pct_change().dropna()
+        j = pd.concat([s.rename('s'), b.rename('m')], axis=1).dropna()
+        if len(j) >= 60:
+            beta = float(np.cov(j['s'], j['m'])[0, 1] / j['m'].var())
+            resid = j['s'] - beta * j['m']
+            se = float(np.sqrt(resid.var(ddof=2) / (len(j) * j['m'].var())))
+            out['beta_hygiene'] = {
+                'n': int(len(j)),
+                'ols_beta': round(beta, 3),
+                'ols_beta_se': round(se, 3),
+                'dimson_beta': round(factors.dimson_beta(j['s'], j['m']), 3),
+                'blume_beta': round(factors.blume_shrink(beta), 3),
+                'vasicek_beta': round(factors.vasicek_shrink(beta, se), 3),
+            }
+            out['rolling_beta'] = factors.rolling_beta(j['s'], j['m'])
+    return out
+
+
+def _rolling_beta_chart(rows) -> str | None:
+    """Rolling 1y beta line with a shaded 95% CI band and a reference at 1."""
+    if not rows:
+        return None
+    ends = [pd.Timestamp(r['end']) for r in rows]
+    lo = charts.line('lo', ends, [r['lo'] for r in rows], 'rgba(99,102,241,0)',
+                     stack='band', lineStyle={'opacity': 0},
+                     areaStyle={'color': 'transparent'})
+    band = charts.line('95% CI', ends, [round(r['hi'] - r['lo'], 3) for r in rows],
+                       'rgba(99,102,241,0)', stack='band', lineStyle={'opacity': 0},
+                       area={'color': 'rgba(99,102,241,0.18)'})
+    beta = charts.line('Rolling 1y beta', ends, [r['beta'] for r in rows], '#f59e0b')
+    return charts.render_chart(
+        charts.cartesian([lo, band, beta], yname='beta',
+                         refs=[charts.reference('yAxis', 1.0, 'β = 1.0')]), height=300)
 
 
 def _trade_type_arg() -> str:
@@ -1893,6 +2049,27 @@ def _attach_company(ticker, data, price_df, status):
         return _guard_section(label, fn, timeout=SECTION_TIMEOUT_S, status=status)
 
     data['fundamentals'] = run("fundamentals", lambda: get_fundamentals(ticker))
+
+    # Cross-sectional percentiles for fundamentals multiples
+    if data.get('fundamentals') and isinstance(data['fundamentals'], dict):
+        snap = universe_metrics.current_universe_metrics()
+        sec = data.get('gics_sector') or gics.sector_of(ticker)
+        fund_keys = {
+            'Price / Book': 'price_book',
+            'Forward P/E': 'forward_pe',
+            'Price / Sales': 'price_sales',
+            'Revenue Growth': 'growth',
+            'Short % Float': 'short_float',
+            'Short Ratio': 'short_ratio',
+            'Dividend Yield': 'dividend_yield',
+        }
+        for f_label, m_key in fund_keys.items():
+            val = data['fundamentals'].get(f_label)
+            if val is not None and isinstance(val, (int, float)):
+                data.setdefault('percentiles', {})[m_key] = percentiles.calculate_metric_percentile(
+                    m_key, val, sector=sec, snapshot=snap
+                )
+
     data['charts']['price_target'] = run(
         "price_target", lambda: get_price_target_chart(ticker, data['current_price']))
     if price_df is not None:
@@ -1908,18 +2085,158 @@ def _attach_company(ticker, data, price_df, status):
     ]
 
 
+def _build_options_implied(ticker, data, price_df):
+    opt_charts = {}
+    stock = _get_yf_ticker(ticker)
+    expirations = get_cached_expirations(ticker, stock) or []
+    chain_full = get_full_option_chain_df(ticker, stock=stock, current_price=data['current_price'])
+
+    # 1. Term structure & skew (#130)
+    term_structure_data = None
+    if chain_full is not None and not chain_full.empty:
+        vol_ts = compute_vol_term_structure(chain_full, data['current_price'])
+        ts_hist = get_term_structure_and_skew_history(
+            ticker, vol_ts.slope, vol_ts.skew_25d, min_obs=63
+        )
+        term_structure_data = {
+            'available': True,
+            'expirations': vol_ts.expirations,
+            'dtes': vol_ts.dtes,
+            'atm_ivs': vol_ts.atm_ivs,
+            'slope': vol_ts.slope,
+            'regime': vol_ts.regime,
+            'skew_25d': vol_ts.skew_25d,
+            'risk_reversal': vol_ts.risk_reversal,
+            'slope_percentile': ts_hist.get('slope_percentile'),
+            'skew_percentile': ts_hist.get('skew_percentile'),
+            'history_status': ts_hist.get('status', 'accumulating (0/252)'),
+        }
+        if vol_ts.dtes and vol_ts.atm_ivs:
+            ts_chart_series = [
+                charts.line("ATM IV Term Structure", vol_ts.dtes, vol_ts.atm_ivs, '#6366f1', showSymbol=True, symbolSize=6)
+            ]
+            opt_charts['term_structure'] = charts.render_chart(
+                charts.cartesian(ts_chart_series, xtype='value', xname='Days to Expiration (DTE)', yname='ATM Implied Volatility (%)'),
+                height=260
+            )
+    else:
+        term_structure_data = {
+            'available': False,
+            'reason': f"Option chain unavailable for {ticker}",
+        }
+
+    # 2. Breeden-Litzenberger Risk-Neutral Density (#127)
+    density_data = None
+    if chain_full is not None and not chain_full.empty:
+        front_exp = term_structure_data.get('expirations', [None])[0] if term_structure_data.get('available') else None
+        if front_exp:
+            front_sub = chain_full[chain_full['expiration'] == front_exp]
+            calls_sub = front_sub[front_sub['cp'] == 'C'].sort_values('strike')
+            if len(calls_sub) >= 5:
+                dte_val = int(calls_sub['dte'].iloc[0])
+                t_y = max(dte_val, 1) / 365.0
+                c_prices = np.where(calls_sub['bid'] > 0, (calls_sub['bid'] + calls_sub['ask']) / 2.0, calls_sub['last_price'])
+                gex_stats = data.get('gex') or {}
+                rf = gex_stats.get('rf_rate', 0.045)
+                density_data = breeden_litzenberger_density(
+                    calls_sub['strike'].to_numpy(), c_prices,
+                    spot=data['current_price'], t_years=t_y, r=rf,
+                    enforce_no_arbitrage=True,
+                )
+                if density_data.get('available'):
+                    dens_series = [
+                        charts.line("Risk-Neutral Density q(K)", density_data['strikes'], density_data['density'], '#8b5cf6', width=2.0),
+                        charts.line("Lognormal Benchmark", density_data['strikes'], density_data['lognormal_benchmark'], '#71717a', dash=True, width=1.5),
+                    ]
+                    opt_charts['density'] = charts.render_chart(
+                        charts.cartesian(
+                            dens_series, xtype='value', xname='Strike ($)', yname='Probability Density',
+                            refs=[charts.reference('x', data['current_price'], f"Spot ${data['current_price']:.2f}", '#f59e0b')]
+                        ),
+                        height=260
+                    )
+    if density_data is None:
+        density_data = {'available': False, 'reason': 'Option chain unavailable or insufficient strike density'}
+
+    # 3. Earnings Implied vs Realized (#128)
+    chains_by_exp = {}
+    if expirations:
+        for exp in expirations[:4]:
+            c = get_cached_chain(ticker, exp, stock=stock, spot_hint=data['current_price'])
+            if c:
+                cdf, pdf, _ = c
+                c_copy = cdf.copy(); c_copy['cp'] = 'C'
+                p_copy = pdf.copy(); p_copy['cp'] = 'P'
+                chains_by_exp[exp] = pd.concat([c_copy, p_copy], ignore_index=True)
+    earnings_implied_data = get_earnings_implied_vs_realized(
+        ticker, data['current_price'], chains_by_exp, prices_df=price_df
+    )
+
+    # 4. Real VRP history chart with percentile bands (#126)
+    vrp_history_data = get_vrp_history_with_bands(ticker, min_obs=21)
+    if vrp_history_data.get('available'):
+        dates = vrp_history_data['dates']
+        vrp_series = [
+            charts.line("VRP Spread (IV30 - RV21)", dates, vrp_history_data['vrp_series'], '#10b981', width=2.0),
+            charts.line("90th Percentile", dates, [vrp_history_data['p90']] * len(dates), '#f43f5e', dash=True, width=1.0),
+            charts.line("Median", dates, [vrp_history_data['median']] * len(dates), '#71717a', dash=True, width=1.2),
+            charts.line("10th Percentile", dates, [vrp_history_data['p10']] * len(dates), '#3b82f6', dash=True, width=1.0),
+        ]
+        opt_charts['vrp_history'] = charts.render_chart(
+            charts.cartesian(vrp_series, xtype='time', yname='VRP Spread (%)', refs=[charts.reference('y', 0, 'Zero VRP', '#71717a')]),
+            height=260
+        )
+
+    return {
+        'term_structure': term_structure_data,
+        'density': density_data,
+        'earnings_implied': earnings_implied_data,
+        'vrp_history': vrp_history_data,
+        'charts': opt_charts,
+    }
+
+
 def _attach_options(ticker, data, price_df, status):
-    """IV smile, GEX, ML signal, institutional suite; returns panel receipts."""
+    """IV smile, GEX, ML signal, institutional suite, factors, options-implied, signal_lab; returns panel receipts."""
     data['charts']['options_smile'] = _guard_section(
         "options_smile", lambda: get_options_smile(ticker, data['current_price']),
         timeout=SECTION_TIMEOUT_S, status=status)
     _attach_gex(ticker, data, status)
     data['ml'] = _guard_section("ml", lambda: ml.predict(ticker),
                                 timeout=SECTION_TIMEOUT_S, status=status)
+    data['charts']['ml_reliability'] = _guard_section(
+        "ml_reliability", lambda: get_ml_reliability_chart(),
+        timeout=SECTION_TIMEOUT_S, status=status)
     # The suite fans out to SEC, FRED, short-interest and chain providers, so it gets 3x the budget.
     data['institutional'] = _guard_section(
         "institutional", lambda: _build_institutional(ticker, data, price_df),
         timeout=SECTION_TIMEOUT_S * 3, status=status)
+
+    # Factor decomposition (FF5 + momentum) and beta hygiene
+    data['factors'] = _guard_section("factors", lambda: _build_factor_block(ticker),
+                                     timeout=SECTION_TIMEOUT_S, status=status)
+    data['charts']['rolling_beta'] = _guard_section(
+        "rolling_beta",
+        lambda: _rolling_beta_chart((data.get('factors') or {}).get('rolling_beta')),
+        timeout=SECTION_TIMEOUT_S, status=status)
+
+    # Options-Implied Institutional Suite
+    data['options_implied'] = _guard_section(
+        "options_implied", lambda: _build_options_implied(ticker, data, price_df),
+        timeout=SECTION_TIMEOUT_S * 2, status=status)
+
+    # Signal Lab Cross-Sectional Signals
+    try:
+        import signal_lab
+        data['signals_lab'] = {
+            "signals": signal_lab.get_ticker_signal_ranks(ticker),
+            "validation_gates": signal_lab.VALIDATION_GATES,
+            "survivorship_caveat": signal_lab.SURVIVORSHIP_CAVEAT,
+        }
+    except Exception as e:
+        print(f"Error building signals_lab for {ticker}: {e}")
+        data['signals_lab'] = None
+
     inst = data['institutional'] or {}
     macro = inst.get('macro_conditioning') or {}
     assumed = (inst.get('microstructure') or {}).get('squeeze_inputs_assumed') or []
@@ -2150,60 +2467,7 @@ def positioning_api(ticker):
     return jsonify(data)
 
 
-def normal_cdf(x):
-    """Cumulative distribution function of standard normal distribution."""
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-
-def normal_pdf(x):
-    """Probability density function of standard normal distribution."""
-    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
-
-
-def calculate_greeks(s, k, t, v, r=0.045):
-    """Calculate Black-Scholes option pricing and greeks."""
-    if t <= 0:
-        t = 1e-5
-    if v <= 0:
-        v = 1e-5
-    try:
-        d1 = (math.log(s / k) + (r + 0.5 * v * v) * t) / (v * math.sqrt(t))
-        d2 = d1 - v * math.sqrt(t)
-        
-        pdf_d1 = normal_pdf(d1)
-        cdf_d1 = normal_cdf(d1)
-        cdf_d2 = normal_cdf(d2)
-        
-        cdf_minus_d1 = normal_cdf(-d1)
-        cdf_minus_d2 = normal_cdf(-d2)
-        
-        # Call Greeks
-        call_delta = cdf_d1
-        call_theta = (-(s * pdf_d1 * v) / (2 * math.sqrt(t)) - r * k * math.exp(-r * t) * cdf_d2) / 365.0
-        call_rho = (k * t * math.exp(-r * t) * cdf_d2) / 100.0
-        
-        # Put Greeks
-        put_delta = cdf_d1 - 1.0
-        put_theta = (-(s * pdf_d1 * v) / (2 * math.sqrt(t)) + r * k * math.exp(-r * t) * cdf_minus_d2) / 365.0
-        put_rho = (-k * t * math.exp(-r * t) * cdf_minus_d2) / 100.0
-        
-        # Common Greeks
-        gamma = pdf_d1 / (s * v * math.sqrt(t))
-        vega = (s * math.sqrt(t) * pdf_d1) / 100.0
-        
-        return {
-            'call_delta': call_delta,
-            'call_theta': call_theta,
-            'call_rho': call_rho,
-            'put_delta': put_delta,
-            'put_theta': put_theta,
-            'put_rho': put_rho,
-            'gamma': gamma,
-            'vega': vega,
-        }
-    except Exception as e:
-        print(f"Error calculating greeks: {e}")
-        return None
+# Duplicate calculate_greeks / normal_cdf / normal_pdf removed (consolidated to options.greeks)
 
 
 def get_options_greeks_data(ticker, expiration_date=None, rf_rate=0.045, strike_count=None):
@@ -3593,6 +3857,31 @@ def radar_page():
                            excluded_summary=excluded_summary)
 
 
+# --- Signal Lab (Epic 5, issue #139) ---------------------------------------
+@app.route('/signal-lab')
+def signal_lab_page():
+    """Institutional Signal Lab: Rank IC, decay, decile long-short, turnover, DSR."""
+    import signal_lab
+    try:
+        cost_bps = float(request.args.get('cost_bps', 10.0))
+    except (ValueError, TypeError):
+        cost_bps = 10.0
+    payload = signal_lab.build_signal_lab_payload(cost_bps=cost_bps)
+    return render_template('signal_lab.html', data=payload)
+
+
+@app.route('/api/signal-lab')
+def signal_lab_api():
+    """API endpoint for Signal Lab payload."""
+    import signal_lab
+    try:
+        cost_bps = float(request.args.get('cost_bps', 10.0))
+    except (ValueError, TypeError):
+        cost_bps = 10.0
+    payload = signal_lab.build_signal_lab_payload(cost_bps=cost_bps)
+    return jsonify(payload)
+
+
 _RADAR_UNCOVERED_REASON = {"drift": "no-earnings", "squeeze": "assumed-si"}
 _RADAR_EXCLUDED_LABELS = {
     "no-earnings": "no earnings data",
@@ -4091,14 +4380,12 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
                 ivs.append(nearest[f'{side}_iv'])
         atm_iv = float(np.mean(ivs)) if ivs else None
 
-        # Rank/percentile use the existing historical realized-vol proxy.
-        iv_rank, iv_percentile = None, None
-        if not vol_history.empty and atm_iv is not None:
-            min_vol = float(vol_history.min())
-            max_vol = float(vol_history.max())
-            iv_rank = ((atm_iv - min_vol) / (max_vol - min_vol)) * 100 if max_vol > min_vol else 50.0
-            iv_rank = max(0.0, min(100.0, iv_rank))
-            iv_percentile = float((vol_history < atm_iv).sum() / len(vol_history) * 100)
+        # Rank/percentile strictly computed on stored IV history (Issue #125)
+        # Below 63 days, renders accumulating state and shows nothing numeric.
+        iv_stats = compute_iv_rank_and_percentile(ticker, atm_iv, min_obs=63)
+        iv_rank = iv_stats["iv_rank"]
+        iv_percentile = iv_stats["iv_percentile"]
+        iv_status = iv_stats["status"]
 
         time_to_exp = greeks_data.get('time_to_expiration_years', days_to_exp / 365.0)
         expected_move_bs = (0.85 * spot_price * (atm_iv / 100.0) * np.sqrt(time_to_exp)
@@ -4178,6 +4465,7 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
             'atm_iv': round(atm_iv, 2) if atm_iv is not None else None,
             'iv_rank': round(iv_rank, 1) if iv_rank is not None else None,
             'iv_percentile': round(iv_percentile, 1) if iv_percentile is not None else None,
+            'iv_status': iv_status,
             'expected_move_bs': round(expected_move_bs, 2) if expected_move_bs is not None else None,
             'expected_move_straddle': round(expected_move_straddle, 2) if expected_move_straddle is not None else None,
             'vol_pcr': round(vol_pcr, 3) if vol_pcr is not None else None,
@@ -4668,6 +4956,10 @@ def _warm_brief_universe(watchlist=None, sp500=None, background=True,
                     print(f"[brief] progress write failed at {ticker}: {e}")
             print(f"[brief] done ({len(tiers)} tickers, {published} published, "
                   f"{skipped} fresh-skipped, {failed} failed)")
+            try:
+                universe_metrics.warm_universe_metrics()
+            except Exception as e:
+                print(f"[universe_metrics] warmer error: {e}")
         except Exception as e:
             print(f"[brief] warmer error: {e}")
 

@@ -1,0 +1,276 @@
+{# Options-Implied Institutional Suite partial: Term Structure, 25-Delta Skew, Risk-Neutral Density (Breeden-Litzenberger), Earnings Implied vs Realized, and VRP History #}
+{% from "_macros.html" import metric %}
+{% from "_excel.html" import panel, stat_grid with context %}
+
+{% if data and data.options_implied %}
+{% set opt = data.options_implied %}
+
+<!-- Options-Implied Section Header -->
+<div class="flex items-center gap-3 pt-6 pb-2 mb-6 border-b border-zinc-200 dark:border-zinc-800">
+  <div class="p-2 rounded-lg bg-violet-500/10 text-violet-500">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+    </svg>
+  </div>
+  <div>
+    <h2 class="text-lg font-bold tracking-tight text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
+      <span>Options-Implied Market Structure</span>
+      <span class="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-600 dark:text-violet-400 border border-violet-500/20">Implied Vol Suite</span>
+    </h2>
+    <p class="text-xs text-zinc-500 dark:text-zinc-400">Risk-neutral distributions, volatility term structure &amp; skew, earnings implied straddle moves, and VRP historical regime</p>
+  </div>
+</div>
+
+<div class="space-y-6">
+
+  <!-- 1. Volatility Term Structure & 25-Delta Skew Panel (#130) -->
+  {% if opt.term_structure %}
+  {% set ts = opt.term_structure %}
+  {% call panel('Volatility Term Structure & 25-Delta Skew') %}
+    {% if ts.available %}
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+      <!-- Term Structure Slope -->
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Term Structure Slope</span>
+          <span class="px-2 py-0.5 text-[10px] font-bold rounded uppercase
+            {% if ts.regime == 'contango' %}bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30
+            {% elif ts.regime == 'backwardation' %}bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30
+            {% else %}bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300{% endif %}">
+            {{ ts.regime }}
+          </span>
+        </div>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span class="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-50">{{ "%+.3f"|format(ts.slope) }}</span>
+          <span class="text-xs text-zinc-400">vol / &radic;DTE</span>
+        </div>
+        <div class="mt-2 text-[10px] font-mono text-zinc-400">
+          {% if ts.slope_percentile is not none %}
+          Percentile vs history: <strong class="text-zinc-700 dark:text-zinc-200">{{ "%.1f"|format(ts.slope_percentile) }}%</strong>
+          {% else %}
+          History: <span class="text-amber-500">{{ ts.history_status }}</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- 25-Delta Skew Ratio -->
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">25&Delta; Put/Call Skew</span>
+          <span class="text-[10px] font-mono text-zinc-400">Put IV / Call IV</span>
+        </div>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span class="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-50">{{ "%.3f"|format(ts.skew_25d) }}x</span>
+        </div>
+        <div class="mt-2 text-[10px] font-mono text-zinc-400">
+          {% if ts.skew_percentile is not none %}
+          Percentile vs history: <strong class="text-zinc-700 dark:text-zinc-200">{{ "%.1f"|format(ts.skew_percentile) }}%</strong>
+          {% else %}
+          History: <span class="text-amber-500">{{ ts.history_status }}</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Risk Reversal -->
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Risk Reversal (25&Delta;)</span>
+          <span class="text-[10px] font-mono text-zinc-400">Call IV &minus; Put IV</span>
+        </div>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span class="text-2xl font-bold font-mono {% if ts.risk_reversal >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
+            {{ "%+.2f"|format(ts.risk_reversal) }}%
+          </span>
+        </div>
+        <div class="mt-2 text-[10px] text-zinc-400 leading-snug">
+          {% if ts.risk_reversal < -2.0 %}Steep downside crash protection demand{% elif ts.risk_reversal > 2.0 %}Call upside speculation premium{% else %}Balanced smile wings{% endif %}
+        </div>
+      </div>
+
+      <!-- Front ATM IV -->
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Front ATM IV</span>
+          <span class="text-[10px] font-mono text-zinc-400">DTE {{ ts.dtes[0] if ts.dtes else '—' }}d</span>
+        </div>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span class="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-50">
+            {{ "%.1f"|format(ts.atm_ivs[0]) if ts.atm_ivs else '—' }}%
+          </span>
+        </div>
+        <div class="mt-2 text-[10px] text-zinc-400">
+          {{ ts.expirations|length }} expirations tracked
+        </div>
+      </div>
+    </div>
+    {% if opt.charts and opt.charts.term_structure %}
+    <div class="mt-3">
+      {{ opt.charts.term_structure | safe }}
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="p-4 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-500">
+      <span class="font-bold">Term structure unavailable:</span> {{ ts.reason | default('No valid options chain') }}
+    </div>
+    {% endif %}
+  {% endcall %}
+  {% endif %}
+
+  <!-- 2. Breeden-Litzenberger Risk-Neutral Density Panel (#127) -->
+  {% if opt.density %}
+  {% set dens = opt.density %}
+  {% call panel('Risk-Neutral Probability Distribution (Breeden-Litzenberger)') %}
+    {% if dens.available %}
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">Implied Down &ge; 10%</span>
+        <p class="text-2xl font-bold font-mono mt-1 text-rose-500">{{ "%.1f"|format(dens.prob_down_10pct) }}%</p>
+        <span class="text-[10px] text-zinc-400 mt-1 block">Risk-neutral tail probability</span>
+      </div>
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">Implied Up &ge; 10%</span>
+        <p class="text-2xl font-bold font-mono mt-1 text-emerald-500">{{ "%.1f"|format(dens.prob_up_10pct) }}%</p>
+        <span class="text-[10px] text-zinc-400 mt-1 block">Risk-neutral tail probability</span>
+      </div>
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">Implied Down &ge; 20%</span>
+        <p class="text-2xl font-bold font-mono mt-1 text-rose-600 dark:text-rose-400">{{ "%.1f"|format(dens.prob_down_20pct) }}%</p>
+        <span class="text-[10px] text-zinc-400 mt-1 block">Severe tail risk</span>
+      </div>
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">Implied Up &ge; 20%</span>
+        <p class="text-2xl font-bold font-mono mt-1 text-emerald-600 dark:text-emerald-400">{{ "%.1f"|format(dens.prob_up_20pct) }}%</p>
+        <span class="text-[10px] text-zinc-400 mt-1 block">Convex upside probability</span>
+      </div>
+    </div>
+    {% if opt.charts and opt.charts.density %}
+    <div class="mt-3">
+      {{ opt.charts.density | safe }}
+    </div>
+    {% endif %}
+    <p class="text-[11px] text-zinc-400 mt-2 leading-relaxed">
+      <span class="font-semibold">Breeden-Litzenberger formulation:</span> Density q(K) = e<sup>rT</sup> &middot; &part;<sup>2</sup>C / &part;K<sup>2</sup>. Evaluates market-implied fat tails versus lognormal Black-Scholes benchmark. Convexity and butterfly arbitrage checks passed (integral = {{ dens.total_probability }}).
+    </p>
+    {% else %}
+    <div class="p-4 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 dark:text-amber-400">
+      <span class="font-bold">Declared Arbitrage / Density Failure:</span> {{ dens.reason | default('Monotonicity or butterfly arbitrage violated; refusing to plot non-risk-neutral density.') }}
+    </div>
+    {% endif %}
+  {% endcall %}
+  {% endif %}
+
+  <!-- 3. Earnings Implied Move vs Realized History Panel (#128) -->
+  {% if opt.earnings_implied %}
+  {% set earn = opt.earnings_implied %}
+  {% call panel('Earnings Implied Move vs Historical Realized Moves') %}
+    {% if earn.available %}
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">ATM Straddle Implied Move</span>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span class="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-50">&plusmn;{{ "%.1f"|format(earn.implied_move_pct) }}%</span>
+          <span class="text-xs font-mono text-zinc-400">(${{ earn.straddle_price }})</span>
+        </div>
+        <span class="text-[10px] text-zinc-400 mt-1 block">Target expiry: {{ earn.target_expiration }}</span>
+      </div>
+
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">Median Realized Move</span>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span class="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-50">&plusmn;{{ "%.1f"|format(earn.median_realized_move_pct) }}%</span>
+        </div>
+        <span class="text-[10px] text-zinc-400 mt-1 block">Mean: &plusmn;{{ "%.1f"|format(earn.mean_realized_move_pct) }}% (n={{ earn.historical_n }})</span>
+      </div>
+
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">Pricing Valuation Regime</span>
+        <div class="mt-2">
+          <span class="px-2.5 py-1 text-xs font-bold font-mono rounded uppercase
+            {% if earn.valuation_regime == 'rich' %}bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30
+            {% elif earn.valuation_regime == 'cheap' %}bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30
+            {% elif earn.valuation_regime == 'fair' %}bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-500/30
+            {% else %}bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300{% endif %}">
+            {{ earn.valuation_regime }}
+          </span>
+        </div>
+        <span class="text-[10px] text-zinc-400 mt-1.5 block">{{ earn.regime_label }}</span>
+      </div>
+
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">Next Earnings Date</span>
+        <div class="mt-2">
+          <span class="text-lg font-bold font-mono text-zinc-900 dark:text-zinc-50">{{ earn.next_earnings_date }}</span>
+        </div>
+        <span class="text-[10px] text-zinc-400 mt-1 block">ATM Strike: ${{ earn.atm_strike }}</span>
+      </div>
+    </div>
+    {% else %}
+    <div class="p-4 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-500">
+      <span class="font-bold">Declared State:</span> {{ earn.reason | default('No upcoming earnings scheduled or option chain absent.') }}
+    </div>
+    {% endif %}
+  {% endcall %}
+  {% endif %}
+
+  <!-- 4. Real VRP History with Percentile Bands (#126) -->
+  {% if opt.vrp_history %}
+  {% set vrp_h = opt.vrp_history %}
+  {% call panel('Variance Risk Premium (VRP) Historical Time Series') %}
+    {% if vrp_h.available %}
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">Current VRP Spread</span>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span class="text-2xl font-bold font-mono {% if vrp_h.current_vrp >= 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">
+            {{ "%+.2f"|format(vrp_h.current_vrp) }}%
+          </span>
+          <span class="text-xs text-zinc-400">IV30 &minus; RV21</span>
+        </div>
+      </div>
+
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">Historical Percentile</span>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span class="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-50">{{ "%.1f"|format(vrp_h.current_percentile) }}%</span>
+        </div>
+        <span class="text-[10px] text-zinc-400 mt-1 block">n={{ vrp_h.n_obs }} days stored</span>
+      </div>
+
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">Dynamic Regime</span>
+        <div class="mt-2">
+          <span class="px-2.5 py-1 text-xs font-bold font-mono rounded uppercase
+            {% if vrp_h.regime == 'high' %}bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30
+            {% elif vrp_h.regime == 'low' %}bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30
+            {% else %}bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300{% endif %}">
+            {{ vrp_h.regime }}
+          </span>
+        </div>
+        <span class="text-[10px] text-zinc-400 mt-1 block">{{ vrp_h.regime_label }}</span>
+      </div>
+
+      <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-4">
+        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block">Distribution Bands</span>
+        <div class="mt-2 text-xs font-mono space-y-0.5 text-zinc-600 dark:text-zinc-300">
+          <div>10th %ile: {{ "%+.2f"|format(vrp_h.p10) }}%</div>
+          <div>Median: {{ "%+.2f"|format(vrp_h.median) }}%</div>
+          <div>90th %ile: {{ "%+.2f"|format(vrp_h.p90) }}%</div>
+        </div>
+      </div>
+    </div>
+    {% if opt.charts and opt.charts.vrp_history %}
+    <div class="mt-3">
+      {{ opt.charts.vrp_history | safe }}
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="p-4 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-500 flex items-center justify-between">
+      <span><strong>History Accumulating:</strong> {{ vrp_h.status }}</span>
+      <span class="text-[10px] uppercase font-bold text-amber-500">Min 21 days required for distribution bands</span>
+    </div>
+    {% endif %}
+  {% endcall %}
+  {% endif %}
+
+</div>
+{% endif %}
