@@ -92,7 +92,7 @@ def analysis(monkeypatch, payload):
     monkeypatch.setattr(app_module, 'get_cached_chain', lambda *args, **kwargs:
                         (pd.DataFrame(payload['calls']), pd.DataFrame(payload['puts']), 100.0))
     monkeypatch.setattr(app_module, 'get_or_fetch_prices', lambda symbol: pd.DataFrame())
-    monkeypatch.setattr(app_module, 'get_gex_profile', lambda *args: None)
+    monkeypatch.setattr(app_module, '_options_terminal_run', lambda *args, **kwargs: (None, None, None))
     return lambda: app_module.app.test_client().get('/api/options-analysis/SPY').get_json()
 
 
@@ -350,3 +350,43 @@ def test_greeks_rows_preserve_missing_vs_known_zero_availability(monkeypatch):
     assert row['put_change_available'] is True
     assert row['call_oi'] == 0 and row['put_oi'] == 0
     assert row['put_change'] == 0 and row['put_pct_change'] == 0
+
+
+def _terminal_stub(error=None):
+    from options.models import GexProfile, OptionsTerminalResult
+    gex = GexProfile(total_gex=12.34, call_gex=20.0, put_gex=-7.66, regime='positive',
+                     gamma_flip=97.5, call_wall=105.0, call_wall_val=8.2, put_wall=95.0,
+                     put_wall_val=-6.1, hvl=100.0, hvl_val=3.0, convention='naive')
+    res = OptionsTerminalResult(ticker='SPY', spot_price=101.5, as_of='x', convention='naive',
+                                gex=gex, vol=None, cones=None, error=error)
+    chains = pd.DataFrame({'dte': [3, 10, 10], 'expiration': ['a', 'b', 'b']})
+    return res, chains, 101.5
+
+
+def test_gex_stats_equal_terminal_walls_and_flip(monkeypatch, analysis):
+    run = _terminal_stub()
+    monkeypatch.setattr(app_module, '_options_terminal_run', lambda *a, **k: run)
+    stats = analysis()['gex_stats']
+    gex = run[0].gex
+    assert (stats['call_wall'], stats['put_wall'], stats['gamma_flip']) == (
+        gex.call_wall, gex.put_wall, gex.gamma_flip)
+    assert stats['spot'] == 101.5  # live spot, not the 100.0 chain-snapshot spot
+    assert stats['convention'] == 'naive'
+    assert stats['dte_range'] == '3–10d' and stats['n_expirations'] == 2
+
+
+def test_gex_stats_null_on_terminal_error(monkeypatch, analysis):
+    run = _terminal_stub(error='boom')
+    monkeypatch.setattr(app_module, '_options_terminal_run', lambda *a, **k: run)
+    assert analysis()['gex_stats'] is None
+
+
+def test_hv_null_when_history_too_short(monkeypatch, analysis):
+    def prices(n):
+        return pd.DataFrame({'close': 100 + np.sin(np.arange(n))})
+    monkeypatch.setattr(app_module, 'get_or_fetch_prices', lambda symbol: prices(60))
+    result = analysis()
+    assert result['hv30'] is not None and result['hv90'] is None
+    monkeypatch.setattr(app_module, 'get_or_fetch_prices', lambda symbol: prices(20))
+    result = analysis()
+    assert result['hv30'] is None and result['hv90'] is None

@@ -2864,6 +2864,34 @@ def get_full_option_chain_df(
         return pd.DataFrame()
 
 
+def _options_terminal_run(ticker, convention='naive'):
+    """Run the options terminal engine on the live spot and the full chain frame.
+
+    Single entry for /options, /api/options-terminal and the AI-tab/report
+    assembler, so every surface quotes the same walls and flip.
+
+    Returns (terminal_result, chains_df, live_spot), or (None, None, None)
+    when no spot price can be determined.
+    """
+    live_spot = get_current_price_yfinance(ticker)
+    if not live_spot:
+        live_spot = _spot_price(ticker, _get_yf_ticker(ticker))
+    if not live_spot:
+        return None, None, None
+
+    stock = _get_yf_ticker(ticker)
+    chains_df = get_full_option_chain_df(ticker, stock=stock, current_price=live_spot)
+    daily_df = get_or_fetch_prices(ticker)
+    terminal_res = compute_options_terminal(
+        ticker=ticker,
+        spot=live_spot,
+        chain_df=chains_df,
+        daily_df=daily_df,
+        convention=convention,
+    )
+    return terminal_res, chains_df, live_spot
+
+
 @app.route('/options')
 def options_page():
     ticker = request.args.get('ticker', '').strip().upper() or 'SPY'
@@ -2872,25 +2900,11 @@ def options_page():
     if convention not in ('naive', 'short_wings'):
         convention = 'naive'
 
-    current_price = get_current_price_yfinance(ticker)
-    if not current_price:
-        current_price = _spot_price(ticker, _get_yf_ticker(ticker))
-    if not current_price:
+    terminal_res, chains_df, current_price = _options_terminal_run(ticker, convention)
+    if terminal_res is None:
         return render_template(
             'options.html', ticker=ticker, data=None,
             error=f"Could not determine a current price for {ticker}. Options analytics are unavailable right now.")
-
-    stock = _get_yf_ticker(ticker)
-    chains_df = get_full_option_chain_df(ticker, stock=stock, current_price=current_price)
-    daily_df = get_or_fetch_prices(ticker)
-
-    terminal_res = compute_options_terminal(
-        ticker=ticker,
-        spot=current_price,
-        chain_df=chains_df,
-        daily_df=daily_df,
-        convention=convention,
-    )
 
     import dataclasses
     data_dict = dataclasses.asdict(terminal_res)
@@ -4491,13 +4505,55 @@ def options_greeks_api(ticker):
     return jsonify(data)
 
 
-def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
-    """Compile options statistics and quantitative posture metrics."""
+def _gex_stats_from_terminal(terminal_res, chains_df):
+    """Legacy `gex_stats` shape (plus `convention`) derived from the terminal engine.
+
+    Returns None when the terminal errored, so the AI tab shows N/A instead of
+    placeholder zeros. `dte_range` / `n_expirations` come from the chain frame
+    the terminal actually consumed.
+    """
+    if terminal_res is None or terminal_res.error:
+        return None
+    g = terminal_res.gex
+    dte_range, n_exp = None, 0
+    if chains_df is not None and not chains_df.empty and 'dte' in chains_df:
+        dte_range = f"{int(chains_df['dte'].min())}–{int(chains_df['dte'].max())}d"
+        n_exp = int(chains_df['expiration'].nunique()) if 'expiration' in chains_df else 0
+    return {
+        'total_gex': round(g.total_gex, 1),
+        'regime': g.regime,
+        'call_wall': g.call_wall,
+        'call_wall_val': g.call_wall_val,
+        'put_wall': g.put_wall,
+        'put_wall_val': g.put_wall_val,
+        'gamma_flip': g.gamma_flip,
+        'gamma_flip_sticky_moneyness': g.gamma_flip_sticky_moneyness,
+        'gamma_flip_diff': g.gamma_flip_diff,
+        'rate_source': g.rate_source,
+        'rf_rate': g.rf_rate,
+        'hvl': g.hvl,
+        'hvl_val': g.hvl_val,
+        'spot': round(float(terminal_res.spot_price), 2),
+        'top_nodes': g.top_nodes,
+        'dte_range': dte_range,
+        'n_expirations': n_exp,
+        'convention': g.convention,
+    }
+
+
+def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045,
+                             greeks_data=None, terminal_run=None):
+    """Compile options statistics and quantitative posture metrics.
+
+    `greeks_data` / `terminal_run` let the report builder pass in what it has
+    already fetched so the two share one snapshot and one terminal computation.
+    """
     try:
-        greeks_data = get_options_greeks_data(ticker, expiration_date, rf_rate, strike_count='all')
+        if greeks_data is None:
+            greeks_data = get_options_greeks_data(ticker, expiration_date, rf_rate, strike_count='all')
         if not greeks_data:
             return None
-        
+
         spot_price = greeks_data['spot_price']
         rows = greeks_data['options']
         selected_expiration = greeks_data['selected_expiration']
@@ -4505,16 +4561,14 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
         
         # Spot price history for HV30/90
         df = get_or_fetch_prices(ticker)
-        hv30, hv90, iv_rank, iv_percentile = 0.0, 0.0, 0.0, 0.0
-        vol_history = pd.Series(dtype=float)
-        if df is not None and not df.empty and len(df) > 30:
-            returns = df['close'].pct_change()
-            hv30 = float(returns.tail(30).std() * np.sqrt(252)) * 100
-            hv90 = float(returns.tail(90).std() * np.sqrt(252)) * 100
-            
-            rolling_30d = returns.rolling(30).std() * np.sqrt(252) * 100
-            vol_history = rolling_30d.dropna().tail(252)
-        
+        hv30, hv90 = None, None  # null, not 0.0, when history is too short
+        if df is not None and not df.empty:
+            returns = df['close'].pct_change().dropna()
+            if len(returns) >= 30:
+                hv30 = float(returns.tail(30).std() * np.sqrt(252)) * 100
+            if len(returns) >= 90:
+                hv90 = float(returns.tail(90).std() * np.sqrt(252)) * 100
+
         # Use the nearest usable near-ATM IV independently on each side.
         strikes = [r['strike'] for r in rows]
         atm_row = min(rows, key=lambda r: abs(r['strike'] - spot_price)) if rows else None
@@ -4576,17 +4630,24 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
         max_pain = min(pains, key=pains.get) if pains and has_oi else None
         
         # GEX stats
-        gex_profile = get_gex_profile(ticker, spot_price, rf_rate)
-        gex_stats = gex_profile['stats'] if gex_profile else None
-        
+        # Same engine and live-spot inputs as /options, so the AI tab and the
+        # terminal page quote identical walls and flip.
+        gex_stats = None
+        try:
+            run = terminal_run if terminal_run is not None else _options_terminal_run(ticker)
+            if run[0] is not None:
+                gex_stats = _gex_stats_from_terminal(run[0], run[1])
+        except Exception as e:
+            print(f"[options-analysis] terminal GEX failed for {ticker}: {e}")
+
         # Strategy recommendations
-        selling_environment = atm_iv > hv30 if atm_iv is not None else None
+        selling_environment = atm_iv > hv30 if atm_iv is not None and hv30 is not None else None
         strategy_recommendation = ""
         strategy_rationale = ""
         if atm_iv is None:
             strategy_recommendation = 'Insufficient IV data'
             strategy_rationale = 'Implied volatility is unavailable from the option chain. Premium pricing cannot be assessed.'
-        elif df is None or df.empty or len(df) <= 30:
+        elif hv30 is None:
             strategy_recommendation = 'Insufficient volatility history'
             strategy_rationale = 'Realized volatility history is unavailable. Premium pricing cannot be compared.'
         elif iv_rank is not None and iv_rank > 50:
@@ -4607,8 +4668,8 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
             'selected_expiration': selected_expiration,
             'days_to_expiration': days_to_exp,
             'expirations': greeks_data['expirations'],
-            'hv30': round(hv30, 2),
-            'hv90': round(hv90, 2),
+            'hv30': round(hv30, 2) if hv30 is not None else None,
+            'hv90': round(hv90, 2) if hv90 is not None else None,
             'atm_iv': round(atm_iv, 2) if atm_iv is not None else None,
             'iv_rank': round(iv_rank, 1) if iv_rank is not None else None,
             'iv_percentile': round(iv_percentile, 1) if iv_percentile is not None else None,
@@ -4655,23 +4716,9 @@ def api_options_terminal(ticker):
     if convention not in ('naive', 'short_wings'):
         convention = 'naive'
 
-    current_price = get_current_price_yfinance(ticker)
-    if not current_price:
-        current_price = _spot_price(ticker, _get_yf_ticker(ticker))
-    if not current_price:
+    terminal_res, _, _ = _options_terminal_run(ticker, convention)
+    if terminal_res is None:
         return jsonify({"error": f"No price data available for {ticker}; options terminal unavailable"}), 503
-
-    stock = _get_yf_ticker(ticker)
-    chains_df = get_full_option_chain_df(ticker, stock=stock, current_price=current_price)
-    daily_df = get_or_fetch_prices(ticker)
-
-    terminal_res = compute_options_terminal(
-        ticker=ticker,
-        spot=current_price,
-        chain_df=chains_df,
-        daily_df=daily_df,
-        convention=convention,
-    )
 
     import dataclasses
     return jsonify(dataclasses.asdict(terminal_res))
