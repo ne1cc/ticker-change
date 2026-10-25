@@ -11,4 +11,6 @@ EnvironmentFile=-/etc/ticker-change/alpaca.env
 EnvironmentFile=-/etc/ticker-change/gemini.env
 # Optional: root-only 0600 file with FINNHUB_API_KEY.
 EnvironmentFile=-/etc/ticker-change/finnhub.env
+# Optional: root-only 0600 file with SETTINGS_PASSWORD (HTTP Basic password for /settings).
+EnvironmentFile=-/etc/ticker-change/settings.env
 ExecStart=/usr/local/bin/ticker-change-deploy

@@ -197,6 +197,7 @@
         </div>
         <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">{{ metric('VaR backtests', 'var_backtest') }}</div>
         <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5 font-mono text-xs">
+          <div class="overflow-x-auto">
           <table class="w-full">
             <thead><tr class="text-left text-[10px] text-zinc-400 uppercase"><th class="py-1">Level</th><th class="text-right">Exp.</th><th class="text-right">Actual</th><th class="text-right">Kupiec p</th><th class="text-right">Christ. p</th><th class="text-right pl-2">Verdict</th></tr></thead>
             <tbody>
@@ -218,6 +219,7 @@
               {% endfor %}
             </tbody>
           </table>
+          </div>
           <p class="text-[10px] text-zinc-400 mt-2">Rolling 250d historical VaR, exceedance tests. Green = coverage accepted; red = both tests reject.</p>
         </div>
       </div>
