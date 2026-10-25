@@ -30,6 +30,61 @@ class EventStudyResult:
     car_p_value: float
     is_significant_95: bool
     daily_abnormal_returns: List[Dict[str, Any]] = field(default_factory=list)
+    drift_car: Optional[float] = None  # CAR over the separate drift window
+    drift_window: Optional[Tuple[int, int]] = None
+
+
+# Per-type event windows in relative trading days: a short announcement
+# window plus a separate post-event drift window. Types outside the 8-K
+# taxonomy (legacy "SEC_8K", "CORPORATE_ACTION", ...) keep the historic
+# (-10, +30) single-window behavior and no drift leg.
+EVENT_TYPE_WINDOWS: Dict[str, Dict[str, Optional[Tuple[int, int]]]] = {
+    "earnings": {"event": (-1, 1), "drift": (2, 21)},
+    "m&a": {"event": (-1, 5), "drift": (6, 42)},
+    "restatement": {"event": (-1, 3), "drift": (4, 42)},
+    "control": {"event": (-1, 5), "drift": (6, 42)},
+    "listing": {"event": (0, 3), "drift": (4, 21)},
+    "auditor": {"event": (-1, 3), "drift": (4, 21)},
+    "management": {"event": (-1, 1), "drift": (2, 21)},
+    "financing": {"event": (-1, 1), "drift": (2, 21)},
+    "reg_fd": {"event": (0, 1), "drift": (2, 10)},
+}
+_LEGACY_WINDOWS: Dict[str, Optional[Tuple[int, int]]] = {
+    "event": (-10, 30), "drift": None}
+
+
+def windows_for(event_type: str) -> Tuple[Tuple[int, int], Optional[Tuple[int, int]]]:
+    """(event_window, drift_window) for a type; legacy pair when unknown."""
+    cfg = EVENT_TYPE_WINDOWS.get((event_type or "").strip().lower(),
+                                 _LEGACY_WINDOWS)
+    return cfg["event"], cfg["drift"]
+
+
+def collapse_overlapping(events: List[Dict[str, Any]],
+                         span_days: int = 60) -> List[Dict[str, Any]]:
+    """De-duplicate clustered events deterministically.
+
+    Policy: sort by (event_date, ticker, event_type); keep an event only
+    when its event_date falls after the previous kept event of the same
+    (ticker, event_type) pair — later same-cluster events are absorbed.
+    A kept event's window ends at its 'end_date' entry when supplied
+    (resolved trading-day end), else event_date + span_days calendar days.
+    """
+    out: List[Dict[str, Any]] = []
+    last_end: Dict[Tuple[str, str], pd.Timestamp] = {}
+    for ev in sorted(events, key=lambda e: (e.get("event_date") or "",
+                                            e.get("ticker") or "",
+                                            e.get("event_type") or "")):
+        key = (ev.get("ticker") or "", ev.get("event_type") or "")
+        end = ev.get("end_date")
+        end_ts = pd.to_datetime(end) if end else (
+            pd.to_datetime(ev.get("event_date")) + pd.Timedelta(days=span_days))
+        start_ts = pd.to_datetime(ev.get("event_date"))
+        if key in last_end and start_ts <= last_end[key]:
+            continue  # overlaps the kept event's window: absorbed
+        last_end[key] = end_ts
+        out.append(ev)
+    return out
 
 
 def run_event_study(
@@ -40,6 +95,8 @@ def run_event_study(
     ticker: str = "UNKNOWN",
     estimation_window: Tuple[int, int] = (-120, -21),
     event_window: Tuple[int, int] = (-10, 30),
+    drift_window: Optional[Tuple[int, int]] = None,
+    after_close: bool = False,
 ) -> Optional[EventStudyResult]:
     """Execute a single-firm Event Study on daily return series using Market Model.
 
@@ -48,6 +105,9 @@ def run_event_study(
     event_date: 'YYYY-MM-DD'
     estimation_window: Trading days before event (start, end) e.g. (-120, -21)
     event_window: Relative trading days around event (start, end) e.g. (-10, 30)
+    drift_window: Optional separate post-event CAR window (e.g. (2, 21))
+    after_close: filing hit after the close — the event day is the first
+        trading session strictly after event_date, not the filing date itself
     """
     # Normalize column names
     s_col = "close" if "close" in stock_df.columns else "Close"
@@ -61,9 +121,16 @@ def run_event_study(
     df.index = pd.to_datetime(df.index).tz_localize(None)
 
     target_dt = pd.to_datetime(event_date)
-    # Find closest trading day on or before target_dt
+    # Event-day resolution: closest trading day on or before target_dt — or,
+    # for after-close filings, the first session strictly after the filing
+    # date (the market could not react until the next session).
     available_dates = df.index
-    if target_dt not in available_dates:
+    if after_close:
+        valid_dates = available_dates[available_dates > target_dt]
+        if valid_dates.empty:
+            return None
+        target_dt = valid_dates[0]
+    elif target_dt not in available_dates:
         valid_dates = available_dates[available_dates <= target_dt]
         if valid_dates.empty:
             return None
@@ -141,6 +208,18 @@ def run_event_study(
     car_std = math.sqrt(max(var_car_sum, 1e-12))
     car_t_stat = float(cumulative_ar / car_std)
 
+    # Separate post-event drift leg (CAR over the drift window only; None
+    # when the window is not yet complete in the price history).
+    drift_car = None
+    if drift_window is not None:
+        d_start_idx = event_idx + drift_window[0]
+        d_end_idx = event_idx + drift_window[1]
+        if d_start_idx >= 0 and d_end_idx < len(df):
+            drift_data = df.iloc[d_start_idx: d_end_idx + 1]
+            drift_ar = (drift_data["stock_ret"]
+                        - (alpha + beta * drift_data["bench_ret"]))
+            drift_car = round(float(drift_ar.sum()), 6)
+
     # Two-tailed p-value approximation via standard normal (for large N)
     from scipy import stats
     try:
@@ -164,6 +243,8 @@ def run_event_study(
         car_p_value=round(p_val, 5),
         is_significant_95=p_val < 0.05,
         daily_abnormal_returns=daily_abnormal,
+        drift_car=drift_car,
+        drift_window=drift_window,
     )
 
 
