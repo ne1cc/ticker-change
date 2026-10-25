@@ -135,3 +135,62 @@ def test_api_options_ai_report_force_param(monkeypatch):
     assert resp2.status_code == 200
     assert called.get("force") is False
 
+
+
+def test_generate_options_report_falls_back_to_secondary_model_on_503(monkeypatch):
+    import ai
+
+    models_called = []
+
+    def mock_openai_report(base_url, key, model, user_msg, system, **kwargs):
+        models_called.append(model)
+        if model == "gemini-3.8-flash":
+            raise Exception("HTTP 503: This model is currently experiencing high demand.")
+        return "### 1. Options Market Regime & Volatility Analysis\n\n- **IV Rank:** 10.0"
+
+    monkeypatch.setattr(ai.db, "cache_get", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ai.db, "cache_set", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ai, "_openai_compatible_report", mock_openai_report)
+
+    provider_config = [{
+        "id": "gemini",
+        "label": "Google Gemini",
+        "base_url": "https://example.com",
+        "key": "test_key",
+        "model": "gemini-3.8-flash",
+        "fallback_models": ("gemini-3.1-flash-lite", "gemini-2.5-flash"),
+    }]
+    monkeypatch.setattr(ai.providers, "ai_providers", lambda: provider_config)
+
+    html, err = ai.generate_options_report("AAPL", {"selected_expiration": "2026-11-13"}, force=True)
+    assert err is None
+    assert html is not None
+    assert models_called == ["gemini-3.8-flash", "gemini-3.1-flash-lite"]
+
+
+def test_openai_compatible_retries_on_transient_error(monkeypatch):
+    import ai
+    from unittest.mock import MagicMock
+
+    call_count = 0
+
+    def mock_post(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        resp = MagicMock()
+        if call_count == 1:
+            resp.status_code = 503
+            resp.text = '{"error": "high demand"}'
+        else:
+            resp.status_code = 200
+            resp.json.return_value = {
+                "choices": [{"message": {"content": "Generated report text"}}]
+            }
+        return resp
+
+    monkeypatch.setattr(ai.requests, "post", mock_post)
+    monkeypatch.setattr(ai.time, "sleep", lambda s: None)
+
+    res = ai._openai_compatible_report("https://fake", "key", "model", "msg", max_retries=2)
+    assert res == "Generated report text"
+    assert call_count == 2

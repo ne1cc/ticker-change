@@ -245,3 +245,24 @@ class TestFinnhubPeer(ProviderTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAiProviders(ProviderTestCase):
+    def test_ai_providers_includes_fallback_models(self):
+        with mock.patch.object(providers, "ai_key", side_effect=lambda s, env: "dummy_key" if "gemini" in s else ""):
+            provs = providers.ai_providers()
+            self.assertEqual(1, len(provs))
+            gemini = provs[0]
+            self.assertEqual("gemini", gemini["id"])
+            self.assertEqual("gemini-3.8-flash", gemini["model"])
+            self.assertIn("gemini-3.1-flash-lite", gemini["fallback_models"])
+            self.assertIn("gemini-2.5-flash", gemini["fallback_models"])
+
+    def test_ai_providers_supports_custom_model_override(self):
+        with mock.patch.object(providers, "ai_key", side_effect=lambda s, env: "dummy_key" if "gemini" in s else ""), \
+             mock.patch.object(db, "get_setting", side_effect=lambda k: "gemini-2.5-flash" if k == "gemini_model" else None):
+            provs = providers.ai_providers()
+            self.assertEqual(1, len(provs))
+            gemini = provs[0]
+            self.assertEqual("gemini-2.5-flash", gemini["model"])
+            self.assertIn("gemini-3.8-flash", gemini["fallback_models"])

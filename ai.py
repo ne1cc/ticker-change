@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from datetime import datetime
 
 import requests
@@ -274,7 +275,7 @@ def _anthropic_report(key: str, model: str, user_msg: str, system_prompt: str = 
         import anthropic
     except Exception:
         return None
-    client_kwargs = {"api_key": key}
+    client_kwargs = {"api_key": key, "max_retries": 2}
     if timeout:
         client_kwargs["timeout"] = timeout
     client = anthropic.Anthropic(**client_kwargs)
@@ -300,35 +301,85 @@ def _anthropic_report(key: str, model: str, user_msg: str, system_prompt: str = 
 
 def _openai_compatible_report(base_url: str, key: str, model: str, user_msg: str,
                               system_prompt: str = SYSTEM,
-                              timeout: float = HTTP_TIMEOUT) -> str | None:
+                              timeout: float = HTTP_TIMEOUT,
+                              max_retries: int = 2) -> str | None:
     """Generate the report via an OpenAI-compatible /chat/completions endpoint.
 
     Shared by OpenAI, Google Gemini (OpenAI-compat base), and OpenRouter — they
     all speak the same request/response shape, so one path covers all three.
+    Retries automatically on transient rate limits (429) and server errors (5xx).
     """
-    resp = requests.post(
-        f"{base_url}/chat/completions",
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_msg},
-            ],
-            "max_tokens": 4000,
-            "temperature": 0.4,
-        },
-        timeout=timeout,
-    )
-    if resp.status_code != 200:
-        raise Exception(f"HTTP {resp.status_code}: {resp.text[:300]}")
-    choices = (resp.json() or {}).get("choices") or []
-    if not choices:
-        raise Exception(f"No choices returned by model API. Response: {resp.text[:300]}")
-    content = (choices[0].get("message") or {}).get("content")
-    if not content:
-        raise Exception(f"Model returned empty content choice. Response: {resp.text[:300]}")
-    return content.strip()
+    last_err = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    "max_tokens": 4000,
+                    "temperature": 0.4,
+                },
+                timeout=timeout,
+            )
+            if resp.status_code != 200:
+                err_msg = f"HTTP {resp.status_code}: {resp.text[:300]}"
+                if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                raise Exception(err_msg)
+            choices = (resp.json() or {}).get("choices") or []
+            if not choices:
+                raise Exception(f"No choices returned by model API. Response: {resp.text[:300]}")
+            content = (choices[0].get("message") or {}).get("content")
+            if not content:
+                raise Exception(f"Model returned empty content choice. Response: {resp.text[:300]}")
+            return content.strip()
+        except requests.RequestException as e:
+            last_err = e
+            if attempt < max_retries:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            raise Exception(f"Network error: {str(e)}") from e
+    if last_err:
+        raise last_err
+    return None
+
+
+def _generate_report_from_provider(prov: dict, user_msg: str, system_prompt: str,
+                                   timeout: float | None = None) -> tuple[str | None, list[str]]:
+    """Try a provider primary model and any fallback models in order.
+
+    Returns (text, list_of_errors). If successful, text is non-None.
+    """
+    primary = prov.get("model")
+    fallbacks = [m for m in (prov.get("fallback_models") or ()) if m != primary]
+    models = [primary] + fallbacks if primary else fallbacks
+    errors = []
+
+    kwargs = {"timeout": timeout} if timeout is not None else {}
+
+    for m in models:
+        try:
+            if prov.get("id") == "anthropic":
+                text = _anthropic_report(prov["key"], m, user_msg, system_prompt, **kwargs)
+            else:
+                text = _openai_compatible_report(
+                    prov["base_url"], prov["key"], m, user_msg, system_prompt, **kwargs
+                )
+            if not text:
+                errors.append(f"{prov.get('label', prov.get('id'))} ({m}) returned empty content.")
+            else:
+                return text, errors
+        except Exception as e:
+            err_msg = f"{prov.get('label', prov.get('id'))} ({m}) failed: {str(e)}"
+            errors.append(err_msg)
+            print(f"AI report via {prov.get('id')} ({m}) failed: {e}")
+    return None, errors
 
 
 def generate_report(ticker: str, data: dict) -> str | None:
@@ -352,16 +403,7 @@ def generate_report(ticker: str, data: dict) -> str | None:
 
     text, used = None, None
     for prov in configured:
-        try:
-            if prov["id"] == "anthropic":
-                text = _anthropic_report(prov["key"], prov["model"], user_msg, SYSTEM)
-            else:
-                text = _openai_compatible_report(
-                    prov["base_url"], prov["key"], prov["model"], user_msg, SYSTEM
-                )
-        except Exception as e:
-            print(f"AI report via {prov['id']} failed for {ticker}: {e}")
-            text = None
+        text, _ = _generate_report_from_provider(prov, user_msg, SYSTEM)
         if text:
             used = prov["id"]
             break
@@ -473,19 +515,8 @@ def generate_comprehensive_report(ticker: str, data: dict) -> tuple[str | None, 
     errors = []
     text, used = None, None
     for prov in configured:
-        try:
-            if prov["id"] == "anthropic":
-                text = _anthropic_report(prov["key"], prov["model"], user_msg, COMPREHENSIVE_SYSTEM)
-            else:
-                text = _openai_compatible_report(
-                    prov["base_url"], prov["key"], prov["model"], user_msg, COMPREHENSIVE_SYSTEM
-                )
-            if not text:
-                errors.append(f"{prov['label']} ({prov['model']}) returned empty content.")
-        except Exception as e:
-            err_msg = f"{prov['label']} ({prov['model']}) failed: {str(e)}"
-            print(f"AI comprehensive report via {prov['id']} failed for {ticker}: {e}")
-            errors.append(err_msg)
+        text, prov_errors = _generate_report_from_provider(prov, user_msg, COMPREHENSIVE_SYSTEM)
+        errors.extend(prov_errors)
         if text:
             used = prov["id"]
             break
@@ -572,19 +603,8 @@ def generate_options_report(ticker: str, data: dict, force: bool = False) -> tup
     errors = []
     text, used = None, None
     for prov in configured:
-        try:
-            if prov["id"] == "anthropic":
-                text = _anthropic_report(prov["key"], prov["model"], user_msg, OPTIONS_SYSTEM)
-            else:
-                text = _openai_compatible_report(
-                    prov["base_url"], prov["key"], prov["model"], user_msg, OPTIONS_SYSTEM
-                )
-            if not text:
-                errors.append(f"{prov['label']} ({prov['model']}) returned empty content.")
-        except Exception as e:
-            err_msg = f"{prov['label']} ({prov['model']}) failed: {str(e)}"
-            print(f"AI options report via {prov['id']} failed for {ticker}: {e}")
-            errors.append(err_msg)
+        text, prov_errors = _generate_report_from_provider(prov, user_msg, OPTIONS_SYSTEM)
+        errors.extend(prov_errors)
         if text:
             used = prov["id"]
             break
@@ -651,18 +671,9 @@ def generate_brief_interpretation(ticker: str, brief_payload: dict) -> dict | No
 
         text, used = None, None
         for prov in configured:
-            try:
-                if prov["id"] == "anthropic":
-                    text = _anthropic_report(
-                        prov["key"], prov["model"], user_msg,
-                        BRIEF_GARNISH_SYSTEM, timeout=BRIEF_GARNISH_TIMEOUT)
-                else:
-                    text = _openai_compatible_report(
-                        prov["base_url"], prov["key"], prov["model"], user_msg,
-                        BRIEF_GARNISH_SYSTEM, timeout=BRIEF_GARNISH_TIMEOUT)
-            except Exception as e:
-                print(f"AI brief interpretation via {prov['id']} failed for {ticker}: {e}")
-                text = None
+            text, _ = _generate_report_from_provider(
+                prov, user_msg, BRIEF_GARNISH_SYSTEM, timeout=BRIEF_GARNISH_TIMEOUT
+            )
             if text:
                 used = prov["id"]
                 break

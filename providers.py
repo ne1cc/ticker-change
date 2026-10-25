@@ -127,17 +127,21 @@ def sec_user_agent() -> str:
 AI_PROVIDERS = (
     {"id": "anthropic",  "label": "Anthropic (Claude)", "env": "ANTHROPIC_API_KEY",
      "setting": "anthropic_api_key", "base_url": None,
-     "model": "claude-opus-4-8"},
+     "model": "claude-opus-4-8",
+     "fallback_models": ("claude-sonnet-4-5", "claude-3-5-sonnet-20241022")},
     {"id": "openai",     "label": "OpenAI",             "env": "OPENAI_API_KEY",
      "setting": "openai_api_key", "base_url": "https://api.openai.com/v1",
-     "model": "gpt-4o"},
+     "model": "gpt-4o",
+     "fallback_models": ("gpt-4o-mini",)},
     {"id": "gemini",     "label": "Google Gemini",      "env": "GEMINI_API_KEY",
      "setting": "gemini_api_key",
      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-     "model": "gemini-3.8-flash"},
+     "model": "gemini-3.8-flash",
+     "fallback_models": ("gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash")},
     {"id": "openrouter", "label": "OpenRouter",         "env": "OPENROUTER_API_KEY",
      "setting": "openrouter_api_key", "base_url": "https://openrouter.ai/api/v1",
-     "model": "anthropic/claude-opus-4-8"},
+     "model": "anthropic/claude-opus-4-8",
+     "fallback_models": ("anthropic/claude-sonnet-4-5", "google/gemini-2.5-flash")},
 )
 
 AI_SETTING_KEYS = tuple(p["setting"] for p in AI_PROVIDERS)
@@ -154,7 +158,14 @@ def ai_providers() -> list:
     for p in AI_PROVIDERS:
         key = ai_key(p["setting"], p["env"])
         if key:
-            out.append({**p, "key": key})
+            model_setting = f"{p['id']}_model"
+            model_env = f"{p['id'].upper()}_MODEL"
+            custom_model = (db.get_setting(model_setting) or os.environ.get(model_env, "")).strip()
+            active_model = custom_model or p["model"]
+            fallbacks = list(p.get("fallback_models") or ())
+            if custom_model and p["model"] not in fallbacks:
+                fallbacks.insert(0, p["model"])
+            out.append({**p, "key": key, "model": active_model, "fallback_models": tuple(fallbacks)})
     return out
 
 
