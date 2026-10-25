@@ -140,10 +140,10 @@ AI_PROVIDERS = (
      # gemini-2.5-flash / gemini-2.0-flash dropped: Google 404s them as
      # "no longer available for new users", so they were dead weight.
      "fallback_models": ("gemini-3.1-flash-lite",)},
-    {"id": "openrouter", "label": "OpenRouter",         "env": "OPENROUTER_API_KEY",
-     "setting": "openrouter_api_key", "base_url": "https://openrouter.ai/api/v1",
-     "model": "anthropic/claude-opus-4-8",
-     "fallback_models": ("anthropic/claude-sonnet-4-5", "google/gemini-2.5-flash")},
+     {"id": "openrouter", "label": "OpenRouter",         "env": "OPENROUTER_API_KEY",
+      "setting": "openrouter_api_key", "base_url": "https://openrouter.ai/api/v1",
+      "model": "anthropic/claude-sonnet-4-5",
+      "fallback_models": ("google/gemini-3.5-flash-lite",)},
 )
 
 AI_SETTING_KEYS = tuple(p["setting"] for p in AI_PROVIDERS)
