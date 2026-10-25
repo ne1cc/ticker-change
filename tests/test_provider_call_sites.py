@@ -256,7 +256,7 @@ class TestAiProviders(ProviderTestCase):
             self.assertEqual("gemini", gemini["id"])
             self.assertEqual("gemini-3.8-flash", gemini["model"])
             self.assertIn("gemini-3.1-flash-lite", gemini["fallback_models"])
-            self.assertIn("gemini-2.5-flash", gemini["fallback_models"])
+            self.assertEqual(("gemini-3.1-flash-lite",), gemini["fallback_models"])
 
     def test_ai_providers_supports_custom_model_override(self):
         with mock.patch.object(providers, "ai_key", side_effect=lambda s, env: "dummy_key" if "gemini" in s else ""), \

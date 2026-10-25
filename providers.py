@@ -137,7 +137,9 @@ AI_PROVIDERS = (
      "setting": "gemini_api_key",
      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
      "model": "gemini-3.8-flash",
-     "fallback_models": ("gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash")},
+     # gemini-2.5-flash / gemini-2.0-flash dropped: Google 404s them as
+     # "no longer available for new users", so they were dead weight.
+     "fallback_models": ("gemini-3.1-flash-lite",)},
     {"id": "openrouter", "label": "OpenRouter",         "env": "OPENROUTER_API_KEY",
      "setting": "openrouter_api_key", "base_url": "https://openrouter.ai/api/v1",
      "model": "anthropic/claude-opus-4-8",

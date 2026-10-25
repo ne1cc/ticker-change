@@ -158,7 +158,7 @@ def test_generate_options_report_falls_back_to_secondary_model_on_503(monkeypatc
         "base_url": "https://example.com",
         "key": "test_key",
         "model": "gemini-3.8-flash",
-        "fallback_models": ("gemini-3.1-flash-lite", "gemini-2.5-flash"),
+        "fallback_models": ("gemini-3.1-flash-lite",),
     }]
     monkeypatch.setattr(ai.providers, "ai_providers", lambda: provider_config)
 
