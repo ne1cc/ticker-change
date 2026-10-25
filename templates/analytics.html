@@ -197,21 +197,27 @@
         </div>
         <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">{{ metric('VaR backtests', 'var_backtest') }}</div>
         <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-850/40 p-3.5 font-mono text-xs">
-          {% for key, bt in rl.backtests.items() %}
-          {% if bt.sufficient %}
-          <div class="flex items-center justify-between mt-1">
-            <span class="text-zinc-400">{{ key.replace('_', ' ') }} ({{ bt.expected_violation_rate_pct }}% expected)</span>
-            <span class="flex items-center gap-2">
-              <span>{{ bt.violation_rate_pct }}% actual · Kupiec p={{ "%.2f"|format(bt.kupiec.p_value) }} · Christ. p={{ "%.2f"|format(bt.christoffersen.p_value) if bt.christoffersen.p_value is not none else '—' }}</span>
-              <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase
-                {% if bt.traffic == 'green' %}bg-emerald-500/20 text-emerald-500
-                {% elif bt.traffic == 'amber' %}bg-amber-500/20 text-amber-500
-                {% elif bt.traffic == 'red' %}bg-rose-500/20 text-rose-500
-                {% else %}bg-zinc-200 dark:bg-zinc-800 text-zinc-400{% endif %}">{{ bt.traffic }}</span>
-            </span>
-          </div>
-          {% endif %}
-          {% endfor %}
+          <table class="w-full">
+            <thead><tr class="text-left text-[10px] text-zinc-400 uppercase"><th class="py-1">Level</th><th class="text-right">Exp.</th><th class="text-right">Actual</th><th class="text-right">Kupiec p</th><th class="text-right">Christ. p</th><th class="text-right pl-2">Verdict</th></tr></thead>
+            <tbody>
+              {% for key, bt in rl.backtests.items() %}
+              {% if bt.sufficient %}
+              <tr class="border-t border-zinc-200/50 dark:border-zinc-800/50">
+                <td class="py-1.5">{{ key.replace('var_', 'VaR ') }}</td>
+                <td class="text-right text-zinc-400">{{ bt.expected_violation_rate_pct }}%</td>
+                <td class="text-right font-bold">{{ bt.violation_rate_pct }}%</td>
+                <td class="text-right">{{ "%.2f"|format(bt.kupiec.p_value) }}</td>
+                <td class="text-right">{% if bt.christoffersen.p_value is not none %}{{ "%.2f"|format(bt.christoffersen.p_value) }}{% else %}—{% endif %}</td>
+                <td class="text-right"><span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase
+                  {% if bt.traffic == 'green' %}bg-emerald-500/20 text-emerald-500
+                  {% elif bt.traffic == 'amber' %}bg-amber-500/20 text-amber-500
+                  {% elif bt.traffic == 'red' %}bg-rose-500/20 text-rose-500
+                  {% else %}bg-zinc-200 dark:bg-zinc-800 text-zinc-400{% endif %}">{{ bt.traffic }}</span></td>
+              </tr>
+              {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
           <p class="text-[10px] text-zinc-400 mt-2">Rolling 250d historical VaR, exceedance tests. Green = coverage accepted; red = both tests reject.</p>
         </div>
       </div>
