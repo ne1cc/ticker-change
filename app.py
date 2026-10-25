@@ -26,6 +26,7 @@ import providers
 import news
 import ml
 import ai
+import analytics_receipts
 import corporate_actions
 import event_study
 import sec_8k
@@ -1626,15 +1627,56 @@ def get_price_target_chart(ticker: str, current_price: float) -> str | None:
         return None
 
 
-def _guard_section(label, fn, default=None):
+SECTION_TIMEOUT_S = float(os.environ.get("ANALYTICS_SECTION_TIMEOUT_S", "8"))
+
+
+def _call_with_timeout(fn, timeout):
+    """Run fn in a daemon thread; raise TimeoutError if it outlives `timeout`.
+
+    shortcut: a timed-out call keeps running in its thread until the provider's
+    own timeout fires (Python cannot kill it); move to a bounded pool if hung
+    providers ever pile up."""
+    box = {}
+
+    def run():
+        try:
+            box["value"] = fn()
+        except BaseException as e:  # re-raised in the caller
+            box["error"] = e
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise TimeoutError(f"no result after {timeout:g}s")
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+def _guard_section(label, fn, default=None, timeout=None, status=None):
     """Run one analytics attachment; on failure log and return default so one
-    broken section never takes down the whole page."""
+    broken section never takes down the whole page.
+
+    timeout: seconds before the section is abandoned (None = run inline).
+    status: dict that receives {label: "ok" | "error" | "timeout"} so the page
+    can show an error state for just that section. Every call logs its timing."""
+    started = time.perf_counter()
+    outcome = "ok"
     try:
-        return fn()
+        return fn() if timeout is None else _call_with_timeout(fn, timeout)
+    except TimeoutError:
+        outcome = "timeout"
+        return default
     except Exception:
+        outcome = "error"
         print(f"[analytics:{label}] section failed:")
         traceback.print_exc()
         return default
+    finally:
+        if status is not None:
+            status[label] = outcome
+        print(f"[analytics:{label}] {outcome} in {(time.perf_counter() - started) * 1000:.0f}ms")
 
 
 def get_ml_reliability_chart() -> str | None:
@@ -1922,19 +1964,91 @@ def _rolling_beta_chart(rows) -> str | None:
                          refs=[charts.reference('yAxis', 1.0, 'β = 1.0')]), height=300)
 
 
-@app.route('/analytics')
-def analytics_page():
-    ticker = request.args.get('ticker', '').strip().upper()
-    if not ticker:
-        return render_template('analytics.html', data=None, ticker='')
-    data = compute_analytics(ticker)
-    if data is None:
-        return render_template('analytics.html', data=None, ticker=ticker,
-                               error=f"Could not retrieve data for {ticker}")
+def _trade_type_arg() -> str:
+    trade_type = request.args.get('trade_type', 'long_stock')
+    return trade_type if trade_type in decide.TRADE_TYPES else 'long_stock'
 
-    # Attach fundamentals
-    data['fundamentals'] = _guard_section(
-        "fundamentals", lambda: get_fundamentals(ticker))
+
+def _fragment_base(ticker):
+    """Minimal data dict (+ price frame) the lazy fragments build on; avoids
+    re-running the full compute_analytics once per fragment. (None, None) when
+    there is no price history."""
+    price_df = get_or_fetch_prices(ticker)
+    if price_df is None or price_df.empty:
+        return None, None
+    return {'ticker': ticker, 'current_price': float(price_df['close'].iloc[-1]),
+            'charts': {}, 'stats': {}}, price_df
+
+
+def _attach_gex(ticker, data, status):
+    gex = _guard_section("gex", lambda: get_gex_profile(ticker, data['current_price']),
+                         timeout=SECTION_TIMEOUT_S, status=status)
+    data['charts']['gex'] = gex['chart'] if gex else None
+    data['gex'] = gex['stats'] if gex else None
+
+
+def _build_institutional(ticker, data, price_df):
+    """Institutional suite (microstructure, macro, SEC 8-K events, ATM-priced
+    VRP/Greeks). Raises on failure; the caller's _guard_section turns that into
+    a declared-missing section."""
+    spy_df = get_or_fetch_prices("SPY", period="2y")
+    stock_inst_df = price_df if price_df is not None else get_or_fetch_prices(ticker, period="2y")
+    if stock_inst_df is None or stock_inst_df.empty:
+        return None
+    benchmark_df = spy_df if spy_df is not None else stock_inst_df
+    si_pct, si_dtc, si_assumed = _si_inputs(ticker)
+    si_payload, si_source = _short_interest_for(ticker)
+    micro_res = microstructure.get_microstructure_analytics(
+        stock_inst_df, short_pct_float=si_pct, days_to_cover=si_dtc,
+        is_negative_gex=(data.get('gex') or {}).get('regime') == 'negative',
+        assumed_si_inputs=si_assumed)
+    macro_res = macro_engine.get_macro_financial_report(stock_inst_df, benchmark_df)
+    events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
+
+    # Cumulative Abnormal Return (Market Model) around each 8-K filing date.
+    # None is expected (not an error) when the filing is too recent to have
+    # a full post-event window, or too close to the start of price history
+    # to have a full pre-event estimation window.
+    sec_8k_events_with_car = []
+    for event in events_8k:
+        car_result = event_study.run_event_study(
+            stock_inst_df, benchmark_df, event.filing_date,
+            event_type="SEC_8K", ticker=ticker,
+        )
+        event_dict = event.__dict__.copy()
+        event_dict['car_result'] = car_result.__dict__ if car_result else None
+        sec_8k_events_with_car.append(event_dict)
+
+    # VRP and Greeks come from the real ATM contract; absent chain -> panel hidden.
+    atm = _guard_section("atm_contract", lambda: get_atm_contract(ticker, data['current_price']))
+    atm_block = _atm_derivatives(atm, stock_inst_df) or {}
+
+    return {
+        'microstructure': micro_res.__dict__,
+        'short_interest': {**(si_payload or {}), 'si_source': si_source},
+        'macro_conditioning': {
+            'regime': macro_res.current_regime,
+            'fed_funds_rate': macro_res.fed_funds_rate,
+            'yield_curve_2s10s': macro_res.yield_curve_2s10s_spread,
+            'is_inverted': macro_res.is_yield_curve_inverted,
+            'cpi_yoy': macro_res.cpi_inflation_yoy,
+            'betas': macro_res.regime_conditional_betas,
+            'regime_betas': macro_res.macro_regime_betas,
+            'upside_capture': macro_res.upside_capture_ratio,
+            'downside_capture': macro_res.downside_capture_ratio,
+        },
+        **atm_block,
+        'sec_8k_events': sec_8k_events_with_car,
+    }
+
+
+def _attach_company(ticker, data, price_df, status):
+    """Fundamentals, price target, insider flow, earnings. Each guarded and
+    timed independently; returns the panel receipts."""
+    def run(label, fn):
+        return _guard_section(label, fn, timeout=SECTION_TIMEOUT_S, status=status)
+
+    data['fundamentals'] = run("fundamentals", lambda: get_fundamentals(ticker))
 
     # Cross-sectional percentiles for fundamentals multiples
     if data.get('fundamentals') and isinstance(data['fundamentals'], dict):
@@ -1956,231 +2070,255 @@ def analytics_page():
                     m_key, val, sector=sec, snapshot=snap
                 )
 
-    # Attach options smile
-    data['charts']['options_smile'] = _guard_section(
-        "options_smile",
-        lambda: get_options_smile(ticker, data['current_price']))
-
-    # Attach dealer Gamma Exposure (GEX) profile
-    gex = _guard_section("gex", lambda: get_gex_profile(ticker, data['current_price']))
-    data['charts']['gex'] = gex['chart'] if gex else None
-    data['gex'] = gex['stats'] if gex else None
-
-    trade_type = request.args.get('trade_type', 'long_stock')
-    if trade_type not in decide.TRADE_TYPES:
-        trade_type = 'long_stock'
-    data['checklist'] = _guard_section(
-        "checklist", lambda: decide.build_checklist(ticker, data, trade_type))
-
-    # Attach insider chart (needs price df)
-    price_df = get_or_fetch_prices(ticker)
-    if price_df is not None:
-        data['charts']['insider'] = _guard_section(
-            "insider", lambda: get_insider_chart(ticker, price_df))
-        data['insider_summary'] = _guard_section(
-            "insider_summary", lambda: get_insider_summary(ticker))
-        data['charts']['cumulative_return'] = _guard_section(
-            "cumulative_return", lambda: get_cumulative_return_chart(ticker, price_df))
-
-    # Attach analyst price target
-    data['charts']['price_target'] = _guard_section(
+    data['charts']['price_target'] = run(
         "price_target", lambda: get_price_target_chart(ticker, data['current_price']))
+    if price_df is not None:
+        data['charts']['insider'] = run("insider", lambda: get_insider_chart(ticker, price_df))
+        data['insider_summary'] = run("insider_summary", lambda: get_insider_summary(ticker))
+    data['earnings'] = run("earnings", lambda: earnings.build_earnings_section(ticker))
+    rcpt = analytics_receipts.receipt
+    return [
+        rcpt("fundamentals", ticker, present=bool(data['fundamentals'])),
+        rcpt("price_target", ticker, present=bool(data['charts'].get('price_target'))),
+        rcpt("insider", ticker, present=bool(data.get('insider_summary') or data['charts'].get('insider'))),
+        rcpt("earnings", ticker, present=bool(data['earnings'])),
+    ]
 
-    # Machine-learning Buy/Hold/Sell signal (None until a model is trained)
-    data['ml'] = _guard_section("ml", lambda: ml.predict(ticker))
-    # TODO(#139): register the ML signal as a signal in the Signal Lab once
-    # Epic 5 lands (#151 leaves this clause unimplemented until then).
-    data['charts']['ml_reliability'] = _guard_section(
-        "ml_reliability", lambda: get_ml_reliability_chart())
 
-    # Attach Institutional Analytics Suite (Microstructure, Macro Conditioning, Higher-Order Greeks, 8-K + Event Study)
-    try:
-        spy_df = get_or_fetch_prices("SPY", period="2y")
-        stock_inst_df = price_df if price_df is not None else get_or_fetch_prices(ticker, period="2y")
-        if stock_inst_df is not None and not stock_inst_df.empty:
-            benchmark_df = spy_df if spy_df is not None else stock_inst_df
-            si_pct, si_dtc, si_assumed = _si_inputs(ticker)
-            si_payload, si_source = _short_interest_for(ticker)
-            micro_res = microstructure.get_microstructure_analytics(
-                stock_inst_df, short_pct_float=si_pct, days_to_cover=si_dtc,
-                is_negative_gex=(data.get('gex') or {}).get('regime') == 'negative',
-                assumed_si_inputs=si_assumed)
-            macro_res = macro_engine.get_macro_financial_report(stock_inst_df, benchmark_df)
-            events_8k = sec_8k.fetch_and_parse_8k_filings(ticker, limit=5)
+def _build_options_implied(ticker, data, price_df):
+    opt_charts = {}
+    stock = _get_yf_ticker(ticker)
+    expirations = get_cached_expirations(ticker, stock) or []
+    chain_full = get_full_option_chain_df(ticker, stock=stock, current_price=data['current_price'])
 
-            # Cumulative Abnormal Return (Market Model) around each 8-K filing date.
-            # None is expected (not an error) when the filing is too recent to have
-            # a full post-event window, or too close to the start of price history
-            # to have a full pre-event estimation window.
-            sec_8k_events_with_car = []
-            for event in events_8k:
-                car_result = event_study.run_event_study(
-                    stock_inst_df, benchmark_df, event.filing_date,
-                    event_type="SEC_8K", ticker=ticker,
-                )
-                event_dict = event.__dict__.copy()
-                event_dict['car_result'] = car_result.__dict__ if car_result else None
-                sec_8k_events_with_car.append(event_dict)
-
-            # VRP and Greeks come from the real ATM contract; absent chain -> panel hidden.
-            atm = _guard_section("atm_contract", lambda: get_atm_contract(ticker, data['current_price']))
-            atm_block = _atm_derivatives(atm, stock_inst_df, ticker=ticker) or {}
-
-            data['institutional'] = {
-                'microstructure': micro_res.__dict__,
-                'short_interest': {**(si_payload or {}), 'si_source': si_source},
-                'macro_conditioning': {
-                    'regime': macro_res.current_regime,
-                    'fed_funds_rate': macro_res.fed_funds_rate,
-                    'yield_curve_2s10s': macro_res.yield_curve_2s10s_spread,
-                    'is_inverted': macro_res.is_yield_curve_inverted,
-                    'cpi_yoy': macro_res.cpi_inflation_yoy,
-                    'betas': macro_res.regime_conditional_betas,
-                    'regime_betas': macro_res.macro_regime_betas,
-                    'upside_capture': macro_res.upside_capture_ratio,
-                    'downside_capture': macro_res.downside_capture_ratio,
-                },
-                **atm_block,
-                'sec_8k_events': sec_8k_events_with_car,
-            }
-    except Exception as e:
-        print(f"Error computing institutional analytics for {ticker}: {e}")
-        data['institutional'] = None
-
-    # Factor decomposition (FF5 + momentum) and beta hygiene — declared
-    # unavailable/insufficient states rather than blanks.
-    data['factors'] = _guard_section("factors", lambda: _build_factor_block(ticker))
-    data['charts']['rolling_beta'] = _guard_section(
-        "rolling_beta",
-        lambda: _rolling_beta_chart((data.get('factors') or {}).get('rolling_beta')))
-
-    # Earnings Event Study — CAR per past print + upcoming-print block.
-    data['earnings'] = _guard_section(
-        "earnings", lambda: earnings.build_earnings_section(ticker))
-
-    # Options-Implied Institutional Suite (Term Structure, Density, Earnings Implied, VRP History)
-    try:
-        opt_charts = {}
-        stock = _get_yf_ticker(ticker)
-        expirations = get_cached_expirations(ticker, stock) or []
-        chain_full = get_full_option_chain_df(ticker, stock=stock, current_price=data['current_price'])
-
-        # 1. Term structure & skew (#130)
-        term_structure_data = None
-        if chain_full is not None and not chain_full.empty:
-            vol_ts = compute_vol_term_structure(chain_full, data['current_price'])
-            ts_hist = get_term_structure_and_skew_history(
-                ticker, vol_ts.slope, vol_ts.skew_25d, min_obs=63
-            )
-            term_structure_data = {
-                'available': True,
-                'expirations': vol_ts.expirations,
-                'dtes': vol_ts.dtes,
-                'atm_ivs': vol_ts.atm_ivs,
-                'slope': vol_ts.slope,
-                'regime': vol_ts.regime,
-                'skew_25d': vol_ts.skew_25d,
-                'risk_reversal': vol_ts.risk_reversal,
-                'slope_percentile': ts_hist.get('slope_percentile'),
-                'skew_percentile': ts_hist.get('skew_percentile'),
-                'history_status': ts_hist.get('status', 'accumulating (0/252)'),
-            }
-            if vol_ts.dtes and vol_ts.atm_ivs:
-                ts_chart_series = [
-                    charts.line("ATM IV Term Structure", vol_ts.dtes, vol_ts.atm_ivs, '#6366f1', showSymbol=True, symbolSize=6)
-                ]
-                opt_charts['term_structure'] = charts.render_chart(
-                    charts.cartesian(ts_chart_series, xtype='value', xname='Days to Expiration (DTE)', yname='ATM Implied Volatility (%)'),
-                    height=260
-                )
-        else:
-            term_structure_data = {
-                'available': False,
-                'reason': f"Option chain unavailable for {ticker}",
-            }
-
-        # 2. Breeden-Litzenberger Risk-Neutral Density (#127)
-        density_data = None
-        if chain_full is not None and not chain_full.empty:
-            front_exp = term_structure_data.get('expirations', [None])[0] if term_structure_data.get('available') else None
-            if front_exp:
-                front_sub = chain_full[chain_full['expiration'] == front_exp]
-                calls_sub = front_sub[front_sub['cp'] == 'C'].sort_values('strike')
-                if len(calls_sub) >= 5:
-                    dte_val = int(calls_sub['dte'].iloc[0])
-                    t_y = max(dte_val, 1) / 365.0
-                    c_prices = np.where(calls_sub['bid'] > 0, (calls_sub['bid'] + calls_sub['ask']) / 2.0, calls_sub['last_price'])
-                    gex_stats = data.get('gex') or {}
-                    rf = gex_stats.get('rf_rate', 0.045)
-                    density_data = breeden_litzenberger_density(
-                        calls_sub['strike'].to_numpy(), c_prices,
-                        spot=data['current_price'], t_years=t_y, r=rf,
-                        enforce_no_arbitrage=True,
-                    )
-                    if density_data.get('available'):
-                        dens_series = [
-                            charts.line("Risk-Neutral Density q(K)", density_data['strikes'], density_data['density'], '#8b5cf6', width=2.0),
-                            charts.line("Lognormal Benchmark", density_data['strikes'], density_data['lognormal_benchmark'], '#71717a', dash=True, width=1.5),
-                        ]
-                        opt_charts['density'] = charts.render_chart(
-                            charts.cartesian(
-                                dens_series, xtype='value', xname='Strike ($)', yname='Probability Density',
-                                refs=[charts.reference('x', data['current_price'], f"Spot ${data['current_price']:.2f}", '#f59e0b')]
-                            ),
-                            height=260
-                        )
-        if density_data is None:
-            density_data = {'available': False, 'reason': 'Option chain unavailable or insufficient strike density'}
-
-        # 3. Earnings Implied vs Realized (#128)
-        chains_by_exp = {}
-        if expirations:
-            for exp in expirations[:4]:
-                c = get_cached_chain(ticker, exp, stock=stock, spot_hint=data['current_price'])
-                if c:
-                    cdf, pdf, _ = c
-                    c_copy = cdf.copy(); c_copy['cp'] = 'C'
-                    p_copy = pdf.copy(); p_copy['cp'] = 'P'
-                    chains_by_exp[exp] = pd.concat([c_copy, p_copy], ignore_index=True)
-        earnings_implied_data = get_earnings_implied_vs_realized(
-            ticker, data['current_price'], chains_by_exp, prices_df=price_df
+    # 1. Term structure & skew (#130)
+    term_structure_data = None
+    if chain_full is not None and not chain_full.empty:
+        vol_ts = compute_vol_term_structure(chain_full, data['current_price'])
+        ts_hist = get_term_structure_and_skew_history(
+            ticker, vol_ts.slope, vol_ts.skew_25d, min_obs=63
         )
-
-        # 4. Real VRP history chart with percentile bands (#126)
-        vrp_history_data = get_vrp_history_with_bands(ticker, min_obs=21)
-        if vrp_history_data.get('available'):
-            dates = vrp_history_data['dates']
-            vrp_series = [
-                charts.line("VRP Spread (IV30 - RV21)", dates, vrp_history_data['vrp_series'], '#10b981', width=2.0),
-                charts.line("90th Percentile", dates, [vrp_history_data['p90']] * len(dates), '#f43f5e', dash=True, width=1.0),
-                charts.line("Median", dates, [vrp_history_data['median']] * len(dates), '#71717a', dash=True, width=1.2),
-                charts.line("10th Percentile", dates, [vrp_history_data['p10']] * len(dates), '#3b82f6', dash=True, width=1.0),
+        term_structure_data = {
+            'available': True,
+            'expirations': vol_ts.expirations,
+            'dtes': vol_ts.dtes,
+            'atm_ivs': vol_ts.atm_ivs,
+            'slope': vol_ts.slope,
+            'regime': vol_ts.regime,
+            'skew_25d': vol_ts.skew_25d,
+            'risk_reversal': vol_ts.risk_reversal,
+            'slope_percentile': ts_hist.get('slope_percentile'),
+            'skew_percentile': ts_hist.get('skew_percentile'),
+            'history_status': ts_hist.get('status', 'accumulating (0/252)'),
+        }
+        if vol_ts.dtes and vol_ts.atm_ivs:
+            ts_chart_series = [
+                charts.line("ATM IV Term Structure", vol_ts.dtes, vol_ts.atm_ivs, '#6366f1', showSymbol=True, symbolSize=6)
             ]
-            opt_charts['vrp_history'] = charts.render_chart(
-                charts.cartesian(vrp_series, xtype='time', yname='VRP Spread (%)', refs=[charts.reference('y', 0, 'Zero VRP', '#71717a')]),
+            opt_charts['term_structure'] = charts.render_chart(
+                charts.cartesian(ts_chart_series, xtype='value', xname='Days to Expiration (DTE)', yname='ATM Implied Volatility (%)'),
                 height=260
             )
+    else:
+        term_structure_data = {
+            'available': False,
+            'reason': f"Option chain unavailable for {ticker}",
+        }
 
-        data['options_implied'] = {
-            'term_structure': term_structure_data,
-            'density': density_data,
-            'earnings_implied': earnings_implied_data,
-            'vrp_history': vrp_history_data,
-            'charts': opt_charts,
+    # 2. Breeden-Litzenberger Risk-Neutral Density (#127)
+    density_data = None
+    if chain_full is not None and not chain_full.empty:
+        front_exp = term_structure_data.get('expirations', [None])[0] if term_structure_data.get('available') else None
+        if front_exp:
+            front_sub = chain_full[chain_full['expiration'] == front_exp]
+            calls_sub = front_sub[front_sub['cp'] == 'C'].sort_values('strike')
+            if len(calls_sub) >= 5:
+                dte_val = int(calls_sub['dte'].iloc[0])
+                t_y = max(dte_val, 1) / 365.0
+                c_prices = np.where(calls_sub['bid'] > 0, (calls_sub['bid'] + calls_sub['ask']) / 2.0, calls_sub['last_price'])
+                gex_stats = data.get('gex') or {}
+                rf = gex_stats.get('rf_rate', 0.045)
+                density_data = breeden_litzenberger_density(
+                    calls_sub['strike'].to_numpy(), c_prices,
+                    spot=data['current_price'], t_years=t_y, r=rf,
+                    enforce_no_arbitrage=True,
+                )
+                if density_data.get('available'):
+                    dens_series = [
+                        charts.line("Risk-Neutral Density q(K)", density_data['strikes'], density_data['density'], '#8b5cf6', width=2.0),
+                        charts.line("Lognormal Benchmark", density_data['strikes'], density_data['lognormal_benchmark'], '#71717a', dash=True, width=1.5),
+                    ]
+                    opt_charts['density'] = charts.render_chart(
+                        charts.cartesian(
+                            dens_series, xtype='value', xname='Strike ($)', yname='Probability Density',
+                            refs=[charts.reference('x', data['current_price'], f"Spot ${data['current_price']:.2f}", '#f59e0b')]
+                        ),
+                        height=260
+                    )
+    if density_data is None:
+        density_data = {'available': False, 'reason': 'Option chain unavailable or insufficient strike density'}
+
+    # 3. Earnings Implied vs Realized (#128)
+    chains_by_exp = {}
+    if expirations:
+        for exp in expirations[:4]:
+            c = get_cached_chain(ticker, exp, stock=stock, spot_hint=data['current_price'])
+            if c:
+                cdf, pdf, _ = c
+                c_copy = cdf.copy(); c_copy['cp'] = 'C'
+                p_copy = pdf.copy(); p_copy['cp'] = 'P'
+                chains_by_exp[exp] = pd.concat([c_copy, p_copy], ignore_index=True)
+    earnings_implied_data = get_earnings_implied_vs_realized(
+        ticker, data['current_price'], chains_by_exp, prices_df=price_df
+    )
+
+    # 4. Real VRP history chart with percentile bands (#126)
+    vrp_history_data = get_vrp_history_with_bands(ticker, min_obs=21)
+    if vrp_history_data.get('available'):
+        dates = vrp_history_data['dates']
+        vrp_series = [
+            charts.line("VRP Spread (IV30 - RV21)", dates, vrp_history_data['vrp_series'], '#10b981', width=2.0),
+            charts.line("90th Percentile", dates, [vrp_history_data['p90']] * len(dates), '#f43f5e', dash=True, width=1.0),
+            charts.line("Median", dates, [vrp_history_data['median']] * len(dates), '#71717a', dash=True, width=1.2),
+            charts.line("10th Percentile", dates, [vrp_history_data['p10']] * len(dates), '#3b82f6', dash=True, width=1.0),
+        ]
+        opt_charts['vrp_history'] = charts.render_chart(
+            charts.cartesian(vrp_series, xtype='time', yname='VRP Spread (%)', refs=[charts.reference('y', 0, 'Zero VRP', '#71717a')]),
+            height=260
+        )
+
+    return {
+        'term_structure': term_structure_data,
+        'density': density_data,
+        'earnings_implied': earnings_implied_data,
+        'vrp_history': vrp_history_data,
+        'charts': opt_charts,
+    }
+
+
+def _attach_options(ticker, data, price_df, status):
+    """IV smile, GEX, ML signal, institutional suite, factors, options-implied, signal_lab; returns panel receipts."""
+    data['charts']['options_smile'] = _guard_section(
+        "options_smile", lambda: get_options_smile(ticker, data['current_price']),
+        timeout=SECTION_TIMEOUT_S, status=status)
+    _attach_gex(ticker, data, status)
+    data['ml'] = _guard_section("ml", lambda: ml.predict(ticker),
+                                timeout=SECTION_TIMEOUT_S, status=status)
+    data['charts']['ml_reliability'] = _guard_section(
+        "ml_reliability", lambda: get_ml_reliability_chart(),
+        timeout=SECTION_TIMEOUT_S, status=status)
+    # The suite fans out to SEC, FRED, short-interest and chain providers, so it gets 3x the budget.
+    data['institutional'] = _guard_section(
+        "institutional", lambda: _build_institutional(ticker, data, price_df),
+        timeout=SECTION_TIMEOUT_S * 3, status=status)
+
+    # Factor decomposition (FF5 + momentum) and beta hygiene
+    data['factors'] = _guard_section("factors", lambda: _build_factor_block(ticker),
+                                     timeout=SECTION_TIMEOUT_S, status=status)
+    data['charts']['rolling_beta'] = _guard_section(
+        "rolling_beta",
+        lambda: _rolling_beta_chart((data.get('factors') or {}).get('rolling_beta')),
+        timeout=SECTION_TIMEOUT_S, status=status)
+
+    # Options-Implied Institutional Suite
+    data['options_implied'] = _guard_section(
+        "options_implied", lambda: _build_options_implied(ticker, data, price_df),
+        timeout=SECTION_TIMEOUT_S * 2, status=status)
+
+    # Signal Lab Cross-Sectional Signals
+    try:
+        import signal_lab
+        data['signals_lab'] = {
+            "signals": signal_lab.get_ticker_signal_ranks(ticker),
+            "validation_gates": signal_lab.VALIDATION_GATES,
+            "survivorship_caveat": signal_lab.SURVIVORSHIP_CAVEAT,
         }
     except Exception as e:
-        print(f"Error computing options implied suite for {ticker}: {e}")
-        data['options_implied'] = None
+        print(f"Error building signals_lab for {ticker}: {e}")
+        data['signals_lab'] = None
 
-    # AI analyst report — reads everything above, including the ML signal
-    ai_report_html = ai.generate_report(ticker, data)
-    data['ai_report'] = ai_report_html
-    if ai_report_html:
-        data['ai_sections'] = ai.parse_html_sections(ai_report_html)
-    else:
-        data['ai_sections'] = None
+    inst = data['institutional'] or {}
+    macro = inst.get('macro_conditioning') or {}
+    assumed = (inst.get('microstructure') or {}).get('squeeze_inputs_assumed') or []
+    rcpt = analytics_receipts.receipt
+    return [
+        rcpt("options_chain", ticker, present=bool(data['charts'].get('options_smile') or data['gex'])),
+        rcpt("ml", ticker, present=bool(data['ml'])),
+        rcpt("macro", ticker, present=macro.get('fed_funds_rate') is not None),
+        rcpt("short_interest", ticker, present=bool(inst), assumed=assumed),
+    ]
 
-    return render_template('analytics.html', data=data, ticker=ticker)
+
+def _full_ai_data(ticker):
+    """Everything ai._context reads. Runs inside the background report job."""
+    data = compute_analytics(ticker)
+    if data is None:
+        raise RuntimeError(f"no price data for {ticker}")
+    status = {}
+    _attach_company(ticker, data, get_or_fetch_prices(ticker), status)
+    _attach_options(ticker, data, get_or_fetch_prices(ticker), status)
+    return data
+
+
+@app.route('/analytics')
+def analytics_page():
+    """Cache-first core; slow sections load as fragments (/analytics/fragment/*)."""
+    ticker = request.args.get('ticker', '').strip().upper()
+    if not ticker:
+        return render_template('analytics.html', data=None, ticker='')
+    data = compute_analytics(ticker)
+    if data is None:
+        return render_template('analytics.html', data=None, ticker=ticker,
+                               error=f"Could not retrieve data for {ticker}")
+
+    price_df = get_or_fetch_prices(ticker)
+    prices_receipt = None
+    if price_df is not None:
+        data['charts']['cumulative_return'] = _guard_section(
+            "cumulative_return", lambda: get_cumulative_return_chart(ticker, price_df),
+            timeout=SECTION_TIMEOUT_S)
+        prices_receipt = analytics_receipts.receipt("prices", ticker, present=True, as_of=price_df.index[-1])
+    return render_template('analytics.html', data=data, ticker=ticker, lazy=True,
+                           trade_type=_trade_type_arg(), prices_receipt=prices_receipt)
+
+
+@app.route('/analytics/fragment/<name>')
+def analytics_fragment(name):
+    """One slow /analytics section as an HTML fragment. Always 200 with
+    per-section error notes; 404 for an unknown fragment or ticker without prices."""
+    ticker = request.args.get('ticker', '').strip().upper()
+    if name not in ('checklist', 'company', 'options', 'ai') or not ticker:
+        abort(404)
+    data, price_df = _fragment_base(ticker)
+    if data is None:
+        abort(404)
+    status, receipts = {}, []
+
+    if name == 'ai':
+        report = ai.report_status(ticker, lambda: _full_ai_data(ticker))
+        if report['state'] == 'unconfigured':
+            return ''
+        if report['state'] == 'ready':
+            report['sections'] = ai.parse_html_sections(report['html'])
+            report['receipt'] = analytics_receipts.receipt(
+                "ai", ticker, present=True, as_of=report['generated_at'])
+        return render_template('_analytics_ai.html', ai=report)
+
+    if name == 'checklist':
+        data['fundamentals'] = _guard_section("fundamentals", lambda: get_fundamentals(ticker),
+                                              timeout=SECTION_TIMEOUT_S, status=status)
+        _attach_gex(ticker, data, status)
+        trade_type = _trade_type_arg()
+        checklist = _guard_section("checklist", lambda: decide.build_checklist(ticker, data, trade_type),
+                                   timeout=SECTION_TIMEOUT_S, status=status)
+        body = render_template('_checklist.html', checklist=checklist)
+        failed = {k: v for k, v in status.items() if v != 'ok'}
+        return body + render_template('_analytics_receipts.html', receipts=[], status=failed)
+
+    attach = _attach_company if name == 'company' else _attach_options
+    receipts = attach(ticker, data, price_df, status)
+    return render_template(f'_analytics_{name}.html', data=data, ticker=ticker,
+                           receipts=receipts, status=status)
 
 
 @app.route('/api/checklist/<ticker>')

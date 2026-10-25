@@ -108,6 +108,20 @@ def cache_get_with_age(provider: str, key: str, ttl_hours: float):
         return None, None
 
 
+def cache_fetched_at(provider: str, key: str, prefix: bool = False):
+    """ISO fetched_at of a cached row regardless of TTL (None when absent).
+
+    prefix=True takes the newest row whose key starts with `key`. Lets a panel
+    report the age of stale-served data that cache_get would have hidden."""
+    where = "substr(key, 1, length(?)) = ?" if prefix else "key = ?"
+    args = (provider, key, key) if prefix else (provider, key)
+    with get_conn() as conn:
+        row = conn.execute(
+            f"SELECT MAX(fetched_at) AS t FROM api_cache WHERE provider = ? AND {where}", args
+        ).fetchone()
+    return row["t"] if row else None
+
+
 def cache_set(provider: str, key: str, payload):
     """Store a JSON-serialisable payload under (provider, key)."""
     with get_conn() as conn:

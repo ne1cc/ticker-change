@@ -97,7 +97,7 @@ def test_analytics_page_carries_factor_section(monkeypatch):
          patch.object(app_module, "get_gex_profile", return_value=None), \
          patch.object(app_module.ai, "generate_report", return_value=None), \
          patch.object(app_module.providers, "get_short_interest", return_value=None):
-        html = app_module.app.test_client().get("/analytics?ticker=TEST").get_data(as_text=True)
+        html = app_module.app.test_client().get("/analytics/fragment/options?ticker=TEST").get_data(as_text=True)
     assert "Factor Exposure & Residual Alpha" in html
     assert "Rolling 1y beta" in html  # CI-band chart mounted
     assert "insufficient" not in html.split("Factor Exposure")[1][:200]
