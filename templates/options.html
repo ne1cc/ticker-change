@@ -1105,14 +1105,12 @@
   }
 
   // Deep link: /options?tab=chain lands straight on the option chain tab.
-  // No nav pill points here anymore (Options Chain is just tab 0 of this
-  // page now), but the URL stays supported for anyone with it bookmarked.
-  // The chain is also the default tab: plain /options opens on it, and any
-  // unrecognized ?tab= value falls back to it too. This also kicks off the
-  // chain's first data load (switchTab loads it on first visit).
+  // Options navigation links use `tab=chain` and `tab=gex` to expose both views.
+  // Plain /options and unrecognized tab values continue to open the chain.
+  // This also kicks off the chain's first data load when that view is selected.
   (function applyTabFromQuery() {
     const requested = new URLSearchParams(window.location.search).get('tab');
-    switchTab(requested === 'ai' ? 'ai' : 'chain');
+    switchTab(requested === 'ai' ? 'ai' : requested === 'gex' ? 'gex' : 'chain');
   })();
 
   function switchConvention(convention) {

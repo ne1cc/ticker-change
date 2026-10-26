@@ -226,7 +226,7 @@
             <div class="hidden 2xl:flex items-center gap-4 lg:gap-5">
               <a id="nav-brief" href="/" class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-semibold border-b-2 border-transparent pb-0.5">Brief</a>
               <a id="nav-markets" href="/stock" class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Markets</a>
-              <a id="nav-options" href="/options" class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Options</a>
+              <a id="nav-options" href="/options?tab=gex" class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Options</a>
               <a id="nav-analytics" href="/analytics" class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Analytics</a>
               <a id="nav-strategies" href="/strategies" class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Strategies</a>
               <a id="nav-radar" href="/radar" class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors font-medium border-b-2 border-transparent pb-0.5">Radar</a>
@@ -305,8 +305,9 @@
           </div>
           <div>
             <div class="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 px-2 mb-1">Options</div>
-            <div class="grid grid-cols-1 gap-1.5">
-              <a id="mobile-nav-options" href="/options" class="mobile-nav-link">Options Terminal</a>
+            <div class="grid grid-cols-2 gap-1.5">
+              <a id="mobile-nav-options" href="/options?tab=gex" class="mobile-nav-link">Options Terminal</a>
+              <a id="mobile-nav-chain" href="/options?tab=chain" class="mobile-nav-link">Options Chain</a>
             </div>
           </div>
           <div>
@@ -354,6 +355,8 @@
           <a id="sub-link-news" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">News</a>
           <a id="sub-link-live" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Live Microstructure</a>
           <a id="sub-link-heatmap" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Heatmap</a>
+          <a id="sub-link-options" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Options Terminal</a>
+          <a id="sub-link-chain" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Options Chain</a>
           <a id="sub-link-analytics" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Risk Analytics</a>
           <a id="sub-link-positioning" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Market Positioning</a>
           <a id="sub-link-strategies" href="#" class="sub-nav-pill text-xs font-semibold px-3 py-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">Strategy Backtests</a>
@@ -464,7 +467,7 @@
       (function () {
         const PILLARS = {
           markets:    { id: 'nav-markets', defaultRoute: '/stock', children: ['stock', 'news', 'live', 'heatmap'] },
-          options:    { id: 'nav-options', defaultRoute: '/options', children: [] },
+          options:    { id: 'nav-options', defaultRoute: '/options?tab=gex', children: ['options', 'chain'] },
           analytics:  { id: 'nav-analytics', defaultRoute: '/analytics', children: ['analytics', 'positioning'] },
           strategies: { id: 'nav-strategies', defaultRoute: '/strategies', children: ['strategies', 'ai-summary'] },
           radar:      { id: 'nav-radar', defaultRoute: '/radar', children: ['radar'] }
@@ -476,7 +479,7 @@
           '/news':        { pillar: 'markets', sub: 'news' },
           '/live':        { pillar: 'markets', sub: 'live' },
           '/heatmap':     { pillar: 'markets', sub: 'heatmap' },
-          '/options':     { pillar: 'options', sub: 'options' },
+          '/options':     { pillar: 'options', sub: new URLSearchParams(window.location.search).get('tab') === 'chain' ? 'chain' : 'options' },
           '/analytics':   { pillar: 'analytics', sub: 'analytics' },
           '/positioning': { pillar: 'analytics', sub: 'positioning' },
           '/strategies':  { pillar: 'strategies', sub: 'strategies' },
@@ -599,7 +602,8 @@
           news:        '/news',
           live:        '/live',
           heatmap:     '/heatmap',
-          options:     '/options',
+          options:     '/options?tab=gex',
+          chain:       '/options?tab=chain',
           analytics:   '/analytics',
           positioning: '/positioning',
           strategies:  '/strategies',

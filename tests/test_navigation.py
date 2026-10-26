@@ -243,12 +243,8 @@ class TestNavigation(unittest.TestCase):
                 f"Missing ticker sub-navbar element: {sub_id}",
             )
 
-        # Options has no sub-nav pills: with the pillar collapsed to a single
-        # child (Options Terminal, no separate Options Chain peer), a pill
-        # that just points back to the page you're already on is dead
-        # weight -- dropped entirely instead of shown as an inert pill.
-        self.assertNotIn('id="sub-link-options"', html)
-        self.assertNotIn('id="sub-link-chain"', html)
+        self.assertIn('id="sub-link-options"', html)
+        self.assertIn('id="sub-link-chain"', html)
 
         # Markets ordering: Heatmap sits to the right of Live Microstructure.
         pos_live = html.find('id="sub-link-live"')
@@ -284,9 +280,8 @@ class TestNavigation(unittest.TestCase):
                 f"Missing mobile navigation element: {m_id}",
             )
 
-        # "Options Chain" is no longer a distinct mobile nav destination --
-        # it's tab 0 of the Options Terminal page, not a peer of it.
-        self.assertNotIn('id="mobile-nav-chain"', html)
+        self.assertIn('id="mobile-nav-chain" href="/options?tab=chain"', html)
+        self.assertIn('id="mobile-nav-options" href="/options?tab=gex"', html)
 
     def test_analytics_view_structure_and_ticker_preservation(self):
         """Verify that /analytics?ticker=AAPL renders proper structure, retains ticker, and includes nav elements."""
