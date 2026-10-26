@@ -409,6 +409,73 @@ def test_hv_null_when_history_too_short(monkeypatch, analysis, rows, hv30_set, h
     assert (result['hv90'] is not None) == hv90_set
 
 
+def _vrp_30d(spread, expiration):
+    return {'atm_implied_vol': 24.3, 'realized_vol': round(24.3 - spread, 2),
+            'vrp_spread_pct': spread, 'vrp_ratio': 1.23,
+            'regime': 'NORMAL_PREMIUM (Moderate Variance Spread)',
+            'expiration': expiration, 'dte': 30, 'strike': 100.0}
+
+
+def _banner(monkeypatch, analysis, vrp_30d, earnings_history, iv_rank=None):
+    """Pin price history, the VRP lookup, the earnings lookup and IV rank; run the banner."""
+    prices = pd.DataFrame({'close': 100 + np.sin(np.arange(40))})
+    monkeypatch.setattr(app_module, 'get_or_fetch_prices', lambda symbol: prices)
+    if vrp_30d is None:
+        monkeypatch.setattr(app_module, 'get_atm_contract', lambda *args: None)
+    else:
+        monkeypatch.setattr(app_module, 'get_atm_contract', lambda *args: {
+            'expiration': vrp_30d['expiration'], 'dte': vrp_30d['dte'],
+            'strike': vrp_30d['strike'], 'iv': 0.243})
+        monkeypatch.setattr(app_module, '_atm_derivatives', lambda atm, df, t='': {'vrp': vrp_30d})
+    monkeypatch.setattr(app_module, 'compute_iv_rank_and_percentile',
+                        lambda *args, **kwargs: {'iv_rank': iv_rank, 'iv_percentile': iv_rank,
+                                                 'status': 'ok' if iv_rank is not None else 'insufficient'})
+    monkeypatch.setattr(app_module.earnings, 'get_earnings_history', earnings_history)
+    return analysis()
+
+
+def test_sell_verdict_compares_documented_30d_vrp(monkeypatch, analysis):
+    vrp = _vrp_30d(4.5, (datetime.now() + timedelta(days=45)).strftime('%Y-%m-%d'))
+    result = _banner(monkeypatch, analysis, vrp, lambda ticker: [])
+    assert result['vrp_30d']['vrp_spread_pct'] == 4.5
+    assert result['selling_environment'] is True
+    assert result['strategy_recommendation'].startswith('Sell Premium')
+    assert '30-day IV' in result['strategy_rationale']
+
+
+def test_earnings_inside_horizon_blocks_sell_verdict(monkeypatch, analysis):
+    soon = (datetime.now() + timedelta(days=10)).strftime('%Y-%m-%d')
+    vrp = _vrp_30d(4.5, (datetime.now() + timedelta(days=45)).strftime('%Y-%m-%d'))
+    result = _banner(monkeypatch, analysis, vrp,
+                     lambda ticker: [{'date': soon, 'is_upcoming': True}], iv_rank=80)
+    assert result['strategy_recommendation'] == f'No premium-selling verdict: earnings {soon}'
+    assert 'event' in result['strategy_rationale']
+
+
+def test_earnings_after_horizon_allows_sell_verdict(monkeypatch, analysis):
+    far = (datetime.now() + timedelta(days=90)).strftime('%Y-%m-%d')
+    vrp = _vrp_30d(4.5, (datetime.now() + timedelta(days=45)).strftime('%Y-%m-%d'))
+    result = _banner(monkeypatch, analysis, vrp,
+                     lambda ticker: [{'date': far, 'is_upcoming': True}], iv_rank=None)
+    assert result['strategy_recommendation'].startswith('Sell Premium')
+
+
+def test_failing_earnings_lookup_appends_unknown_note(monkeypatch, analysis):
+    def boom(ticker):
+        raise RuntimeError('yfinance down')
+    vrp = _vrp_30d(4.5, (datetime.now() + timedelta(days=45)).strftime('%Y-%m-%d'))
+    result = _banner(monkeypatch, analysis, vrp, boom)
+    assert result['strategy_recommendation'].startswith('Sell Premium')
+    assert result['strategy_rationale'].endswith('(earnings date unknown)')
+
+
+def test_missing_atm_contract_nulls_vrp_and_sell_verdict(monkeypatch, analysis):
+    result = _banner(monkeypatch, analysis, None, lambda ticker: [])
+    assert result['vrp_30d'] is None
+    assert result['selling_environment'] is None
+    assert 'unavailable' in result['strategy_rationale'].lower()
+
+
 def test_gex_stats_match_real_terminal_on_synthetic_chain(monkeypatch, analysis):
     from options import compute_options_terminal
     chain = pd.DataFrame([
