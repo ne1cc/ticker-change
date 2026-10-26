@@ -194,3 +194,138 @@ def test_openai_compatible_retries_on_transient_error(monkeypatch):
     res = ai._openai_compatible_report("https://fake", "key", "model", "msg", max_retries=2)
     assert res == "Generated report text"
     assert call_count == 2
+
+
+# --- Truncation at the output cap is a failure, never a cached report (#194) ---
+
+FALLBACK_REPORT = "### 1. Options Market Regime & Volatility Analysis\n\n- **IV Rank:** 10.0"
+
+
+def _fake_anthropic_client(monkeypatch, stop_reason, sent):
+    import sys
+    from types import SimpleNamespace
+
+    msg = SimpleNamespace(
+        stop_reason=stop_reason,
+        content=[SimpleNamespace(type="text", text=FALLBACK_REPORT)],
+    )
+
+    class _Stream:
+        def __enter__(self):
+            return SimpleNamespace(get_final_message=lambda: msg)
+
+        def __exit__(self, *exc):
+            return False
+
+    def stream(**kwargs):
+        sent.update(kwargs)
+        return _Stream()
+
+    client = SimpleNamespace(messages=SimpleNamespace(stream=stream))
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=lambda **kw: client))
+
+
+def test_anthropic_max_tokens_stop_is_a_failure(monkeypatch):
+    import ai
+
+    sent = {}
+    _fake_anthropic_client(monkeypatch, "max_tokens", sent)
+    with pytest.raises(Exception, match="truncated"):
+        ai._anthropic_report("k", "claude-x", "msg")
+    assert sent["max_tokens"] == 16000
+
+
+def test_anthropic_end_turn_is_returned(monkeypatch):
+    import ai
+
+    _fake_anthropic_client(monkeypatch, "end_turn", {})
+    assert ai._anthropic_report("k", "claude-x", "msg") == FALLBACK_REPORT
+
+
+def _post_returning(finish_reason, sent):
+    from unittest.mock import MagicMock
+
+    def post(url, **kwargs):
+        sent.update(kwargs["json"])
+        resp = MagicMock(status_code=200)
+        choice = {"message": {"content": FALLBACK_REPORT}}
+        if finish_reason is not None:
+            choice["finish_reason"] = finish_reason
+        resp.json.return_value = {"choices": [choice]}
+        return resp
+
+    return post
+
+
+def test_openai_length_finish_is_a_failure(monkeypatch):
+    import ai
+
+    sent = {}
+    monkeypatch.setattr(ai.requests, "post", _post_returning("length", sent))
+    with pytest.raises(Exception, match="truncated"):
+        ai._openai_compatible_report("https://x", "k", "m", "msg")
+    assert sent["max_tokens"] == 16000
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", None])
+def test_openai_missing_or_normal_finish_is_not_truncation(monkeypatch, finish_reason):
+    import ai
+
+    monkeypatch.setattr(ai.requests, "post", _post_returning(finish_reason, {}))
+    assert ai._openai_compatible_report("https://x", "k", "m", "msg") == FALLBACK_REPORT
+
+
+def _options_providers(primary_model, fallback_model):
+    return [{
+        "id": "openrouter",
+        "label": "OpenRouter",
+        "base_url": "https://example.com",
+        "key": "test_key",
+        "model": primary_model,
+        "fallback_models": (fallback_model,),
+    }]
+
+
+def test_generate_options_report_truncated_primary_caches_fallback_report(monkeypatch):
+    import ai
+
+    models_called = []
+
+    def mock_openai_report(base_url, key, model, user_msg, system, **kwargs):
+        models_called.append(model)
+        if model == "big":
+            raise Exception("response truncated at the output token cap (finish_reason=length)")
+        return FALLBACK_REPORT
+
+    cache_set_calls = []
+    monkeypatch.setattr(ai.db, "cache_get", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ai.db, "cache_set", lambda *args, **kwargs: cache_set_calls.append(args))
+    monkeypatch.setattr(ai, "_openai_compatible_report", mock_openai_report)
+    monkeypatch.setattr(ai.providers, "ai_providers", lambda: _options_providers("big", "small"))
+
+    html, err = ai.generate_options_report("AAPL", {"selected_expiration": "2026-11-13"}, force=True)
+    assert err is None
+    assert html is not None
+    assert models_called == ["big", "small"]
+    assert len(cache_set_calls) == 1
+    table, cache_key, payload = cache_set_calls[0]
+    assert table == "ai_options_report"
+    assert payload["markdown"] == FALLBACK_REPORT
+
+
+def test_generate_options_report_all_truncated_returns_error_without_caching(monkeypatch):
+    import ai
+
+    def mock_openai_report(base_url, key, model, user_msg, system, **kwargs):
+        raise Exception("response truncated at the output token cap (finish_reason=length)")
+
+    cache_set_calls = []
+    monkeypatch.setattr(ai.db, "cache_get", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ai.db, "cache_set", lambda *args, **kwargs: cache_set_calls.append(1))
+    monkeypatch.setattr(ai, "_openai_compatible_report", mock_openai_report)
+    monkeypatch.setattr(ai.providers, "ai_providers", lambda: _options_providers("big", "small"))
+
+    html, err = ai.generate_options_report("AAPL", {"selected_expiration": "2026-11-13"}, force=True)
+    assert html is None
+    assert "truncated" in err
+    assert cache_set_calls == []

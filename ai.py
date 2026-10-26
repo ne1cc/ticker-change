@@ -27,6 +27,9 @@ import providers
 
 CACHE_TTL_HOURS = 12
 HTTP_TIMEOUT = 90
+# Output cap shared by every provider call. Adaptive/provider-side reasoning is
+# billed against it, so it must leave room for a full report after thinking.
+MAX_OUTPUT_TOKENS = 16000
 
 SYSTEM = """You are a seasoned sell-side equity research analyst writing a concise \
 desk note for an experienced investor. You are given a structured snapshot of one \
@@ -283,7 +286,7 @@ def _anthropic_report(key: str, model: str, user_msg: str, system_prompt: str = 
     # longer reports; adaptive thinking lets Claude reason over the numbers.
     with client.messages.stream(
         model=model,
-        max_tokens=4000,
+        max_tokens=MAX_OUTPUT_TOKENS,
         thinking={"type": "adaptive"},
         system=[{
             "type": "text",
@@ -295,6 +298,9 @@ def _anthropic_report(key: str, model: str, user_msg: str, system_prompt: str = 
         msg = stream.get_final_message()
     if getattr(msg, "stop_reason", None) == "refusal":
         return None
+    if getattr(msg, "stop_reason", None) == "max_tokens":
+        # A cut-off report must fall through to the next model and never be cached.
+        raise Exception("response truncated at the output token cap (stop_reason=max_tokens)")
     text = "".join(b.text for b in msg.content if b.type == "text").strip()
     return text or None
 
@@ -321,7 +327,7 @@ def _openai_compatible_report(base_url: str, key: str, model: str, user_msg: str
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_msg},
                     ],
-                    "max_tokens": 4000,
+                    "max_tokens": MAX_OUTPUT_TOKENS,
                     "temperature": 0.4,
                 },
                 timeout=timeout,
@@ -335,6 +341,8 @@ def _openai_compatible_report(base_url: str, key: str, model: str, user_msg: str
             choices = (resp.json() or {}).get("choices") or []
             if not choices:
                 raise Exception(f"No choices returned by model API. Response: {resp.text[:300]}")
+            if choices[0].get("finish_reason") == "length":
+                raise Exception("response truncated at the output token cap (finish_reason=length)")
             content = (choices[0].get("message") or {}).get("content")
             if not content:
                 raise Exception(f"Model returned empty content choice. Response: {resp.text[:300]}")
