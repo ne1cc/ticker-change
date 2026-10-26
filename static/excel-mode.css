@@ -98,6 +98,13 @@ html.excel nav a#nav-settings.border-amber-500 {
   border-color: #ffffff !important;
 }
 
+/* Mobile menu links get a light fill when highlighted (active = amber tint,
+   hover = zinc tint) — the green-chrome white type is unreadable on it. */
+html.excel nav #mobile-nav-menu a:hover,
+html.excel nav #mobile-nav-menu a.bg-amber-500\/10 {
+  color: var(--xl-ink) !important;
+}
+
 /* ---- Ticker sub-nav -> workbook sheet-tab strip ---- */
 html.excel #ticker-sub-nav {
   background-color: #dce3ea !important;
