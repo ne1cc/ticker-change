@@ -596,7 +596,7 @@ Format your response in GitHub-Flavoured Markdown. Use the following structured 
 ### 5. Caveats & Data Limits
 State these limits explicitly, briefly:
 - Chain snapshot vintage (`vintage`) and quote delay: quotes can be stale or delayed.
-- Greeks are Black-Scholes with no dividends; early exercise and rates effects are ignored.
+- Greeks are Black-Scholes with no dividends; early exercise is ignored.
 - Dealer GEX follows a naive dealer positioning convention; it is an approximation, not a census.
 - `gex_stats` spans up to 8 listed expiries while `chain_digest` covers only the selected expiry — do not attribute whole-chain walls to this expiry's quotes.
 - IV rank is computed against front-expiry ATM IV history, which may differ from the selected expiry.
@@ -628,16 +628,16 @@ def generate_options_report(ticker: str, data: dict, force: bool = False) -> tup
 
     exp = data.get("selected_expiration", "default")
     cache_key = _options_cache_key(ticker, exp, data.get("rf_rate", 0.045))
+    # 1. Valid cache → rebuild HTML while preserving the complete stored report.
     if not force:
         cached = db.cache_get("ai_options_report", cache_key, CACHE_TTL_HOURS)
         if isinstance(cached, dict) and cached.get("markdown"):
             return {
+                **cached,
                 "html": _to_html(_preprocess_options_markdown(cached["markdown"])),
-                "generated_at": cached.get("generated_at"),
-                "vintage": cached.get("vintage"),
-                "payload": cached.get("payload"),
             }, None
 
+    # 2. Cache miss or force → generate and store the same six-field report.
     user_msg = (
         f"Write the options strategy analysis report for {ticker} from this option chain dataset:\n\n"
         f"{json.dumps(data, separators=(',', ':'), default=str)}"

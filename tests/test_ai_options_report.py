@@ -97,6 +97,7 @@ def test_preprocess_preserves_already_formatted_markdown():
 
 
 def test_generate_options_report_with_cached_markdown(monkeypatch):
+    """Cached Markdown renders correctly and retains every stored report field."""
     import db
     import ai
 
@@ -119,8 +120,43 @@ def test_generate_options_report_with_cached_markdown(monkeypatch):
     html = report["html"]
     assert "<h3>1. Options Market Regime &amp; Volatility Analysis</h3>" in html
     assert "<strong>Volatility Risk Premium (VRP):</strong>" in html
+    assert report["markdown"] == SAMPLE_RAW_REPORT
+    assert report["provider"] == "mock"
+    assert report["generated_at"] == "2026-10-24T15:00:00"
     assert report["payload"] == {"spot": 100.0}
     assert report["vintage"] == "2026-10-23T16:14:00+00:00"
+
+
+def test_generate_options_report_cache_round_trip_preserves_full_report(monkeypatch):
+    """Require identical six-field reports on fresh/cache paths and four API fields offline."""
+    import ai
+    from unittest.mock import Mock
+
+    # 1. Isolate the cache and provider so the round trip cannot touch the network.
+    cache = {}
+    generate = Mock(return_value=(FALLBACK_REPORT, []))
+    monkeypatch.setattr(ai.providers, "ai_providers", lambda: [{"id": "mock"}])
+    monkeypatch.setattr(ai, "_generate_report_from_provider", generate)
+    monkeypatch.setattr(ai.db, "cache_get", lambda table, key, ttl: cache.get((table, key)))
+    monkeypatch.setattr(ai.db, "cache_set",
+                        lambda table, key, report: cache.update({(table, key): dict(report)}))
+    payload = {"selected_expiration": "2026-11-20", "rf_rate": 0.05,
+               "spot": 100.0, "vintage": "unknown"}
+
+    # 2. A cache hit must rebuild stale HTML without discarding the stored report fields.
+    fresh_report, error = ai.generate_options_report("SPY", payload)
+    assert error is None
+    assert set(fresh_report) == {"html", "markdown", "provider", "generated_at", "vintage", "payload"}
+    cache[("ai_options_report", "options_report:v2:SPY:2026-11-20:0.05")]["html"] = "<p>stale rendering</p>"
+    cached_report, error = ai.generate_options_report("SPY", payload)
+    assert error is None
+    assert cached_report == fresh_report
+    generate.assert_called_once()
+
+    # 3. Only the route's dedicated cache reader projects the four public API fields.
+    api_report = ai.cached_options_report("SPY", "2026-11-20", 0.05)
+    api_fields = {"html", "generated_at", "vintage", "payload"}
+    assert api_report == {key: fresh_report[key] for key in api_fields}
 
 
 def _stub_report_flow(monkeypatch, expirations=("2026-11-20", "2026-12-18")):
@@ -271,6 +307,14 @@ def test_options_system_has_no_generic_anchors():
     assert "40-45 delta" not in ai.OPTIONS_SYSTEM
     assert "50% max profit" not in ai.OPTIONS_SYSTEM
 
+
+def test_options_system_greeks_caveats_match_model_limits():
+    """Keep dividend/early-exercise limits without claiming rates are ignored."""
+    import ai
+
+    assert "Black-Scholes with no dividends" in ai.OPTIONS_SYSTEM
+    assert "early exercise is ignored" in ai.OPTIONS_SYSTEM
+    assert "rates effects are ignored" not in ai.OPTIONS_SYSTEM
 
 
 def test_generate_options_report_falls_back_to_secondary_model_on_503(monkeypatch):
