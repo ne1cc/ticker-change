@@ -933,6 +933,21 @@ def get_openapi_spec() -> Dict[str, Any]:
                         "vol_pcr": {"type": "number", "example": 0.85},
                         "oi_pcr": {"type": "number", "example": 0.92},
                         "max_pain": {"type": "number", "example": 220.0},
+                        "vrp_30d": {
+                            "type": "object",
+                            "nullable": True,
+                            "description": "Documented 30-day volatility risk premium (glossary `vrp`): IV of the expiry nearest 30 days' ATM contract minus 21-session Yang-Zhang realized vol, all in percent. Null when no usable contract or history.",
+                            "properties": {
+                                "atm_implied_vol": {"type": "number", "example": 24.3},
+                                "realized_vol": {"type": "number", "example": 19.8},
+                                "vrp_spread_pct": {"type": "number", "example": 4.5},
+                                "vrp_ratio": {"type": "number", "example": 1.23},
+                                "regime": {"type": "string", "example": "NORMAL_PREMIUM (Moderate Variance Spread)"},
+                                "expiration": {"type": "string", "format": "date", "example": "2026-11-20"},
+                                "dte": {"type": "integer", "example": 30},
+                                "strike": {"type": "number", "example": 225.0}
+                            }
+                        },
                         "strategy_recommendation": {"type": "string", "example": "Sell Premium (Strangle / Iron Condor)"},
                         "strategy_rationale": {"type": "string"}
                     }

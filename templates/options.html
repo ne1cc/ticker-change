@@ -830,7 +830,7 @@
               <span id="opt-ai-hv90" class="font-mono font-semibold">--%</span>
             </div>
             <div class="flex justify-between items-center text-xs py-2">
-              <span class="text-zinc-400">Volatility Risk Premium (VRP)</span>
+              <span class="text-zinc-400">VRP (30-day IV − 21d realized)</span>
               <span id="opt-ai-vrp" class="font-mono font-semibold">--</span>
             </div>
           </div>
@@ -926,7 +926,7 @@
             </svg>
           </div>
           <div>
-            <span class="text-[10px] font-bold text-amber-500 uppercase tracking-wider block">Quantitative Options Posture</span>
+            <span class="text-[10px] font-bold text-amber-500 uppercase tracking-wider block">Heuristic posture (30-day VRP, IV rank, earnings)</span>
             <h4 id="opt-ai-strategy-rec" class="text-sm font-bold text-zinc-900 dark:text-zinc-50 mt-0.5">Calculating...</h4>
             <p id="opt-ai-strategy-rationale" class="text-xs text-zinc-550 dark:text-zinc-400 mt-1.5 leading-relaxed">Gathering option chain dynamics to formulate optimal trade structures...</p>
           </div>
@@ -1792,8 +1792,8 @@
       document.getElementById('opt-ai-iv-rank').innerText = fmt(optionsAnalysisData.iv_rank, 1, '', '%');
       document.getElementById('opt-ai-iv-pct').innerText = fmt(optionsAnalysisData.iv_percentile, 1, '', '%');
 
-      const vrp = Number.isFinite(optionsAnalysisData.atm_iv) && Number.isFinite(optionsAnalysisData.hv30)
-        ? optionsAnalysisData.atm_iv - optionsAnalysisData.hv30 : null;
+      const vrp = optionsAnalysisData.vrp_30d && Number.isFinite(optionsAnalysisData.vrp_30d.vrp_spread_pct)
+        ? optionsAnalysisData.vrp_30d.vrp_spread_pct : null;
       document.getElementById('opt-ai-vrp').innerText = vrp === null ? 'N/A'
         : `${vrp >= 0 ? '+' : ''}${vrp.toFixed(1)}% (${vrp >= 0 ? 'Rich Premium' : 'Discounted'})`;
       document.getElementById('opt-ai-vrp').className = `font-mono font-semibold ${vrp === null ? 'text-zinc-500' : vrp >= 0 ? 'text-emerald-500' : 'text-rose-500'}`;

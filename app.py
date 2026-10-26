@@ -4531,6 +4531,19 @@ def _terminal_gex_stats(ticker):
     }
 
 
+def _vrp_30d_block(ticker, spot, price_df):
+    """The glossary's documented 30-day VRP for the AI tab: nearest-30d ATM
+    contract IV minus 21-session Yang-Zhang realized vol, plus the contract's
+    expiration/dte/strike. None when either helper returns None.
+    """
+    atm = get_atm_contract(ticker, spot)
+    block = _atm_derivatives(atm, price_df, ticker)
+    if not atm or not block:
+        return None
+    return {**block['vrp'], 'expiration': atm['expiration'],
+            'dte': atm['dte'], 'strike': atm['strike']}
+
+
 def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
     """Compile options statistics and quantitative posture metrics."""
     try:
@@ -4616,8 +4629,21 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
         # GEX stats
         gex_stats = _guard_section('options-analysis gex', lambda: _terminal_gex_stats(ticker))
         
-        # Strategy recommendations
-        selling_environment = atm_iv > hv30 if atm_iv is not None and hv30 is not None else None
+        # Strategy recommendations. The verdict compares matching horizons: the
+        # glossary's 30-day VRP (`vrp_30d`), not the selected expiry's front IV.
+        # Each lookup is guarded on its own; a failure only nulls its own input.
+        vrp_30d = _guard_section('options-analysis vrp-30d',
+                                 lambda: _vrp_30d_block(ticker, spot_price, df))
+        earnings_failed = False
+        try:
+            upcoming = [e['date'] for e in (earnings.get_earnings_history(ticker) or [])
+                        if e.get('is_upcoming') and e.get('date')]
+            next_earnings = upcoming[0] if upcoming else None
+        except Exception as e:
+            print(f"[options-analysis] earnings lookup failed for {ticker}: {e}")
+            next_earnings, earnings_failed = None, True
+
+        selling_environment = vrp_30d['vrp_spread_pct'] > 0 if vrp_30d else None
         strategy_recommendation = ""
         strategy_rationale = ""
         if atm_iv is None:
@@ -4626,16 +4652,34 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
         elif df is None or df.empty or len(df) <= 30:
             strategy_recommendation = 'Insufficient volatility history'
             strategy_rationale = 'Realized volatility history is unavailable. Premium pricing cannot be compared.'
-        elif iv_rank is not None and iv_rank > 50:
-            strategy_recommendation = "Sell Premium (Strangle / Iron Condor)"
-            strategy_rationale = f"IV Rank is high ({iv_rank:.1f}%), meaning implied volatility is elevated relative to history. Selling premium takes advantage of the volatility risk premium (VRP) contraction."
-        elif selling_environment:
-            strategy_recommendation = "Sell Premium (Credit Spreads / Covered Call)"
-            strategy_rationale = f"ATM Implied Volatility ({atm_iv:.1f}%) is trading at a premium over 30d Realized Volatility ({hv30:.1f}%). Option pricing is rich relative to actual stock movement."
         else:
-            strategy_recommendation = "Buy Premium / Defined Risk (Debit Spreads / Calendar Spreads)"
-            strategy_rationale = f"Implied Volatility ({atm_iv:.1f}%) is low and trading at a discount to realized volatility. Option premium is cheap, making buying strategies or debit spreads more attractive."
-            
+            horizons = [x for x in (selected_expiration,
+                                    vrp_30d['expiration'] if vrp_30d else None) if x]
+            horizon = max(horizons) if horizons else None
+            if horizon and next_earnings and next_earnings <= horizon:
+                strategy_recommendation = f"No premium-selling verdict: earnings {next_earnings}"
+                strategy_rationale = (f"Next earnings ({next_earnings}) falls on or before the {horizon} "
+                                      "horizon assessed here, so implied volatility already includes the "
+                                      "event and the premium is partly paying for the print.")
+            elif iv_rank is not None and iv_rank > 50:
+                strategy_recommendation = "Sell Premium (Strangle / Iron Condor)"
+                strategy_rationale = f"IV Rank is high ({iv_rank:.1f}%), meaning implied volatility is elevated relative to history. Selling premium takes advantage of the volatility risk premium (VRP) contraction."
+            elif vrp_30d:
+                inputs = (f"30-day IV {vrp_30d['atm_implied_vol']:.1f}% vs 21-day realized "
+                          f"{vrp_30d['realized_vol']:.1f}% (expiry {vrp_30d['expiration']}, "
+                          f"strike {vrp_30d['strike']:g})")
+                if selling_environment:
+                    strategy_recommendation = "Sell Premium (Credit Spreads / Covered Call)"
+                    strategy_rationale = f"{inputs}: implied volatility trades above realized volatility, so option pricing is rich relative to recent stock movement."
+                else:
+                    strategy_recommendation = "Buy Premium / Defined Risk (Debit Spreads / Calendar Spreads)"
+                    strategy_rationale = f"{inputs}: implied volatility trades at or below realized volatility, so premium is cheap relative to recent movement."
+            else:
+                strategy_recommendation = "Insufficient VRP data"
+                strategy_rationale = "The 30-day VRP comparison (30-day ATM IV vs 21-session realized volatility) is unavailable, so no premium verdict is made."
+            if earnings_failed:
+                strategy_rationale += " (earnings date unknown)"
+
         return {
             'ticker': ticker.upper(),
             'source': greeks_data.get('source'),
@@ -4660,6 +4704,7 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
             'total_call_oi': total_call_oi,
             'total_put_oi': total_put_oi,
             'gex_stats': gex_stats,
+            'vrp_30d': vrp_30d,
             'strategy_recommendation': strategy_recommendation,
             'strategy_rationale': strategy_rationale,
             'selling_environment': selling_environment
