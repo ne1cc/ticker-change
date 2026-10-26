@@ -538,74 +538,109 @@ def generate_comprehensive_report(ticker: str, data: dict) -> tuple[str | None, 
     return html, None
 
 
-OPTIONS_SYSTEM = """You are a premier quantitative derivatives strategist with a measured, reserved analytical style. You are given a detailed dataset of an option chain snapshot for a single stock ticker, including current spot price, days to expiration (DTE), implied volatility (IV), historical realized volatilities (HV30/HV90), IV Rank, expected moves, Put-Call ratios, Max Pain, and dealer Gamma Exposure (GEX) walls.
+OPTIONS_REPORT_VERSION = 2
 
-Your task is to write a highly rigorous, actionable Option Chain Analysis and Strategy Report.
+
+def _options_cache_key(ticker: str, exp: str, rf_rate: float) -> str:
+    """Versioned report cache key: bump OPTIONS_REPORT_VERSION whenever the
+    payload shape or prompt changes; old rows simply expire, no purge."""
+    return f"options_report:v{OPTIONS_REPORT_VERSION}:{ticker.upper()}:{exp}:{rf_rate}"
+
+
+OPTIONS_SYSTEM = """You are a premier quantitative derivatives strategist with a measured, reserved analytical style. You are given a structured JSON snapshot for a single stock ticker: the live `spot`, the selected expiration and days to expiration, realized volatilities, IV-rank statistics with history status, a 30-day volatility-risk-premium block (`vrp_30d`), the bounded `chain_digest` of quoted strikes for the selected expiry, dealer GEX statistics (`gex_stats`), skew, term structure, concentrations, liquidity, earnings context, market context, the page's deterministic heuristic verdict (`page_heuristic`), and a `_provenance` block naming everything unavailable or assumed.
+
+Sourcing rules:
+- Quote strikes, premiums (bid/ask/mid), and greeks ONLY from `chain_digest`. Never state a strike or price you did not find there.
+- Derived trade numbers — net debit/credit, spread width, breakevens, max profit/loss — are allowed only as labeled calculations from values you quoted, e.g. `net debit = 4.10 − 1.95 = 2.15`.
+- A null bid/ask in the digest is "no quote": report it as no quote instead of inventing or approximating a price.
+- Quote `spot` as the current price; never present `snapshot_spot` as the live price.
+- Fields under `_provenance` are assumed defaults or unavailable feeds: never state numbers for them — describe them as unavailable or assumed, never as facts.
+
+Your task is to write a highly rigorous, actionable Option Chain Analysis and Strategy Report with exactly ONE primary thesis; a second structure is permitted only as an explicit hedge of the first one's failure mode.
 
 Format your response in GitHub-Flavoured Markdown. Use the following structured sections, in order, using `###` headings:
+
 ### 1. Options Market Regime & Volatility Analysis
 - Compile the volatility profile into a clean Markdown table:
   | Metric | Value | Comparison / Benchmark | Regime Interpretation |
   | :--- | :---: | :---: | :--- |
-  Include rows for ATM Implied Volatility (IV), 30-day Realized Volatility (HV30), 90-day Realized Volatility (HV90), IV Rank, and IV Percentile.
-- Provide 2-3 concise, spaced bullet points analyzing the Volatility Risk Premium (VRP) and whether option premium is cheap or rich relative to historical distribution.
+  Include rows for ATM Implied Volatility (IV), 30-day Realized Volatility (HV30), and 90-day Realized Volatility (HV90) when present.
+- Include IV Rank and IV Percentile rows, and any cheap/rich premium verdict, ONLY when `iv_rank` is non-null, always stating the length of the recorded IV history (`iv_status`) the rank is computed from.
+- When `iv_rank` is null, state the length of the recorded IV history from `iv_status`, and analyze the 30-day volatility risk premium from `vrp_30d` instead, explicitly labeling it a point-in-time comparison that carries no rank context.
 
 ### 2. Expected Move & Boundary Levels
-- Analyze the Expected Move calculated via Black-Scholes vs Straddle pricing. What does the market imply about potential trading range by expiration?
+- Report the straddle-implied expected move (`expected_move_straddle`) and the model expected move (`expected_move_bs`). Do not interpret the gap between them as fat-tail or gap-risk evidence — the model move is a formula output, not a distribution claim (see Caveats).
 - Compile the dealer structural boundaries into a clean Markdown table:
   | Key Level | Strike / Price | Dealer Positioning | Market Impact |
   | :--- | :---: | :--- | :--- |
-  Include rows for Call Wall, Put Wall, Max Pain, Gamma Flip Point, and Current Spot.
-- Explain dealer hedging dynamics around the Gamma Flip and walls (positive gamma dampening vs negative gamma trend acceleration).
+  Include rows for Call Wall, Put Wall, Max Pain, Gamma Flip Point, and Current Spot from `gex_stats` and the payload.
+- Explain dealer hedging dynamics around the Gamma Flip and walls (positive gamma dampening vs negative gamma trend acceleration), noting the naive dealer convention in the Caveats.
 
 ### 3. Quantitative Strategy Recommendations
-- State the optimal volatility posture (long gamma/vega vs premium selling).
-- For each recommended strategy (2 setups), use a distinct `#### Strategy [N]: [Strategy Name]` sub-heading, followed by spaced bullet points:
-  * - **Structure:** exact strikes, expirations, and leg types.
+- State the optimal volatility posture and the single primary thesis in one short paragraph.
+- Present the primary strategy under a `#### Strategy 1: [Strategy Name]` sub-heading, followed by spaced bullet points:
+  * - **Structure:** exact strikes and leg types, using only strikes quoted in `chain_digest`.
   * - **Rationale:** why this structure matches the current volatility regime and dealer boundaries.
-  * - **Execution & Greeks:** target long-leg delta (e.g. 40-45 delta), capital efficiency, and theta/vega exposure.
-  * - **Trade Management:** profit target (e.g. 50% max profit) and defined invalidation/exit levels.
+  * - **Execution & Greeks:** the contracts entered, with their delta, gamma, theta and vega quoted from the digest.
+  * - **Trade Management:** profit-taking and exit rules stated as conditions tied to payload values (quoted levels, the gamma flip, the expected-move band, IV or VRP thresholds) — no generic percentage templates.
+- Add a second structure ONLY as an explicit hedge of the primary thesis's failure mode, under `#### Hedge: [Strategy Name]`, naming the failure mode of Strategy 1 that it insures.
 
 ### 4. Tail Risk & Risk Management
 - Format with clear sub-headings and bullet points:
   * - **Worst-Case Scenario:** market breakdown or melt-up implications if dealer walls fail.
   #### Defensive Adjustments
   * - **Stop-Loss Protocol:** spot price or technical trigger to close the position.
-  * - **Dynamic Delta Hedging:** adjustments if spot moves significantly from target strikes.
+  * - **Dynamic Delta Hedging:** adjustments if spot moves significantly from target strikes, citing the gamma, theta and vega of the held contracts from the digest.
   * - **Gamma & Expiration Risk:** managing short gamma into final trading hours.
+
+### 5. Caveats & Data Limits
+State these limits explicitly, briefly:
+- Chain snapshot vintage (`vintage`) and quote delay: quotes can be stale or delayed.
+- Greeks are Black-Scholes with no dividends; early exercise and rates effects are ignored.
+- Dealer GEX follows a naive dealer positioning convention; it is an approximation, not a census.
+- `gex_stats` spans up to 8 listed expiries while `chain_digest` covers only the selected expiry — do not attribute whole-chain walls to this expiry's quotes.
+- IV rank is computed against front-expiry ATM IV history, which may differ from the selected expiry.
+- The "Black-Scholes" expected move is `0.85 × spot × IV × √t`: neither a 1σ move nor the ≈0.80 straddle approximation, so no fat-tail or gap-risk inference follows from its gap to the straddle price.
+- Front-expiry IVs drift on non-trading days; weekend and holiday readings are unreliable.
+
+Banner rule: if any part of this report disagrees with `page_heuristic.recommendation`, say so in one sentence and give the reason.
 
 CRITICAL FORMATTING RULES:
 - Always leave a blank line before and after EVERY heading, table, paragraph, list, and bullet item.
 - Use GitHub-Flavored Markdown bullet points (`- `) with bold labels (`- **Label:** Details`).
 - Never combine separate items or sections into single run-on paragraphs.
-- Be highly precise and quantitative. Use the exact data points provided.
-- Do not invent any numbers. Mark missing metrics as 'N/A'.
+- Be highly precise and quantitative. Use the exact data points provided; mark missing metrics as 'N/A'.
 - Keep your tone analytical, professional, and strategic.
 """
 
 
-def generate_options_report(ticker: str, data: dict, force: bool = False) -> tuple[str | None, str | None]:
-    """Return an HTML options analysis report for `ticker` and any error message as a tuple (html, error)."""
+def generate_options_report(ticker: str, data: dict, force: bool = False) -> tuple[dict | None, str | None]:
+    """Generate (or fetch from cache) the HTML options analysis report for `ticker`.
+
+    Returns (report, error) where report is
+    {"html", "markdown", "provider", "generated_at", "vintage", "payload"}
+    and error is a user-facing message on total provider failure.
+    """
     ticker = ticker.upper()
     configured = providers.ai_providers()
     if not configured:
         return None, "No AI providers configured. Please go to Settings to add an API key."
 
-    exp_date = data.get("selected_expiration", "default")
-    cache_key = f"options_report:{ticker}:{exp_date}"
+    exp = data.get("selected_expiration", "default")
+    cache_key = _options_cache_key(ticker, exp, data.get("rf_rate", 0.045))
     if not force:
         cached = db.cache_get("ai_options_report", cache_key, CACHE_TTL_HOURS)
-        if cached is not None:
-            if isinstance(cached, dict):
-                if cached.get("markdown"):
-                    html = _to_html(_preprocess_options_markdown(cached["markdown"]))
-                    return html, None
-                elif cached.get("html"):
-                    return cached.get("html"), None
+        if isinstance(cached, dict) and cached.get("markdown"):
+            return {
+                "html": _to_html(_preprocess_options_markdown(cached["markdown"])),
+                "generated_at": cached.get("generated_at"),
+                "vintage": cached.get("vintage"),
+                "payload": cached.get("payload"),
+            }, None
 
     user_msg = (
         f"Write the options strategy analysis report for {ticker} from this option chain dataset:\n\n"
-        f"{json.dumps(data, default=str, indent=2)}"
+        f"{json.dumps(data, separators=(',', ':'), default=str)}"
     )
 
     errors = []
@@ -622,9 +657,35 @@ def generate_options_report(ticker: str, data: dict, force: bool = False) -> tup
         return None, err_report
 
     cleaned_md = _preprocess_options_markdown(text)
-    html = _to_html(cleaned_md)
-    db.cache_set("ai_options_report", cache_key, {"html": html, "markdown": text, "provider": used})
-    return html, None
+    report = {
+        "html": _to_html(cleaned_md),
+        "markdown": text,
+        "provider": used,
+        "generated_at": datetime.utcnow().isoformat(),
+        "vintage": data.get("vintage"),
+        "payload": data,
+    }
+    db.cache_set("ai_options_report", cache_key, report)
+    return report, None
+
+
+def cached_options_report(ticker: str, exp: str, rf_rate: float) -> dict | None:
+    """Cached options report payload for the API route, or None on a miss.
+
+    Rebuilds `html` from the stored markdown the same way
+    generate_options_report does at write time, so a cache hit and a fresh
+    generation render identically. Returns
+    {"html", "generated_at", "vintage", "payload"}.
+    """
+    cached = db.cache_get("ai_options_report", _options_cache_key(ticker, exp, rf_rate), CACHE_TTL_HOURS)
+    if not (isinstance(cached, dict) and cached.get("markdown")):
+        return None
+    return {
+        "html": _to_html(_preprocess_options_markdown(cached["markdown"])),
+        "generated_at": cached.get("generated_at"),
+        "vintage": cached.get("vintage"),
+        "payload": cached.get("payload"),
+    }
 
 
 BRIEF_GARNISH_TTL_HOURS = 24

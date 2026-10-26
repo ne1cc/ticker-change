@@ -5063,16 +5063,35 @@ def options_ai_report_api(ticker):
         rf_rate = float(rf_rate_raw)
     except ValueError:
         rf_rate = 0.045
-        
-    data = compute_options_analysis(ticker, expiration, rf_rate)
-    if not data:
+
+    # Same resolution rule as get_options_greeks_data, so the cache key and the
+    # payload always describe the expiry that will actually be analyzed.
+    exps = get_cached_expirations(ticker, stock=_get_yf_ticker(ticker))
+    if not exps:
         return jsonify({"error": f"Could not retrieve options data for {ticker}"}), 404
-        
-    report, error = ai.generate_options_report(ticker, data, force=force)
+    if not expiration or expiration not in exps:
+        expiration = exps[0]
+
+    if not force:
+        cached = ai.cached_options_report(ticker, expiration, rf_rate)
+        if cached:
+            return jsonify(cached)
+
+    payload = build_options_report_payload(ticker, expiration, rf_rate)
+    if payload is None:
+        return jsonify({"error": f"Could not retrieve options data for {ticker}"}), 404
+    # The payload alone keys the cache inside generate_options_report; stamp the
+    # rf_rate so that key matches the one cached_options_report looked up.
+    payload['rf_rate'] = rf_rate
+
+    report, error = ai.generate_options_report(ticker, payload, force=force)
     if error:
         return jsonify({"error": error}), 500
-        
-    return jsonify({"html": report})
+
+    return jsonify({"html": report["html"],
+                    "generated_at": report["generated_at"],
+                    "vintage": report["vintage"],
+                    "payload": report["payload"]})
 
 
 @app.route('/ai-summary')

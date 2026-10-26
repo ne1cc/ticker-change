@@ -1895,6 +1895,28 @@
       display.className = "opt-ai-report prose prose-sm dark:prose-invert max-w-none text-left p-3";
       display.innerHTML = data.html;
 
+      const fmtEt = (iso) => {
+        if (!iso) return null;
+        try {
+          // generated_at is a naive UTC stamp; give it a zone before parsing.
+          const d = new Date(/[Zz]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
+          if (isNaN(d)) return null;
+          const parts = new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'America/New_York', weekday: 'short', day: 'numeric', month: 'short',
+            hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+          }).formatToParts(d);
+          const get = (t) => (parts.find(p => p.type === t) || {}).value;
+          return `${get('weekday')} ${get('day')} ${get('month')}, ${get('hour')}:${get('minute')} ET`;
+        } catch (e) { return null; }
+      };
+      const snapshotPart = (data.vintage && data.vintage !== 'unknown')
+        ? `chain snapshot last trade ${fmtEt(data.vintage) || data.vintage}`
+        : 'chain snapshot time unknown';
+      const meta = document.createElement('p');
+      meta.className = 'text-xs text-zinc-500 dark:text-zinc-400 mt-3 pt-2 border-t border-zinc-200 dark:border-zinc-700';
+      meta.textContent = `Generated ${fmtEt(data.generated_at) || 'time unknown'} · ${snapshotPart}`;
+      display.appendChild(meta);
+
     } catch (err) {
       console.error(err);
       display.className = "min-h-[200px] flex items-center justify-center border border-dashed border-rose-200 dark:border-rose-800/40 rounded-xl p-8 text-center bg-rose-500/[0.02]";
