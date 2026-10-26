@@ -80,6 +80,33 @@ class TestSignalsPrice(unittest.TestCase):
         # Negated negative shock -> positive reversal signal
         self.assertGreater(res_rev_shock.iloc[80], 0.1)
 
+    def test_rolling_residual_reversal_matches_windowed_ols(self):
+        """Rolling-moment residuals preserve the prior OLS endpoint results."""
+        rng = np.random.default_rng(23)
+        n = 75
+        reg_window = 50
+        signal_window = 7
+        dates = pd.date_range("2024-01-01", periods=n, freq="B")
+        benchmark = pd.Series(rng.normal(0, 0.01, n), index=dates)
+        stock = 0.7 * benchmark + rng.normal(0, 0.005, n)
+
+        actual = signals_price.compute_residual_reversal(
+            stock, benchmark, window=signal_window, reg_window=reg_window
+        )
+
+        residuals = np.full(n, np.nan)
+        for i in range(reg_window, n + 1):
+            w_stock = stock.iloc[i - reg_window:i].to_numpy()
+            w_benchmark = benchmark.iloc[i - reg_window:i].to_numpy()
+            design = np.column_stack([np.ones(reg_window), w_benchmark])
+            coeffs, *_ = np.linalg.lstsq(design, w_stock, rcond=None)
+            residuals[i - 1] = w_stock[-1] - (coeffs[0] + coeffs[1] * w_benchmark[-1])
+        expected = -pd.Series(residuals, index=dates).rolling(
+            signal_window, min_periods=signal_window
+        ).sum()
+
+        np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-12, equal_nan=True)
+
     def test_low_volatility_calculation(self):
         """Low volatility signal negates annualized rolling standard deviation."""
         dates = pd.date_range("2024-01-01", periods=100, freq="B")

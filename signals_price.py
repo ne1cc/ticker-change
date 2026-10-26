@@ -64,15 +64,15 @@ def compute_residual_reversal(
         u = y - X @ coeffs
         residuals.iloc[:] = u
     else:
-        # Rolling regression over reg_window
-        res_arr = np.full(n, np.nan)
-        for i in range(reg_window, n + 1):
-            w_y = y[i - reg_window:i]
-            w_x = x[i - reg_window:i]
-            X = np.column_stack([np.ones(reg_window), w_x])
-            coeffs, *_ = np.linalg.lstsq(X, w_y, rcond=None)
-            res_arr[i - 1] = w_y[-1] - (coeffs[0] + coeffs[1] * w_x[-1])
-        residuals.iloc[:] = res_arr
+        # Rolling OLS endpoint residual from moments avoids re-solving each overlapping window.
+        stock = df["stock"]
+        benchmark = df["bm"]
+        mean_stock = stock.rolling(reg_window).mean()
+        mean_benchmark = benchmark.rolling(reg_window).mean()
+        variance = benchmark.rolling(reg_window).var()
+        covariance = benchmark.rolling(reg_window).cov(stock)
+        beta = (covariance / variance).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        residuals = stock - mean_stock - beta * (benchmark - mean_benchmark)
 
     # Trailing window sum of residuals, negated
     trailing_resid = residuals.rolling(window, min_periods=window).sum()
