@@ -11,3 +11,10 @@ model.pkl
 .worktrees/
 .claude/worktrees/
 
+# Local T3 conversation exports are private working files, not project data.
+/thread-*.json
+/thread-*.jsonl
+/thread-*.txt
+/raw-*.jsonl
+/export_thread*.py
+

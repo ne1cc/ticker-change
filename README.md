@@ -156,11 +156,11 @@ page.
 | **Ticker News** | Markets | `/news` | English-language headlines for the selected US or international listing |
 | **Live Microstructure** | Markets | `/live` | L2 depth, trades feed, options chain + Greeks, payoff simulator |
 | **S&P Heatmap** | Markets | `/heatmap` | Sector-grouped S&P 500 treemap, colored by daily % change, sized by dollar volume |
-| **Options Terminal** | Options | `/options` | Dollar GEX by strike, IV term structure, 3D vol surface, Greek matrix |
+| **Options Terminal** | Options | `/options` | Dollar GEX by strike, IV term structure, 3D vol surface, Greek matrix, 30-day VRP posture, and a chain-grounded AI report |
 | **Risk Analytics** | Analytics | `/analytics` | Volatility, VaR, GEX, Monte Carlo, **pre-trade checklist**, Buyer Signals, institutional suite |
 | **Market Positioning** | Analytics | `/positioning` | Valuation, analyst ratings, insider activity, 13F holders |
 | **Strategy Backtests** | Strategies | `/strategies` | Three selectable strategies, leaderboard, screener, single-ticker backtest |
-| **AI Report** | Strategies | `/ai-summary` | LLM desk note synthesising metrics (optional; needs AI key) |
+| **AI Summary** | Strategies | `/ai-summary` | LLM desk note synthesising broad market metrics (optional; needs AI key) |
 | **Radar** | Radar | `/radar` | Snapshot-published universe screens: earnings drift, value, squeeze |
 
 The Options pillar also links **Options Chain** straight to `/live?tab=greeks`
@@ -217,6 +217,14 @@ brief's labeled interpretation simply don't render.
 
 JSON twins of every view, plus health and config:
 
+The Options Terminal posture uses 30-day implied volatility minus 21-day
+realized volatility, with an earnings-date gate. Its AI report is built from a
+bounded options-chain payload with provenance for missing data. The report
+cache is versioned and keyed by expiration and risk-free rate; cached reports
+are checked before rebuilding the payload. The page shows report generation
+time and chain snapshot vintage separately. This report is distinct from the
+broader `/ai-summary` desk note.
+
 | Endpoint | Returns |
 | --- | --- |
 | `GET /api/brief/<ticker>` | The published daily brief payload verbatim (`warming` stub before first publish) |
@@ -226,9 +234,9 @@ JSON twins of every view, plus health and config:
 | `GET /api/analytics/<ticker>` | Risk stats and metrics |
 | `GET /api/positioning/<ticker>` | Valuation, insider, institutional data |
 | `GET /api/options-greeks/<ticker>` | Option chain + Greeks (`?expiration=`, `?strikes=N\|all`) |
-| `GET /api/options-analysis/<ticker>` | IV rank, expected move, GEX, strategy posture |
+| `GET /api/options-analysis/<ticker>` | IV rank, expected move, GEX, 30-day VRP, earnings-aware heuristic posture |
 | `GET /api/options-terminal/<ticker>` | Dollar GEX, term structure, vol surface, Greek matrix |
-| `GET /api/options-ai-report/<ticker>` | LLM options note (needs an AI key) |
+| `GET /api/options-ai-report/<ticker>` | Chain-grounded options report: HTML, generation time, chain vintage, and report payload (needs an AI key; `?force=1` regenerates) |
 | `GET /api/institutional/<ticker>` | Microstructure, macro regime, signals backtest, 8-K events |
 | `GET /api/corporate-actions/<ticker>` | Point-in-time identity and split/dividend history |
 | `GET /api/raw-sec-filings/<ticker>` | Unfiltered SEC EDGAR submissions |
