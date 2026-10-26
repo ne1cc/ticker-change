@@ -46,7 +46,7 @@ from option_chain_data import (chain_quality, valid_iv, valid_quote, finite_numb
 from options import compute_options_terminal, calculate_greeks
 from options.cones import compute_yang_zhang_vol
 from options.gex import get_risk_free_rate, find_gamma_flip
-from options.vol import compute_vol_term_structure
+from options.vol import compute_25d_skew, compute_vol_term_structure
 from options.storage import (
     compute_iv_rank_and_percentile,
     get_vrp_history_with_bands,
@@ -4491,6 +4491,31 @@ def options_greeks_api(ticker):
     return jsonify(data)
 
 
+def _gex_stats_from_terminal(gex, spot, chain_df):
+    """Legacy `gex_stats` keys (no per-strike series) from a terminal result."""
+    has_chain = chain_df is not None and not chain_df.empty
+    return {
+        'total_gex': round(gex.total_gex, 1),
+        'regime': gex.regime,
+        'call_wall': gex.call_wall,
+        'call_wall_val': gex.call_wall_val,
+        'put_wall': gex.put_wall,
+        'put_wall_val': gex.put_wall_val,
+        'gamma_flip': gex.gamma_flip,
+        'gamma_flip_sticky_moneyness': gex.gamma_flip_sticky_moneyness,
+        'gamma_flip_diff': gex.gamma_flip_diff,
+        'rate_source': gex.rate_source,
+        'rf_rate': gex.rf_rate,
+        'hvl': gex.hvl,
+        'hvl_val': gex.hvl_val,
+        'spot': round(float(spot), 2),
+        'top_nodes': gex.top_nodes,
+        'dte_range': f"{chain_df['dte'].min()}–{chain_df['dte'].max()}d" if has_chain else None,
+        'n_expirations': int(chain_df['expiration'].nunique()) if has_chain else 0,
+        'convention': gex.convention,
+    }
+
+
 def _terminal_gex_stats(ticker):
     """GEX stats for the AI tab from the same engine and inputs as the /options page.
 
@@ -4507,28 +4532,7 @@ def _terminal_gex_stats(ticker):
         daily_df=get_or_fetch_prices(ticker), convention='naive')
     if res.error:
         return None
-    g = res.gex
-    has_chain = chain_df is not None and not chain_df.empty
-    return {
-        'total_gex': round(g.total_gex, 1),
-        'regime': g.regime,
-        'call_wall': g.call_wall,
-        'call_wall_val': g.call_wall_val,
-        'put_wall': g.put_wall,
-        'put_wall_val': g.put_wall_val,
-        'gamma_flip': g.gamma_flip,
-        'gamma_flip_sticky_moneyness': g.gamma_flip_sticky_moneyness,
-        'gamma_flip_diff': g.gamma_flip_diff,
-        'rate_source': g.rate_source,
-        'rf_rate': g.rf_rate,
-        'hvl': g.hvl,
-        'hvl_val': g.hvl_val,
-        'spot': round(float(spot), 2),
-        'top_nodes': g.top_nodes,
-        'dte_range': f"{chain_df['dte'].min()}–{chain_df['dte'].max()}d" if has_chain else None,
-        'n_expirations': int(chain_df['expiration'].nunique()) if has_chain else 0,
-        'convention': g.convention,
-    }
+    return _gex_stats_from_terminal(res.gex, spot, chain_df)
 
 
 def _vrp_30d_block(ticker, spot, price_df):
@@ -4712,6 +4716,297 @@ def compute_options_analysis(ticker, expiration_date=None, rf_rate=0.045):
     except Exception as e:
         print(f"Error computing options analysis: {e}")
         return None
+
+
+def _options_spread_pct(bid, ask):
+    """Quoted spread as a percent of the mid; None when the mid is unusable."""
+    bid, ask = finite_number(bid), finite_number(ask)
+    if bid is None or ask is None:
+        return None
+    mid = (bid + ask) / 2
+    return round((ask - bid) / mid * 100, 1) if mid else None
+
+
+def _options_digest_row(row):
+    """One digest row: strike plus quote/greek fields per side. Bid/ask/spread
+    are null without a valid quote; 'N/A' greeks become null."""
+    out = {'strike': row['strike']}
+    for side in ('call', 'put'):
+        valid = row.get(f'{side}_quote_valid')
+        for field in ('bid', 'ask', 'spread_pct', 'iv', 'delta', 'gamma', 'theta', 'vega', 'oi', 'volume'):
+            if field in ('bid', 'ask'):
+                value = row.get(f'{side}_{field}') if valid else None
+            elif field == 'spread_pct':
+                value = (_options_spread_pct(row.get(f'{side}_bid'), row.get(f'{side}_ask'))
+                         if valid else None)
+            else:
+                value = row.get(f'{side}_{field}')
+                value = None if value == 'N/A' else value
+            out[f'{side}_{field}'] = value
+    return out
+
+
+def _options_chain_digest(rows, spot, atm_iv, dte, keep_strikes):
+    """Bounded strike digest for the selected expiry: the ±2σ band around spot
+    thinned to ≤40 rows. The ATM strike and key walls are always kept, even
+    when thinning or the band would drop them."""
+    if not rows:
+        return []
+    by_strike = {r['strike']: r for r in rows}
+    sigma = ((atm_iv or 0) / 100.0) * math.sqrt(max(dte or 1, 1) / 365.0) * spot if atm_iv and spot else None
+    strikes = {r['strike'] for r in rows
+               if sigma is not None and abs(r['strike'] - spot) <= 2 * sigma}
+    if len(strikes) < 20:
+        strikes = set(sorted(by_strike, key=lambda s: abs(s - spot))[:20])
+    ordered = sorted(strikes)
+    stride = math.ceil(len(ordered) / 40)
+    strikes = set(ordered[::stride]) | {s for s in keep_strikes if s in by_strike}
+    return [_options_digest_row(by_strike[s]) for s in sorted(strikes)]
+
+
+def _options_skew_frame(rows):
+    """Long-form frame for compute_25d_skew: cp/strike, decimal IV, float delta."""
+    frames = []
+    for cp, side in (('C', 'call'), ('P', 'put')):
+        frames.append(pd.DataFrame([{
+            'cp': cp, 'strike': r['strike'], 'iv': r.get(f'{side}_iv', 0) / 100.0,
+            'delta': float(r[f'{side}_delta']) if isinstance(r.get(f'{side}_delta'), (int, float)) else float('nan'),
+        } for r in rows]))
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def build_options_report_payload(ticker, expiration_date=None, rf_rate=0.045) -> dict | None:
+    """Report-only payload for the AI options report (#197): the real chain for
+    the selected expiry (bounded digest with quotes and greeks) plus skew, term
+    structure, VRP, concentrations, liquidity, earnings, market context and data
+    vintage. Every gap is declared in `_provenance` instead of guessed. Not yet
+    wired into the report route."""
+    base = compute_options_analysis(ticker, expiration_date, rf_rate)
+    if base is None:
+        return None
+
+    ticker = ticker.upper()
+    status, prov = {}, {}
+
+    def _guarded(label, field, fn, empty_reason):
+        result = _guard_section(label, fn, status=status)
+        if status.get(label) in ('error', 'timeout'):
+            prov[field] = f'{field} computation failed'
+        elif not result:
+            prov.setdefault(field, empty_reason)
+        return result
+
+    spot = get_current_price_yfinance(ticker)
+    if not spot:
+        spot = _spot_price(ticker, _get_yf_ticker(ticker))
+    if not spot:
+        prov['spot'] = 'no live price available'
+    daily_df = get_or_fetch_prices(ticker)
+
+    greeks = _guarded('options-report greeks', 'chain_digest',
+                      lambda: get_options_greeks_data(ticker, base['selected_expiration'],
+                                                      rf_rate, strike_count='all'),
+                      'greeks data unavailable for the selected expiry')
+    rows = (greeks or {}).get('options') or []
+    expirations = (greeks or {}).get('expirations') or []
+    snapshot_spot = (greeks or {}).get('spot_price') or base['spot_price']
+    oi_available = (greeks or {}).get('oi_available') or {}
+
+    # Terminal engine, same inputs as the /options page. A failed or errored
+    # run nulls every terminal-derived field.
+    def _load_terminal():
+        chains_df = get_full_option_chain_df(ticker, stock=_get_yf_ticker(ticker), current_price=spot)
+        res = compute_options_terminal(ticker=ticker, spot=spot, chain_df=chains_df,
+                                       daily_df=daily_df, convention='naive')
+        if res.error:
+            raise RuntimeError(res.error)
+        vol, cones = res.vol, res.cones
+        points = len(list(zip(vol.dtes or [], vol.atm_ivs or []))) if vol else 0
+        return {
+            'gex_stats': _gex_stats_from_terminal(res.gex, spot, chains_df),
+            'term_structure': ({
+                'expirations': vol.expirations, 'dtes': vol.dtes, 'atm_ivs': vol.atm_ivs,
+                'slope': vol.slope, 'regime': vol.regime,
+                'window': 'first 8 listed expiries',
+            } if points >= 2 else None),
+            'vol_cones': ({k: getattr(cones, k) for k in (
+                'hv10', 'hv20', 'hv30', 'hv60', 'hv90', 'yang_zhang_30', 'yang_zhang_90')}
+                if cones else None),
+        }
+
+    terminal = _guard_section('options-report terminal', _load_terminal, status=status)
+    gex_stats = term_structure = vol_cones = None
+    if terminal is None:
+        for field in ('gex_stats', 'term_structure', 'vol_cones'):
+            prov[field] = 'options terminal failed'
+    else:
+        gex_stats = terminal['gex_stats']
+        term_structure = terminal['term_structure']
+        vol_cones = terminal['vol_cones']
+        if term_structure is None:
+            prov['term_structure'] = 'fewer than two listed expiries with ATM IV'
+        if vol_cones is None:
+            prov['vol_cones'] = 'terminal returned no realized-vol cones'
+
+    if base['selected_expiration'] and expirations and base['selected_expiration'] != expirations[0]:
+        prov['iv_rank'] = 'rank compares this expiry ATM IV with front-expiry history'
+
+    atm_strike = (min((r['strike'] for r in rows), key=lambda s: abs(s - spot), default=None)
+                  if spot else None)
+    # Wall strikes from the whole-chain GEX run and this expiry's max pain stay
+    # in the digest so the model sees them, even outside the ±2σ band.
+    keep = ({atm_strike} if atm_strike is not None else set()) | {
+        s for s in ((gex_stats or {}).get('call_wall'), (gex_stats or {}).get('put_wall'),
+                    base.get('max_pain')) if s is not None}
+    digest = _guarded('options-report digest', 'chain_digest',
+                      lambda: _options_chain_digest(rows, spot, base.get('atm_iv'),
+                                                    base.get('days_to_expiration'), keep),
+                      'no strikes near spot')
+
+    def _skew():
+        ratio, risk_reversal = compute_25d_skew(_options_skew_frame(rows), spot)
+        return None if (ratio, risk_reversal) == (1.0, 0.0) else {
+            'ratio': ratio, 'risk_reversal': risk_reversal}
+
+    skew = _guarded('options-report skew', 'skew', _skew,
+                    '25-delta skew not computable from this chain')
+
+    def _top3(values):
+        total = sum(v for _, v in values)
+        return [{'strike': s, 'value': v,
+                 'share_pct': round(v / total * 100, 1) if total else None}
+                for s, v in sorted((kv for kv in values if kv[1] > 0),
+                                   key=lambda kv: kv[1], reverse=True)[:3]]
+
+    def _concentrations():
+        return {
+            'call_oi': _top3([(r['strike'], r.get('call_oi', 0)) for r in rows]) if oi_available.get('call') else None,
+            'put_oi': _top3([(r['strike'], r.get('put_oi', 0)) for r in rows]) if oi_available.get('put') else None,
+            'total_volume': _top3([(r['strike'], r.get('call_volume', 0) + r.get('put_volume', 0)) for r in rows]),
+        }
+
+    concentrations = _guarded('options-report concentrations', 'concentrations',
+                              _concentrations, 'no chain rows for concentrations')
+    for side in ('call_oi', 'put_oi'):
+        if concentrations is not None and concentrations.get(side) is None:
+            prov[f'concentrations.{side}'] = f'{side.replace("_oi", "")} open interest unavailable in the chain snapshot'
+
+    def _liquidity():
+        spreads = []
+        for r in rows:
+            if spot and abs(r['strike'] - spot) <= spot * 0.05:
+                for side in ('call', 'put'):
+                    if r.get(f'{side}_quote_valid'):
+                        spreads.append(_options_spread_pct(r[f'{side}_bid'], r[f'{side}_ask']))
+        spreads = [s for s in spreads if s is not None]
+        return {'median_spread_pct': round(float(np.median(spreads)), 1)} if len(spreads) >= 5 else None
+
+    liquidity = _guarded('options-report liquidity', 'liquidity', _liquidity,
+                         'fewer than 5 valid quotes within ±5% of spot')
+
+    def _load_chains():
+        stock = _get_yf_ticker(ticker)
+        chains_by_exp, selected = {}, None
+        for exp in expirations[:4]:
+            c = get_cached_chain(ticker, exp, stock=stock, spot_hint=spot)
+            if c:
+                cdf, pdf, _ = c
+                c_copy = cdf.copy(); c_copy['cp'] = 'C'
+                p_copy = pdf.copy(); p_copy['cp'] = 'P'
+                chains_by_exp[exp] = pd.concat([c_copy, p_copy], ignore_index=True)
+                if exp == base['selected_expiration']:
+                    selected = c
+        if selected is None:
+            selected = get_cached_chain(ticker, base['selected_expiration'], stock=stock, spot_hint=spot)
+        return chains_by_exp, selected
+
+    chains = _guard_section('options-report chains', _load_chains, status=status)
+    if chains is None:
+        chains_by_exp, selected_chain = {}, None
+        prov['earnings'] = prov['vintage'] = 'option chains unavailable'
+    else:
+        chains_by_exp, selected_chain = chains
+
+    def _earnings():
+        return get_earnings_implied_vs_realized(ticker, spot, chains_by_exp, prices_df=daily_df)
+
+    earnings_move = _guarded('options-report earnings', 'earnings', _earnings,
+                             'earnings lookup failed')
+    if isinstance(earnings_move, dict) and earnings_move.get('available') is False:
+        prov['earnings'] = earnings_move.get('reason') or 'earnings analysis unavailable'
+
+    def _vix_block():
+        df = get_or_fetch_prices('^VIX')
+        if df is None or df.empty:
+            raise RuntimeError('VIX history unavailable')
+        closes = df['close']
+        return {'vix_close': round(float(closes.iloc[-1]), 2),
+                'vix_change_1m_pct': (round(float(closes.iloc[-1] / closes.iloc[-21] - 1) * 100, 2)
+                                      if len(closes) > 21 else None)}
+
+    def _spy_block():
+        df = get_or_fetch_prices('SPY')
+        if df is None or df.empty:
+            raise RuntimeError('SPY history unavailable')
+        close = float(df['close'].iloc[-1])
+        if len(df) < 50:
+            return {'spy_close': round(close, 2), 'spy_vs_50d_pct': None, 'spy_trend': None}
+        sma = float(df['close'].tail(50).mean())
+        return {'spy_close': round(close, 2),
+                'spy_vs_50d_pct': round((close / sma - 1) * 100, 2),
+                'spy_trend': 'above' if close >= sma else 'below'}
+
+    vix = _guard_section('options-report vix', _vix_block, status=status)
+    spy = _guard_section('options-report spy', _spy_block, status=status)
+    market_context = {**(vix or {'vix_close': None, 'vix_change_1m_pct': None}),
+                      **(spy or {'spy_close': None, 'spy_vs_50d_pct': None, 'spy_trend': None})}
+    if vix is None:
+        prov['market_context.vix'] = 'VIX price history unavailable'
+    elif vix.get('vix_change_1m_pct') is None:
+        prov['market_context.vix'] = 'VIX history shorter than a month; 1m change unavailable'
+    if spy is None:
+        prov['market_context.spy'] = 'SPY price history unavailable'
+    elif spy.get('spy_vs_50d_pct') is None:
+        prov['market_context.spy'] = 'SPY history shorter than 50 sessions; 50d comparison unavailable'
+
+    def _vintage():
+        if selected_chain:
+            stamps = []
+            for frame in (selected_chain[0], selected_chain[1]):
+                if frame is not None and not frame.empty and 'lastTradeDate' in frame.columns:
+                    parsed = pd.to_datetime(frame['lastTradeDate'], errors='coerce').dropna()
+                    if not parsed.empty:
+                        stamps.append(parsed.max())
+            if stamps:
+                ts = pd.Timestamp(max(stamps))
+                ts = ts.tz_localize('UTC') if ts.tzinfo is None else ts
+                return ts.tz_convert('UTC').isoformat()
+        return base.get('source_as_of') or 'unknown'
+
+    vintage = _guard_section('options-report vintage', _vintage, status=status)
+    if vintage is None:
+        prov.setdefault('vintage', 'chain timestamps unavailable')
+
+    page_heuristic = {
+        'recommendation': base.pop('strategy_recommendation', ''),
+        'rationale': base.pop('strategy_rationale', ''),
+        'note': 'deterministic page heuristic, not a recommendation',
+    }
+    return {**base,
+            'spot': spot,
+            'snapshot_spot': snapshot_spot,
+            'gex_stats': gex_stats,
+            'chain_digest': digest,
+            'skew': skew,
+            'term_structure': term_structure,
+            'vol_cones': vol_cones,
+            'concentrations': concentrations,
+            'liquidity': liquidity,
+            'earnings': earnings_move,
+            'market_context': market_context,
+            'vintage': vintage,
+            'page_heuristic': page_heuristic,
+            '_provenance': prov}
 
 
 @app.route('/api/options-analysis/<ticker>')
