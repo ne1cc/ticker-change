@@ -251,7 +251,7 @@ def get_openapi_spec() -> Dict[str, Any]:
                 "get": {
                     "tags": ["Options & Derivatives"],
                     "summary": "Options Posture, GEX & Volatility Analysis",
-                    "description": "Computes Put-Call Ratio (PCR), Max Pain, ATM Implied Volatility, IV Rank, IV Percentile, Expected Move, and Dealer Gamma Exposure (GEX).",
+                    "description": "Computes Put-Call Ratio (PCR), Max Pain, ATM Implied Volatility, IV Rank, IV Percentile, Expected Move, and Dealer Gamma Exposure (GEX). GEX stats come from the options terminal engine (naive convention, live spot, first 8 expiries) so they match /options; gex_stats is null when the terminal errors. hv30/hv90 are null when there are fewer than 30/90 daily returns.",
                     "parameters": [
                         {
                             "name": "ticker",
@@ -923,8 +923,8 @@ def get_openapi_spec() -> Dict[str, Any]:
                         "spot_price": {"type": "number", "example": 225.50},
                         "selected_expiration": {"type": "string"},
                         "days_to_expiration": {"type": "integer"},
-                        "hv30": {"type": "number", "example": 18.5},
-                        "hv90": {"type": "number", "example": 21.2},
+                        "hv30": {"type": "number", "nullable": True, "example": 18.5},
+                        "hv90": {"type": "number", "nullable": True, "example": 21.2},
                         "atm_iv": {"type": "number", "example": 23.4},
                         "iv_rank": {"type": "number", "example": 62.5},
                         "iv_percentile": {"type": "number", "example": 68.0},

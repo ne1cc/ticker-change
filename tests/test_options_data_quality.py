@@ -92,7 +92,9 @@ def analysis(monkeypatch, payload):
     monkeypatch.setattr(app_module, 'get_cached_chain', lambda *args, **kwargs:
                         (pd.DataFrame(payload['calls']), pd.DataFrame(payload['puts']), 100.0))
     monkeypatch.setattr(app_module, 'get_or_fetch_prices', lambda symbol: pd.DataFrame())
-    monkeypatch.setattr(app_module, 'get_gex_profile', lambda *args: None)
+    monkeypatch.setattr(app_module, 'get_current_price_yfinance', lambda symbol: 100.0)
+    monkeypatch.setattr(app_module, 'get_full_option_chain_df', lambda *args, **kwargs: None)
+    monkeypatch.setattr(app_module, 'compute_options_terminal', lambda **kwargs: _terminal_stub(error='offline'))
     return lambda: app_module.app.test_client().get('/api/options-analysis/SPY').get_json()
 
 
@@ -350,3 +352,75 @@ def test_greeks_rows_preserve_missing_vs_known_zero_availability(monkeypatch):
     assert row['put_change_available'] is True
     assert row['call_oi'] == 0 and row['put_oi'] == 0
     assert row['put_change'] == 0 and row['put_pct_change'] == 0
+
+
+def _terminal_stub(error=None):
+    from options.models import GexProfile, OptionsTerminalResult
+    gex = GexProfile(total_gex=12.34, call_gex=20.0, put_gex=-7.66, regime='positive',
+                     gamma_flip=97.5, call_wall=105.0, call_wall_val=8.2, put_wall=95.0,
+                     put_wall_val=-6.1, hvl=100.0, hvl_val=3.0, convention='naive',
+                     strikes=[95.0, 105.0], net_gex_series=[-6.1, 8.2])
+    return OptionsTerminalResult(ticker='SPY', spot_price=101.5, as_of='x', convention='naive',
+                                 gex=gex, vol=None, cones=None, error=error)
+
+
+def test_gex_stats_come_from_terminal_on_live_spot(monkeypatch, analysis):
+    chain = pd.DataFrame({'dte': [3, 10, 10], 'expiration': ['a', 'b', 'b']})
+    seen = {}
+
+    def terminal(**kwargs):
+        seen.update(kwargs)
+        return _terminal_stub()
+    monkeypatch.setattr(app_module, 'get_current_price_yfinance', lambda symbol: 101.5)
+    monkeypatch.setattr(app_module, 'get_full_option_chain_df', lambda *a, **k: chain)
+    monkeypatch.setattr(app_module, 'compute_options_terminal', terminal)
+    stats = analysis()['gex_stats']
+    gex = _terminal_stub().gex
+    assert (stats['call_wall'], stats['put_wall'], stats['gamma_flip']) == (
+        gex.call_wall, gex.put_wall, gex.gamma_flip)
+    assert seen['spot'] == 101.5 and seen['convention'] == 'naive' and 'rf_rate' not in seen
+    assert stats['spot'] == 101.5  # live spot, not the 100.0 chain-snapshot spot
+    assert stats['convention'] == 'naive'
+    assert stats['dte_range'] == '3–10d' and stats['n_expirations'] == 2
+    assert {'total_gex', 'regime', 'call_wall_val', 'put_wall_val', 'gamma_flip_sticky_moneyness',
+            'gamma_flip_diff', 'rate_source', 'rf_rate', 'hvl', 'hvl_val', 'top_nodes'} <= stats.keys()
+    assert not [k for k, v in stats.items() if k != 'top_nodes' and isinstance(v, list)]
+
+
+@pytest.mark.parametrize('failure', ['error', 'raise'])
+def test_gex_stats_null_when_terminal_fails(monkeypatch, analysis, failure):
+    def terminal(**kwargs):
+        if failure == 'raise':
+            raise RuntimeError('boom')
+        return _terminal_stub(error='boom')
+    monkeypatch.setattr(app_module, 'compute_options_terminal', terminal)
+    result = analysis()
+    assert result['gex_stats'] is None
+    assert result['atm_iv'] is not None and result['max_pain'] is not None
+    assert result['strategy_recommendation']
+
+
+@pytest.mark.parametrize('rows, hv30_set, hv90_set', [(40, True, False), (20, False, False), (120, True, True)])
+def test_hv_null_when_history_too_short(monkeypatch, analysis, rows, hv30_set, hv90_set):
+    prices = pd.DataFrame({'close': 100 + np.sin(np.arange(rows))})
+    monkeypatch.setattr(app_module, 'get_or_fetch_prices', lambda symbol: prices)
+    result = analysis()
+    assert (result['hv30'] is not None) == hv30_set
+    assert (result['hv90'] is not None) == hv90_set
+
+
+def test_gex_stats_match_real_terminal_on_synthetic_chain(monkeypatch, analysis):
+    from options import compute_options_terminal
+    chain = pd.DataFrame([
+        {"strike": k, "dte": 30, "expiration": "2099-01-16", "cp": cp, "bid": 1.0, "ask": 1.1,
+         "iv": 0.25, "open_interest": oi, "volume": 100}
+        for k, cp, oi in [(95.0, 'P', 20000), (100.0, 'C', 25000), (100.0, 'P', 10000), (105.0, 'C', 18000)]])
+    monkeypatch.setattr(app_module, 'get_full_option_chain_df', lambda *a, **k: chain)
+    monkeypatch.setattr(app_module, 'compute_options_terminal', compute_options_terminal)
+    monkeypatch.setattr(app_module, 'get_current_price_yfinance', lambda symbol: 101.0)
+    stats = analysis()['gex_stats']
+    gex = compute_options_terminal(ticker='SPY', spot=101.0, chain_df=chain,
+                                   daily_df=pd.DataFrame(), convention='naive').gex
+    assert (stats['call_wall'], stats['put_wall'], stats['gamma_flip']) == (
+        gex.call_wall, gex.put_wall, gex.gamma_flip)
+    assert stats['call_wall'] is not None
