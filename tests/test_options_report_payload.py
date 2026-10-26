@@ -82,10 +82,10 @@ def test_digest_band_size_atm_and_shape(env):
     assert payload['spot'] == 101.5
     assert payload['snapshot_spot'] == 100.0
     digest = payload['chain_digest']
-    sigma = 20.0 / 100 * math.sqrt(30 / 365) * 100
+    sigma = 20.0 / 100 * math.sqrt(30 / 365) * payload['spot']
     assert len(digest) <= 43
-    assert all(abs(row['strike'] - 100.0) <= 2 * sigma + 1e-9 for row in digest)
-    assert 100.0 in [row['strike'] for row in digest]
+    assert all(abs(row['strike'] - payload['spot']) <= 2 * sigma + 1e-9 for row in digest)
+    assert 101.5 in [row['strike'] for row in digest]
     row = digest[0]
     assert set(row) == {'strike'} | {f'{side}_{f}'
                                      for side in ('call', 'put')
@@ -136,7 +136,7 @@ def test_skew_matches_compute_25d_skew(env, monkeypatch):
     payload = build(env)
     rows = env.get_options_greeks_data('SPY', EXP1, 0.045, strike_count='all')['options']
     frame = env._options_skew_frame(rows)
-    ratio, risk_reversal = compute_25d_skew(frame, 100.0)
+    ratio, risk_reversal = compute_25d_skew(frame, payload['spot'])
     assert payload['skew'] == {'ratio': ratio, 'risk_reversal': risk_reversal}
     assert payload['skew']['ratio'] == 1.2
     assert payload['skew']['risk_reversal'] == -4.0
@@ -233,3 +233,42 @@ def test_zero_oi_side_declares_missing_concentration(env, monkeypatch):
     assert payload['concentrations']['call_oi']
     assert payload['concentrations']['put_oi'] is None
     assert 'put open interest' in payload['_provenance']['concentrations.put_oi']
+
+
+def test_digest_keeps_off_grid_atm_walls_and_max_pain(env, monkeypatch):
+    monkeypatch.setattr(env, 'get_current_price_yfinance', lambda symbol: 100.4)
+    terminal = _terminal_stub()
+    terminal.gex.call_wall = 99.5
+    terminal.gex.put_wall = 125.0
+    monkeypatch.setattr(env, 'compute_options_terminal', lambda **kwargs: terminal)
+    original = env.compute_options_analysis
+
+    def analysis(*args):
+        base = original(*args)
+        base['max_pain'] = 100.0
+        return base
+
+    monkeypatch.setattr(env, 'compute_options_analysis', analysis)
+    payload = build(env)
+    strikes = {row['strike'] for row in payload['chain_digest']}
+    assert {100.5, 99.5, 125.0, 100.0} <= strikes
+    assert len(strikes) <= 43
+
+
+def test_skew_and_liquidity_use_live_spot(env, monkeypatch):
+    monkeypatch.setattr(env, 'get_current_price_yfinance', lambda symbol: 120.0)
+    seen = []
+
+    def skew(frame, spot):
+        seen.append(spot)
+        return 1.2, -4.0
+
+    monkeypatch.setattr(env, 'compute_25d_skew', skew)
+    calls, puts, snapshot = _chain_frames([round(70 + i * 0.5, 1) for i in range(120)])
+    for frame in (calls, puts):
+        frame.loc[frame['strike'].between(114.0, 126.0), ['bid', 'ask']] = [1.0, 3.0]
+    monkeypatch.setattr(env, 'get_cached_chain', lambda *args, **kwargs: (calls, puts, snapshot))
+    payload = build(env)
+    assert seen == [120.0]
+    assert payload['snapshot_spot'] == 100.0
+    assert payload['liquidity'] == {'median_spread_pct': 100.0}

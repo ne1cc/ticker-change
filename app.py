@@ -4758,10 +4758,10 @@ def _options_chain_digest(rows, spot, atm_iv, dte, keep_strikes):
                if sigma is not None and abs(r['strike'] - spot) <= 2 * sigma}
     if len(strikes) < 20:
         strikes = set(sorted(by_strike, key=lambda s: abs(s - spot))[:20])
-    strikes |= {s for s in keep_strikes if s in by_strike}
     ordered = sorted(strikes)
     stride = math.ceil(len(ordered) / 40)
-    return [_options_digest_row(by_strike[s]) for s in ordered[::stride]]
+    strikes = set(ordered[::stride]) | {s for s in keep_strikes if s in by_strike}
+    return [_options_digest_row(by_strike[s]) for s in sorted(strikes)]
 
 
 def _options_skew_frame(rows):
@@ -4851,20 +4851,20 @@ def build_options_report_payload(ticker, expiration_date=None, rf_rate=0.045) ->
     if base['selected_expiration'] and expirations and base['selected_expiration'] != expirations[0]:
         prov['iv_rank'] = 'rank compares this expiry ATM IV with front-expiry history'
 
-    atm_strike = (min((r['strike'] for r in rows), key=lambda s: abs(s - snapshot_spot), default=None)
-                  if snapshot_spot else None)
+    atm_strike = (min((r['strike'] for r in rows), key=lambda s: abs(s - spot), default=None)
+                  if spot else None)
     # Wall strikes from the whole-chain GEX run and this expiry's max pain stay
     # in the digest so the model sees them, even outside the ±2σ band.
     keep = ({atm_strike} if atm_strike is not None else set()) | {
         s for s in ((gex_stats or {}).get('call_wall'), (gex_stats or {}).get('put_wall'),
                     base.get('max_pain')) if s is not None}
     digest = _guarded('options-report digest', 'chain_digest',
-                      lambda: _options_chain_digest(rows, snapshot_spot, base.get('atm_iv'),
+                      lambda: _options_chain_digest(rows, spot, base.get('atm_iv'),
                                                     base.get('days_to_expiration'), keep),
                       'no strikes near spot')
 
     def _skew():
-        ratio, risk_reversal = compute_25d_skew(_options_skew_frame(rows), snapshot_spot)
+        ratio, risk_reversal = compute_25d_skew(_options_skew_frame(rows), spot)
         return None if (ratio, risk_reversal) == (1.0, 0.0) else {
             'ratio': ratio, 'risk_reversal': risk_reversal}
 
@@ -4894,7 +4894,7 @@ def build_options_report_payload(ticker, expiration_date=None, rf_rate=0.045) ->
     def _liquidity():
         spreads = []
         for r in rows:
-            if snapshot_spot and abs(r['strike'] - snapshot_spot) <= snapshot_spot * 0.05:
+            if spot and abs(r['strike'] - spot) <= spot * 0.05:
                 for side in ('call', 'put'):
                     if r.get(f'{side}_quote_valid'):
                         spreads.append(_options_spread_pct(r[f'{side}_bid'], r[f'{side}_ask']))
