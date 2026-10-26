@@ -97,44 +97,224 @@ def test_preprocess_preserves_already_formatted_markdown():
 
 
 def test_generate_options_report_with_cached_markdown(monkeypatch):
+    """Cached Markdown renders correctly and retains every stored report field."""
     import db
     import ai
 
-    monkeypatch.setattr(ai.providers, "ai_providers", lambda: [{"id": "mock", "label": "Mock", "model": "mock-model", "base_url": "mock", "key": "mock"}])
-    monkeypatch.setattr(db, "cache_get", lambda table, key, ttl: {"markdown": SAMPLE_RAW_REPORT, "provider": "mock"})
+    seen = {}
 
-    html, err = ai.generate_options_report("MU", {"selected_expiration": "2026-09-11"})
+    def fake_cache_get(table, key, ttl):
+        seen.update(table=table, key=key)
+        return {"markdown": SAMPLE_RAW_REPORT, "provider": "mock",
+                "generated_at": "2026-10-24T15:00:00",
+                "vintage": "2026-10-23T16:14:00+00:00",
+                "payload": {"spot": 100.0}}
+
+    monkeypatch.setattr(ai.providers, "ai_providers", lambda: [{"id": "mock", "label": "Mock", "model": "mock-model", "base_url": "mock", "key": "mock"}])
+    monkeypatch.setattr(db, "cache_get", fake_cache_get)
+
+    report, err = ai.generate_options_report("MU", {"selected_expiration": "2026-09-11"})
     assert err is None
-    assert html is not None
+    assert seen["table"] == "ai_options_report"
+    assert seen["key"] == f"options_report:v{ai.OPTIONS_REPORT_VERSION}:MU:2026-09-11:0.045"
+    html = report["html"]
     assert "<h3>1. Options Market Regime &amp; Volatility Analysis</h3>" in html
     assert "<strong>Volatility Risk Premium (VRP):</strong>" in html
+    assert report["markdown"] == SAMPLE_RAW_REPORT
+    assert report["provider"] == "mock"
+    assert report["generated_at"] == "2026-10-24T15:00:00"
+    assert report["payload"] == {"spot": 100.0}
+    assert report["vintage"] == "2026-10-23T16:14:00+00:00"
 
 
-def test_api_options_ai_report_force_param(monkeypatch):
+def test_generate_options_report_cache_round_trip_preserves_full_report(monkeypatch):
+    """Require identical six-field reports on fresh/cache paths and four API fields offline."""
+    import ai
+    from unittest.mock import Mock
+
+    # 1. Isolate the cache and provider so the round trip cannot touch the network.
+    cache = {}
+    generate = Mock(return_value=(FALLBACK_REPORT, []))
+    monkeypatch.setattr(ai.providers, "ai_providers", lambda: [{"id": "mock"}])
+    monkeypatch.setattr(ai, "_generate_report_from_provider", generate)
+    monkeypatch.setattr(ai.db, "cache_get", lambda table, key, ttl: cache.get((table, key)))
+    monkeypatch.setattr(ai.db, "cache_set",
+                        lambda table, key, report: cache.update({(table, key): dict(report)}))
+    payload = {"selected_expiration": "2026-11-20", "rf_rate": 0.05,
+               "spot": 100.0, "vintage": "unknown"}
+
+    # 2. A cache hit must rebuild stale HTML without discarding the stored report fields.
+    fresh_report, error = ai.generate_options_report("SPY", payload)
+    assert error is None
+    assert set(fresh_report) == {"html", "markdown", "provider", "generated_at", "vintage", "payload"}
+    cache[("ai_options_report", "options_report:v2:SPY:2026-11-20:0.05")]["html"] = "<p>stale rendering</p>"
+    cached_report, error = ai.generate_options_report("SPY", payload)
+    assert error is None
+    assert cached_report == fresh_report
+    generate.assert_called_once()
+
+    # 3. Only the route's dedicated cache reader projects the four public API fields.
+    api_report = ai.cached_options_report("SPY", "2026-11-20", 0.05)
+    api_fields = {"html", "generated_at", "vintage", "payload"}
+    assert api_report == {key: fresh_report[key] for key in api_fields}
+
+
+def _stub_report_flow(monkeypatch, expirations=("2026-11-20", "2026-12-18")):
+    """Route-level stubs: expirations resolved offline, builder and generator recorded."""
     import app as flask_app
     import ai
 
-    called = {}
+    calls = {"builder": 0, "generate": []}
 
-    def mock_generate(ticker, data, force=False):
-        called["force"] = force
-        return "<h3>Report</h3>", None
+    def fake_payload(ticker, exp, rf):
+        calls["builder"] += 1
+        return {"ticker": ticker, "selected_expiration": exp, "rf_rate": rf,
+                "spot": 100.0, "chain_digest": [], "_provenance": {},
+                "vintage": "2026-10-23T16:14:00+00:00"}
 
-    monkeypatch.setattr(flask_app, "compute_options_analysis", lambda ticker, exp, rf: {"spot": 100})
-    monkeypatch.setattr(ai, "generate_options_report", mock_generate)
+    def fake_generate(ticker, payload, force=False):
+        calls["generate"].append({"ticker": ticker, "payload": payload, "force": force})
+        return {"html": "<h3>Report</h3>", "markdown": "Report", "provider": "mock",
+                "generated_at": "2026-10-25T13:05:00",
+                "vintage": payload.get("vintage"),
+                "payload": payload}, None
 
+    monkeypatch.setattr(flask_app, "get_cached_expirations",
+                        lambda t, stock=None, force=False: list(expirations))
+    monkeypatch.setattr(flask_app, "build_options_report_payload", fake_payload)
+    monkeypatch.setattr(ai, "cached_options_report", lambda t, e, r: None)
+    monkeypatch.setattr(ai, "generate_options_report", fake_generate)
+    return flask_app, ai, calls
+
+
+def test_api_options_ai_report_force_param(monkeypatch):
+    flask_app, ai, calls = _stub_report_flow(monkeypatch)
     client = flask_app.app.test_client()
 
     resp = client.get("/api/options-ai-report/MU?force=1")
     assert resp.status_code == 200
-    assert called.get("force") is True
+    assert calls["generate"][0]["force"] is True
+    assert calls["generate"][0]["payload"]["selected_expiration"] == "2026-11-20"
     data = resp.get_json()
     assert data["html"] == "<h3>Report</h3>"
 
     resp2 = client.get("/api/options-ai-report/MU")
     assert resp2.status_code == 200
-    assert called.get("force") is False
+    assert calls["generate"][1]["force"] is False
 
+
+def test_api_options_ai_report_cache_hit_skips_builder(monkeypatch):
+    flask_app, ai, calls = _stub_report_flow(monkeypatch)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("build_options_report_payload must not run on a cache hit")
+
+    monkeypatch.setattr(flask_app, "build_options_report_payload", boom)
+    monkeypatch.setattr(ai, "cached_options_report",
+                        lambda t, e, r: {"html": "<p>cached</p>", "generated_at": "2026-10-25T13:05:00",
+                                         "vintage": "unknown", "payload": {"spot": 100.0}})
+
+    client = flask_app.app.test_client()
+    resp = client.get("/api/options-ai-report/SPY")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["html"] == "<p>cached</p>"
+    assert data["payload"] == {"spot": 100.0}
+    assert calls["generate"] == []
+
+
+def test_api_options_ai_report_resolves_default_expiration(monkeypatch):
+    flask_app, ai, calls = _stub_report_flow(monkeypatch)
+    lookup = {}
+    monkeypatch.setattr(ai, "cached_options_report",
+                        lambda t, e, r: lookup.update(ticker=t, exp=e, rf=r))
+
+    client = flask_app.app.test_client()
+    resp = client.get("/api/options-ai-report/SPY?rf_rate=0.05")
+    assert resp.status_code == 200
+
+    # Cache lookup and payload both use get_cached_expirations(...)[0] ...
+    assert lookup["exp"] == "2026-11-20"
+    assert lookup["rf"] == 0.05
+    assert calls["generate"][0]["payload"]["selected_expiration"] == "2026-11-20"
+    # ... and the versioned report cache key carries v2 and the resolved expiry.
+    key = ai._options_cache_key("SPY", calls["generate"][0]["payload"]["selected_expiration"],
+                                calls["generate"][0]["payload"]["rf_rate"])
+    assert key == f"options_report:v{ai.OPTIONS_REPORT_VERSION}:SPY:2026-11-20:0.05"
+
+
+def test_api_options_ai_report_force_ignores_cache_and_builds_once(monkeypatch):
+    flask_app, ai, calls = _stub_report_flow(monkeypatch)
+    monkeypatch.setattr(ai, "cached_options_report",
+                        lambda t, e, r: {"html": "<p>stale</p>", "generated_at": "x",
+                                         "vintage": "unknown", "payload": {}})
+
+    client = flask_app.app.test_client()
+    resp = client.get("/api/options-ai-report/MU?force=1")
+    assert resp.status_code == 200
+    assert calls["builder"] == 1
+    assert calls["generate"][0]["force"] is True
+    assert resp.get_json()["html"] == "<h3>Report</h3>"
+
+
+def test_api_options_ai_report_response_carries_metadata(monkeypatch):
+    flask_app, ai, calls = _stub_report_flow(monkeypatch)
+
+    client = flask_app.app.test_client()
+    resp = client.get("/api/options-ai-report/MU")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert set(data) == {"html", "generated_at", "vintage", "payload"}
+    from datetime import datetime
+    datetime.fromisoformat(data["generated_at"])
+    assert data["vintage"] == "2026-10-23T16:14:00+00:00"
+
+
+def test_options_report_user_message_is_compact_and_grounded(monkeypatch):
+    import ai
+
+    captured = {}
+
+    def mock_openai_report(base_url, key, model, user_msg, system, **kwargs):
+        captured["user_msg"] = user_msg
+        captured["system"] = system
+        return FALLBACK_REPORT
+
+    monkeypatch.setattr(ai.db, "cache_get", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ai.db, "cache_set", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ai, "_openai_compatible_report", mock_openai_report)
+    monkeypatch.setattr(ai.providers, "ai_providers", lambda: _options_providers("m", "small"))
+
+    payload = {"ticker": "MU", "spot": 100.0, "chain_digest": [{"strike": 100}],
+               "_provenance": {"skew": "25-delta skew not computable from this chain"},
+               "vintage": "2026-10-23T16:14:00+00:00"}
+    report, err = ai.generate_options_report("MU", payload, force=True)
+    assert err is None
+
+    user_msg = captured["user_msg"]
+    assert "chain_digest" in user_msg
+    assert "_provenance" in user_msg
+    assert "\n  " not in user_msg
+    assert "_provenance" in captured["system"]
+    assert report["payload"] is payload
+    assert report["vintage"] == "2026-10-23T16:14:00+00:00"
+    assert report["generated_at"]
+
+
+def test_options_system_has_no_generic_anchors():
+    import ai
+
+    assert "40-45 delta" not in ai.OPTIONS_SYSTEM
+    assert "50% max profit" not in ai.OPTIONS_SYSTEM
+
+
+def test_options_system_greeks_caveats_match_model_limits():
+    """Keep dividend/early-exercise limits without claiming rates are ignored."""
+    import ai
+
+    assert "Black-Scholes with no dividends" in ai.OPTIONS_SYSTEM
+    assert "early exercise is ignored" in ai.OPTIONS_SYSTEM
+    assert "rates effects are ignored" not in ai.OPTIONS_SYSTEM
 
 
 def test_generate_options_report_falls_back_to_secondary_model_on_503(monkeypatch):

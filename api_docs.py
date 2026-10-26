@@ -301,7 +301,7 @@ def get_openapi_spec() -> Dict[str, Any]:
                 "get": {
                     "tags": ["Options & Derivatives"],
                     "summary": "LLM Generated Options Volatility Synthesis",
-                    "description": "Synthesizes dealer positioning, GEX profile, and volatility term structure into an actionable market report.",
+                    "description": "Synthesizes dealer positioning, GEX profile, and volatility term structure into an actionable market report. The expiration is resolved to the first listed expiry when absent or unknown, and the finished report is cached under a versioned key for that expiry and rf_rate; force=1 regenerates and overwrites it.",
                     "parameters": [
                         {
                             "name": "ticker",
@@ -312,25 +312,43 @@ def get_openapi_spec() -> Dict[str, Any]:
                         {
                             "name": "expiration",
                             "in": "query",
-                            "schema": {"type": "string"}
+                            "schema": {"type": "string"},
+                            "description": "Expiration date (YYYY-MM-DD); defaults to the first listed expiry."
                         },
                         {
                             "name": "rf_rate",
                             "in": "query",
                             "schema": {"type": "number", "default": 0.045}
+                        },
+                        {
+                            "name": "force",
+                            "in": "query",
+                            "schema": {"type": "boolean", "default": False},
+                            "description": "Ignore the cached report and regenerate it."
                         }
                     ],
                     "responses": {
                         "200": {
-                            "description": "HTML or markdown formatted AI narrative",
+                            "description": "HTML narrative with its generation metadata and the payload it was grounded in",
                             "content": {
                                 "application/json": {
                                     "schema": {
                                         "type": "object",
                                         "properties": {
-                                            "html": {"type": "string"}
+                                            "html": {"type": "string"},
+                                            "generated_at": {"type": "string", "format": "date-time", "description": "UTC ISO timestamp of report generation"},
+                                            "vintage": {"type": "string", "description": "Chain snapshot vintage (UTC ISO), or 'unknown'"},
+                                            "payload": {"type": "object", "description": "Structured payload the report was grounded in"}
                                         }
                                     }
+                                }
+                            }
+                        },
+                        "404": {
+                            "description": "No option expirations listed for the ticker, or the report payload could not be built",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/ErrorResponse"}
                                 }
                             }
                         },
