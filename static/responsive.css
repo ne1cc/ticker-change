@@ -251,6 +251,8 @@ button {
   input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"]) {
     min-height: 44px;
   }
+  /* WebKit ignores min-height on native selects, so give them a real height. */
+  select { height: 44px; }
   #theme-toggle, #nav-settings, #mobile-nav-toggle {
     min-width: 44px;
     display: inline-flex;
