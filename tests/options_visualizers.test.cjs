@@ -208,7 +208,7 @@ test('dealer GEX retains the taller chart and vertical navigation after merging 
     put_gex_series:[-3,-2,-1],net_gex_series:[-2,0,2],call_wall:110,put_wall:90,gamma_flip:100}};
   h.renderGexPlot();
   assert.equal(h.last.id,'gex-plot-container');
-  assert.match(template, /id="gex-plot-container"[^>]*style="height: 720px;"/);
+  assert.match(template, /id="gex-plot-container"[^>]*class="[^"]*md:h-\[720px\]"/);
   assert.equal(h.last.option.xAxis.min,-h.last.option.xAxis.max);
   assert.equal(h.last.option.dataZoom[0].type,'inside');
   assert.equal(h.last.option.dataZoom[0].yAxisIndex,0);

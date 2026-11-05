@@ -24,7 +24,7 @@
   html.dark .options-comparison-button[aria-pressed="true"] { background: #27272a; color: #93c5fd; }
   .options-gex-total { min-width: 0; overflow-wrap: anywhere; }
   @media (max-width: 639px) {
-    .options-visualizer-chart { height: 400px !important; }
+    .options-visualizer-chart { height: 320px !important; }
   }
 
   /* Sticky option-chain header.
@@ -376,7 +376,7 @@
 
     <!-- Tab 0: Live Option Chain -->
     <div id="workspace-tab-chain" class="hidden p-4 sm:p-6 space-y-6">
-      <div id="chain-card" class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm flex flex-col h-[700px] overflow-hidden">
+      <div id="chain-card" class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm flex flex-col h-[520px] md:h-[700px] overflow-hidden">
 
         <!-- Controls Header -->
         <div class="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 flex flex-wrap gap-4 items-center justify-between bg-zinc-50 dark:bg-zinc-900/50">
@@ -584,7 +584,7 @@
       </div>
       
       <!-- GEX Chart Container -->
-      <div id="gex-plot-container" class="w-full h-[720px]" style="height: 720px;"></div>
+      <div id="gex-plot-container" class="w-full h-[380px] md:h-[720px]"></div>
 
       <!-- Top Gamma Nodes & Vanna/Charm Matrix -->
       {% if data.gex.top_nodes %}
@@ -626,12 +626,12 @@
         <div>
           <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-100">ATM Implied Volatility Term Structure</h3>
           <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Slope: <span class="font-mono font-bold">{{ '%+.3f'|format(data.vol.slope) }}</span> ({{ data.vol.regime | upper }})</p>
-          <div id="term-plot-container" class="w-full h-[400px] mt-2"></div>
+          <div id="term-plot-container" class="w-full h-[300px] md:h-[400px] mt-2"></div>
         </div>
         <div>
           <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-100">3D Volatility Surface Mesh</h3>
           <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Moneyness (K/S) × Days to Expiry (DTE) × Implied Volatility (%)</p>
-          <div id="surface-plot-container" class="w-full h-[400px] mt-2"></div>
+          <div id="surface-plot-container" class="w-full h-[300px] md:h-[400px] mt-2"></div>
         </div>
       </div>
     </div>
@@ -642,7 +642,7 @@
         <div class="lg:col-span-8">
           <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-100">Multi-Window Realized Volatility vs. Current ATM IV</h3>
           <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Close-to-Close HV vs Yang-Zhang (1998) jump-adjusted estimator across 10D to 90D horizons</p>
-          <div id="cones-plot-container" class="w-full h-[400px] mt-2"></div>
+          <div id="cones-plot-container" class="w-full h-[300px] md:h-[400px] mt-2"></div>
         </div>
         <div class="lg:col-span-4 space-y-4">
           <div class="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50 space-y-3">

@@ -249,8 +249,9 @@ button {
 
   button, select, summary, [role="button"], body > nav a, a.sub-nav-pill, .mobile-nav-link,
   input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"]) {
-    min-height: 44px;
+    min-height: 44px !important;  /* a floor: page-level <style> blocks must not undercut it */
   }
+  input[type="range"] { height: 44px; }  /* the track stays thin; the hit area is what grows */
   /* WebKit ignores min-height on native selects, so give them a real height. */
   select { height: 44px; }
   #theme-toggle, #nav-settings, #mobile-nav-toggle {
