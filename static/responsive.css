@@ -175,3 +175,24 @@ button {
 .chart-readout, .chart-attribution { font: 11px ui-monospace, monospace; color: #71717a; line-height: 1.7; margin: .5rem 0; min-height: 1.7em; }
 .chart-attribution a { text-decoration: underline; }
 @media (max-width: 767px) { .stock-chart { height: 320px; } .stock-chart-controls button { min-height: 38px; } }
+
+/* Open state for the tap-to-open definition popovers (static/mobile.js). Specificity beats .opacity-0. */
+[data-tip][data-open] > [role="tooltip"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (max-width: 767px) {
+  /* Edge-fade hint: more content to the right of a scrolling table/tab strip. */
+  .overflow-x-auto.has-more,
+  .responsive-table.has-more {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+            mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+}
+
+@media (hover: none) {
+  /* Invisible 44px hit area for the 12px definition icon without moving layout. */
+  .tip-hit { position: relative; }
+  .tip-hit::after { content: ""; position: absolute; inset: -16px; }
+}

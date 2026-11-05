@@ -161,3 +161,24 @@ def test_body_is_not_a_scroll_container(browsers, base_url):
     finally:
         ctx.close()
     assert overflow_x == "clip", overflow_x
+
+
+@pytest.mark.parametrize("route", ["/brief/AAA", "/analytics?ticker=AAA"])
+def test_definition_tap_opens_popover_without_navigating(browsers, base_url, route):
+    ctx, page = _phone_page(browsers("chromium"), "iphone-390")
+    try:
+        page.goto(base_url + route, wait_until="networkidle")
+        toggle = page.locator("[data-tip-toggle]:visible").first
+        assert toggle.count() == 1, f"no definition toggle on {route}"
+        url = page.url
+        toggle.scroll_into_view_if_needed()
+        toggle.tap()
+        pop = page.locator("[data-tip][data-open] > [role=tooltip]").first
+        assert pop.is_visible()
+        box = pop.bounding_box()
+        assert box["x"] >= 0 and box["x"] + box["width"] <= PHONES["iphone-390"]["width"], box
+        assert page.url == url  # did not navigate to /glossary
+        page.mouse.click(5, 300)  # tap away (left gutter)
+        assert page.locator("[data-tip][data-open]").count() == 0
+    finally:
+        ctx.close()
