@@ -150,3 +150,14 @@ def test_known_has_no_stale_entries():
         pytest.skip("partial run; stale check needs every case")
     stale = sorted(set(KNOWN) - _OBSERVED)
     assert not stale, f"stale KNOWN entries (fixed! delete them): {stale}"
+
+
+def test_body_is_not_a_scroll_container(browsers, base_url):
+    """position:sticky inside <body> breaks if body is a scroll container."""
+    ctx, page = _phone_page(browsers("chromium"), "iphone-390")
+    try:
+        page.goto(base_url + "/glossary", wait_until="domcontentloaded")
+        overflow_x = page.evaluate("getComputedStyle(document.body).overflowX")
+    finally:
+        ctx.close()
+    assert overflow_x == "clip", overflow_x
