@@ -85,7 +85,7 @@ AUDIT_JS = r"""
 
   // 1. overflow: element sticks out of the viewport and nothing legitimately scrolls it
   for (const el of document.querySelectorAll('body *')) {
-    if (el.closest('svg, canvas, [data-audit-skip]') || !visible(el)) continue;
+    if (el.closest('svg, canvas, [data-audit-skip], [role=tooltip]') || !visible(el)) continue;  // tooltips are hidden until tapped, then placed fixed
     if (getComputedStyle(el).position === 'fixed') continue;
     const r = el.getBoundingClientRect();
     if (r.right <= vw + 1 && r.left >= -1) continue;
