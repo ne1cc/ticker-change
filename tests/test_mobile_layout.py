@@ -163,6 +163,22 @@ def test_body_is_not_a_scroll_container(browsers, base_url):
     assert overflow_x == "clip", overflow_x
 
 
+def test_glossary_anchor_lands_below_sticky_header(browsers, base_url):
+    """The (i) icons link to /glossary#key; the entry must not hide under the pinned nav."""
+    ctx, page = _phone_page(browsers("chromium"), "iphone-390")
+    try:
+        page.goto(base_url + "/glossary", wait_until="load")
+        key = page.evaluate("[...document.querySelectorAll('[data-term]')].at(-12).id")  # deep enough to need a scroll
+        page.goto(base_url + "/glossary#" + key, wait_until="load")
+        page.wait_for_timeout(300)
+        top, nav_bottom = page.evaluate(
+            "[document.getElementById(location.hash.slice(1)).getBoundingClientRect().top,"
+            " document.querySelector('body > nav').getBoundingClientRect().bottom]")
+    finally:
+        ctx.close()
+    assert top >= nav_bottom, f"entry top {top} is under the nav (bottom {nav_bottom})"
+
+
 @pytest.mark.parametrize("route", ["/brief/AAA", "/analytics?ticker=AAA"])
 def test_definition_tap_opens_popover_without_navigating(browsers, base_url, route):
     ctx, page = _phone_page(browsers("chromium"), "iphone-390")

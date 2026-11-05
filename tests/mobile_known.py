@@ -10,8 +10,5 @@ KNOWN: dict[tuple[str, str, str], str] = {
     ('/heatmap', 'excel', 'overflow'): "baseline 2026-11 (phase 3)",
     ('/options?ticker=AAA', 'excel', 'font'): "baseline 2026-11 (phase 4)",
     ('/options?ticker=AAA', 'excel', 'tap'): "baseline 2026-11 (phase 4)",
-    ('/stock?ticker=AAA', 'dark', 'overflow'): "baseline 2026-11 (phase 2)",
-    ('/stock?ticker=AAA', 'excel', 'overflow'): "baseline 2026-11 (phase 2)",
-    ('/stock?ticker=AAA', 'light', 'overflow'): "baseline 2026-11 (phase 2)",
     ('/strategies?ticker=AAA', 'excel', 'tap'): "baseline 2026-11 (phase 3)",
 }

@@ -71,10 +71,14 @@ AUDIT_JS = r"""
     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' &&
            s.display !== 'none' && s.opacity !== '0';
   };
+  // Any scrolling ancestor that itself fits the viewport makes the overflow legitimate
+  // (nested scrollers: a table wrapper inside a swipe carousel).
   const scroller = el => {
     for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
       const o = getComputedStyle(p).overflowX;
-      if (['auto', 'scroll', 'hidden', 'clip'].includes(o)) return p;
+      if (!['auto', 'scroll', 'hidden', 'clip'].includes(o)) continue;
+      const sr = p.getBoundingClientRect();
+      if (sr.left >= -1 && sr.right <= vw + 1) return p;
     }
     return null;
   };
@@ -85,11 +89,7 @@ AUDIT_JS = r"""
     if (getComputedStyle(el).position === 'fixed') continue;
     const r = el.getBoundingClientRect();
     if (r.right <= vw + 1 && r.left >= -1) continue;
-    const sc = scroller(el);
-    if (sc) {
-      const sr = sc.getBoundingClientRect();
-      if (sr.left >= -1 && sr.right <= vw + 1) continue;
-    }
+    if (scroller(el)) continue;
     out.overflow.push(desc(el) + ' right=' + Math.round(r.right));
   }
 
