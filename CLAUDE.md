@@ -36,6 +36,11 @@ gunicorn app:app --bind 0.0.0.0:5001 --workers 2
 # (tests mock fetchers and skip when cached data is unavailable)
 python -m pytest tests/ -q
 
+# Mobile layout suite (real browsers at 360/390px; needs network for the
+# Tailwind/ECharts CDNs, skips cleanly when Playwright/browsers/CDNs are absent)
+python -m playwright install chromium webkit
+python -m pytest tests/test_mobile_layout.py -q
+
 # Train the ML signal model (optional; without it the ML section is omitted)
 python ml.py train AAPL MSFT NVDA SPY ...
 
@@ -157,6 +162,19 @@ negatives in accounting-style parens.
 `templates/_macros.html` provides the `metric(label, key)` macro used
 throughout for the `(i)` tooltip that links every stat to its `/glossary`
 entry — reuse it instead of hand-rolling label markup for new metrics.
+
+### Mobile
+
+The app is responsive in place (no separate mobile site; installable via
+`static/manifest.webmanifest`, no service worker). `static/responsive.css`
+holds the shared classes: `sticky-first` (frozen first column in scroll
+tables), `fit` (opt a table out of scroll-in-place), `stack-mobile` /
+`stack-pairs` (rows become cards), and `chart-h` (phone chart height); it also
+enforces the 12px text and 44px tap-target floors. `static/mobile.js` is
+markup-hook only: `data-tip*` tap-to-open definitions, `.has-more` scroll
+hints, and the dismissible `#desktop-banner` (`_desktop_banner.html`, on
+`/live`, `/options`, and Signal Lab). New tables/grids must pass
+`tests/test_mobile_layout.py`; its ratchet `tests/mobile_known.py` is empty.
 
 Tooltip/definition authority is deliberately split by surface: evidence
 pages take tooltips from `glossary.py` via that macro; the brief surfaces

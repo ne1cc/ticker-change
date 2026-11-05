@@ -143,6 +143,19 @@ shell out to `node` to parse and execute the inline navigation JavaScript in
 
 ---
 
+## Mobile
+
+Every page is responsive in place and checked in Chromium and WebKit at
+phone widths (360px and 390px) in light, dark, and Excel modes. On a phone, tap an ⓘ to
+open its definition and scroll wide tables sideways (the first column stays
+put). To install, use Safari's *Add to Home Screen* or Chrome's *Install app*;
+there is no service worker, so it needs a connection. `/live`, `/options`, and
+Signal Lab are dense and work best on desktop; they show a dismissible
+banner saying so. Run `python -m playwright install chromium webkit` then
+`python -m pytest tests/test_mobile_layout.py -q` to check layouts.
+
+---
+
 ## Drill-down evidence pages
 
 Enter a ticker (or click a dashboard card) and the brief links into these
