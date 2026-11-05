@@ -253,3 +253,17 @@ button {
   }
   .sub-nav-pill, .chart-controls button { display: inline-flex; align-items: center; }
 }
+
+/* One shared height for chart mounts on phones (use instead of fixed pixel heights). */
+@media (max-width: 767px) { .chart-h { height: clamp(260px, 72vw, 420px); } }
+
+/* Top bar budget: brand + search + theme + menu must fit in one 64px row. Settings lives in the menu. */
+@media (max-width: 767px) {
+  #nav-settings { display: none; }
+  #top-nav-search-input { width: 6.5rem; }
+  #brand-link { min-width: 44px; }
+  #brand-link > span { font-size: 1rem; }
+}
+@media (max-width: 369px) {
+  #brand-link > span { display: none; }
+}
