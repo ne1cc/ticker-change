@@ -232,11 +232,17 @@ button {
   .stack-mobile td[data-label]::before {
     content: attr(data-label);
     display: block;
-    font-size: 12px;
+    font: normal 500 12px/1.4 ui-sans-serif, system-ui, sans-serif;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: #71717a;
   }
+
+  /* Label/value pairs (brief): term and value share a line, the receipt wraps beneath. */
+  .stack-pairs tr { grid-template-columns: 1fr auto; }
+  .stack-pairs td:first-child { grid-column: auto; }
+  .stack-pairs td:nth-child(2) { text-align: right !important; align-self: center; }
+  .stack-pairs td:last-child { grid-column: 1 / -1; white-space: normal !important; overflow-wrap: anywhere; }
 
   /* ---- Touch floors: 12px text, 44px targets ---- */
   [class*="text-[9px]"], [class*="text-[10px]"], [class*="text-[11px]"] { font-size: 12px !important; }

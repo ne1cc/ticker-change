@@ -69,7 +69,7 @@
       {% if sec.as_of %}No data as of {{ sec.as_of[:16].replace('T', ' ') }}{% else %}No cached data (never fetched){% endif %}
     </div>
     {% endif %}
-    <table class="w-full text-sm">
+    <table class="stack-mobile stack-pairs w-full text-sm">
       <tbody>
         {% for r in sec.rows %}
         <tr class="border-b border-zinc-100 dark:border-zinc-800/50">

@@ -7,9 +7,6 @@ with this empty.
 KNOWN: dict[tuple[str, str, str], str] = {
     ('/ai-summary?ticker=AAA', 'excel', 'tap'): "baseline 2026-11 (phase 3)",
     ('/analytics?ticker=AAA', 'excel', 'font'): "baseline 2026-11 (phase 3)",
-    ('/brief/AAA', 'dark', 'overflow'): "baseline 2026-11 (phase 2)",
-    ('/brief/AAA', 'excel', 'overflow'): "baseline 2026-11 (phase 2)",
-    ('/brief/AAA', 'light', 'overflow'): "baseline 2026-11 (phase 2)",
     ('/heatmap', 'excel', 'overflow'): "baseline 2026-11 (phase 3)",
     ('/options?ticker=AAA', 'excel', 'font'): "baseline 2026-11 (phase 4)",
     ('/options?ticker=AAA', 'excel', 'tap'): "baseline 2026-11 (phase 4)",
