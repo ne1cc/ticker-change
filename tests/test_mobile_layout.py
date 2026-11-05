@@ -182,3 +182,22 @@ def test_definition_tap_opens_popover_without_navigating(browsers, base_url, rou
         assert page.locator("[data-tip][data-open]").count() == 0
     finally:
         ctx.close()
+
+
+def test_sticky_first_column_stays_put_and_scroll_fade_appears(browsers, base_url):
+    ctx, page = _phone_page(browsers("chromium"), "iphone-390")
+    try:
+        page.goto(base_url + "/glossary", wait_until="networkidle")
+        page.evaluate("""() => {
+          const w = document.createElement('div');
+          w.className = 'overflow-x-auto sticky-first'; w.id = 'probe';
+          w.innerHTML = '<table><tr><td>A</td>' + '<td>wide cell</td>'.repeat(40) + '</tr></table>';
+          document.body.prepend(w);
+        }""")
+        page.wait_for_timeout(500)  # mobile.js rescans on DOM mutation after 200ms
+        assert "has-more" in page.get_attribute("#probe", "class")
+        page.evaluate("document.getElementById('probe').scrollLeft = 300")
+        left = page.evaluate("document.querySelector('#probe td:first-child').getBoundingClientRect().left")
+    finally:
+        ctx.close()
+    assert abs(left) < 2, left

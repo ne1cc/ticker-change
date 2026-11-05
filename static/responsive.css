@@ -165,16 +165,16 @@ button {
 
 /* Shared, compact chart controls in the terminal palette. */
 .terminal-chart { width: 100%; min-width: 0; position: relative; }
-.chart-controls { display: flex; gap: .35rem; align-items: center; justify-content: flex-end; flex-wrap: wrap; margin: .4rem 0; font: 11px ui-monospace, monospace; }
+.chart-controls { display: flex; gap: .35rem; align-items: center; justify-content: flex-end; flex-wrap: wrap; margin: .4rem 0; font: 12px ui-monospace, monospace; }
 .chart-controls button, .chart-controls select { color: inherit; background: transparent; border: 1px solid #a1a1aa55; border-radius: 3px; padding: .35rem .55rem; cursor: pointer; }
 .chart-controls button:hover, .chart-controls button[aria-pressed="true"] { border-color: #b45309; color: #b45309; }
 .dark .chart-controls button:hover, .dark .chart-controls button[aria-pressed="true"] { color: #fbbf24; border-color: #fbbf24; }
 .chart-controls button:focus-visible, .chart-controls select:focus-visible { outline: 2px solid #b45309; outline-offset: 2px; }
 .stock-chart-controls { justify-content: flex-start; }
 .stock-chart { width: 100%; height: 460px; }
-.chart-readout, .chart-attribution { font: 11px ui-monospace, monospace; color: #71717a; line-height: 1.7; margin: .5rem 0; min-height: 1.7em; }
+.chart-readout, .chart-attribution { font: 12px ui-monospace, monospace; color: #71717a; line-height: 1.7; margin: .5rem 0; min-height: 1.7em; }
 .chart-attribution a { text-decoration: underline; }
-@media (max-width: 767px) { .stock-chart { height: 320px; } .stock-chart-controls button { min-height: 38px; } }
+@media (max-width: 767px) { .stock-chart { height: 320px; } }
 
 /* Open state for the tap-to-open definition popovers (static/mobile.js). Specificity beats .opacity-0. */
 [data-tip][data-open] > [role="tooltip"] {
@@ -195,4 +195,61 @@ button {
   /* Invisible 44px hit area for the 12px definition icon without moving layout. */
   .tip-hit { position: relative; }
   .tip-hit::after { content: ""; position: absolute; inset: -16px; }
+}
+
+@media (max-width: 767px) {
+  /* ---- Tables (recipes: sticky-first, fit, stack-mobile) ---- */
+  /* Scroll in place instead of crushing columns; opt out with .fit for prose tables. */
+  .overflow-x-auto > table:not(.fit):not(.stack-mobile),
+  .responsive-table > table:not(.fit):not(.stack-mobile) {
+    min-width: max-content;
+  }
+
+  .sticky-first { --sticky-bg: #fff; --sticky-edge: #e4e4e7; }
+  .dark .sticky-first { --sticky-bg: #18181b; --sticky-edge: #3f3f46; }
+  html.excel .sticky-first { --sticky-bg: #fff; --sticky-edge: #cbd5e1; }
+  .sticky-first > table :is(th, td):first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--sticky-bg);
+    box-shadow: 1px 0 0 var(--sticky-edge);
+  }
+
+  /* Row-per-card for lists you read rather than compare (front door, brief). */
+  .stack-mobile, .stack-mobile tbody { display: block; width: 100%; }
+  .stack-mobile thead { display: none; }
+  .stack-mobile tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25rem 0.75rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--stack-edge, #e4e4e7);
+  }
+  .dark .stack-mobile tr { --stack-edge: #27272a; }
+  .stack-mobile td { display: block; padding: 0 !important; text-align: left !important; }
+  .stack-mobile td:first-child { grid-column: 1 / -1; }
+  .stack-mobile td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #71717a;
+  }
+
+  /* ---- Touch floors: 12px text, 44px targets ---- */
+  [class*="text-[9px]"], [class*="text-[10px]"], [class*="text-[11px]"] { font-size: 12px !important; }
+
+  button, select, summary, [role="button"], body > nav a, a.sub-nav-pill, .mobile-nav-link,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"]) {
+    min-height: 44px;
+  }
+  #theme-toggle, #nav-settings, #mobile-nav-toggle {
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .sub-nav-pill, .chart-controls button { display: inline-flex; align-items: center; }
 }
