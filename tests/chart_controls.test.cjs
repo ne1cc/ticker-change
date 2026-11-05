@@ -23,14 +23,14 @@ test('numeric coordinates preserve gaps rather than manufacturing zeroes',()=>{
  assert.equal(JSON.stringify(c.points([90,100,110],[1,'N/A',null])),'[[90,1],[100,null],[110,null]]');
 });
 
-function rendererHarness({leftLabels=30,rightLabels=0}={}) {
+function rendererHarness({leftLabels=30,rightLabels=0,coarse=false}={}) {
  let visibility, domReady, instance;
  const element={clientWidth:800,clientHeight:460,style:{},attributes:{},classList:{add(){}},
    setAttribute(k,v){this.attributes[k]=v;},before(controls){this.controls=controls;}};
  const document={documentElement:{classList:{contains(){return false;}}},head:{append(script){queueMicrotask(()=>script.onload());}},
    createElement(tag){return {tag,style:{},children:[],setAttribute(){},append(...items){this.children.push(...items);},click(){}};},
    getElementById(){return element;},querySelectorAll(){return [];},addEventListener(name,fn){if(name==='DOMContentLoaded')domReady=fn;}};
- const context={window:{},document,console,location:{},
+ const context={window:{matchMedia:query=>({matches:coarse&&query==='(pointer: coarse)'})},document,console,location:{},
    IntersectionObserver:class{constructor(fn){visibility=fn;}observe(target){this.target=target;}},
    ResizeObserver:class{observe(){}},MutationObserver:class{observe(){}},
    echarts:{init(){instance={option:null,events:{},on(name,fn){this.events[name]=fn;},
@@ -113,4 +113,15 @@ test('long category labels reserve bounded gutters on narrow charts',async()=>{
  assert.equal(h.instance.option.yAxis.axisLabel.width,70.5);
  assert.equal(h.instance.option.yAxis.axisLabel.overflow,'truncate');
  assert.equal(h.instance.option.yAxis.data[0],'A very long institutional investor name');
+});
+
+test('coarse pointers get a line pointer, a tall slider and no inside zoom that would hijack page scroll',async()=>{
+ for (const [coarse,type,height,disabled] of [[true,'line',28,true],[false,'cross',15,undefined]]) {
+  const h=rendererHarness({coarse});
+  h.context.window.TerminalCharts.mount(h.element,{terminalViewKey:'touch',series:[{name:'S',type:'line',data:[[1,2]]}]}); h.show(); await flush();
+  const o=h.instance.option;
+  assert.equal(o.tooltip.axisPointer.type,type);
+  assert.equal(o.dataZoom[1].height,height);
+  assert.equal(o.dataZoom[0].disabled,disabled);
+ }
 });
