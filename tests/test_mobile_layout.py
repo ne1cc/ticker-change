@@ -163,6 +163,20 @@ def test_body_is_not_a_scroll_container(browsers, base_url):
     assert overflow_x == "clip", overflow_x
 
 
+def test_excel_risk_stats_values_are_not_clipped(browsers, base_url):
+    """The audit trusts overflow:hidden ancestors, so check the clipped-grid case directly."""
+    ctx, page = _phone_page(browsers("chromium"), "android-360")
+    try:
+        page.goto(base_url + "/analytics?ticker=AAA", wait_until="load")
+        page.wait_for_selector(".xl-grid .xl-val")
+        vw, rights = page.evaluate(
+            "[document.documentElement.clientWidth,"
+            " [...document.querySelectorAll('.xl-grid .xl-val')].map(e => e.getBoundingClientRect().right)]")
+    finally:
+        ctx.close()
+    assert rights and max(rights) <= vw, f"values reach {max(rights)} but viewport is {vw}"
+
+
 def test_glossary_anchor_lands_below_sticky_header(browsers, base_url):
     """The (i) icons link to /glossary#key; the entry must not hide under the pinned nav."""
     ctx, page = _phone_page(browsers("chromium"), "iphone-390")

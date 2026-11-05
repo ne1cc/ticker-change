@@ -295,3 +295,24 @@ html.excel .analytics-section .xl-titlebar {
     padding: 10px;
   }
 }
+
+/* Phones: keep the spreadsheet chrome at the 12px readability floor. */
+@media (max-width: 767px) {
+  html.excel .xl-titlebar,
+  html.excel .xl-titlebar-tag,
+  html.excel .xl-colhead,
+  html.excel .xl-corner,
+  html.excel .xl-rowno,
+  html.excel .xl-label,
+  html.excel .xl-sheet-body .grid.xl-kv > div > p:first-child { font-size: 12px; }
+
+  /* Risk Stats: three label/value pairs per row cannot fit 390px; stack one pair per line,
+     keeping the row number as a left gutter spanning its pairs. */
+  html.excel .xl-grid, html.excel .xl-grid tbody { display: block; table-layout: auto; min-width: 0; }
+  html.excel .xl-titlebar { min-width: 0; }  /* undo the 34rem swipe-sheet floor above: nothing is wide any more */
+  html.excel .xl-grid tr { display: grid; grid-template-columns: 34px minmax(0, 1fr) 6.5rem; }
+  html.excel .xl-grid tr > .xl-rowno { grid-column: 1; grid-row: 1 / span 3; }
+  html.excel .xl-grid tr > .xl-label { grid-column: 2; }
+  html.excel .xl-grid tr > .xl-val { grid-column: 3; text-align: right; }
+  html.excel .xl-grid tr > :is(.xl-label, .xl-val):empty { display: none; }
+}
