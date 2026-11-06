@@ -97,3 +97,11 @@ html.dark .payoff-cell { color:#f8fafc; }
   .payoff-grid-table .payoff-price-sticky { width:112px; }
   .payoff-grid-table .payoff-month-header { text-align:left; }
 }
+
+/* Phones: 12px text floor for the payoff simulator (its own sizes run 9-11px). */
+@media (max-width:767px) {
+  .payoff-leg-chip, .payoff-legs-table, .payoff-legs-table .payoff-button, .payoff-source,
+  .payoff-stat-label, .payoff-grid-table, .payoff-grid-table thead th, .payoff-date-header small,
+  .payoff-price-value, .payoff-price-move, .payoff-legend, .payoff-label, .payoff-slider-value,
+  .payoff-assumptions, .payoff-references, .payoff-segmented .payoff-button { font-size:12px !important; }
+}

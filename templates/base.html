@@ -2,7 +2,12 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <meta name="theme-color" content="#09090b">
+    <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="ticker/change">
     <title>{% block title %}Stock Price Tracker{% endblock %}</title>
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
     <script>
@@ -190,6 +195,7 @@
     </style>
     <link rel="stylesheet" href="/static/excel-mode.css">
     <link rel="stylesheet" href="/static/responsive.css">
+    <script defer src="/static/mobile.js"></script>
     <script>
       // Initialize theme before page load to prevent flash. Three states:
       // 'light' | 'dark' | 'excel'. Default to excel. Excel is a light theme,

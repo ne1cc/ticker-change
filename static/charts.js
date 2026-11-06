@@ -45,11 +45,13 @@
         ...(vertical && a.type === 'category' ? {width:Math.min(120, (state.element.clientWidth || 480) / 4), overflow:'truncate'} : {}),
         ...(terminalCompactTicks ? {formatter: value => new Intl.NumberFormat('en-US', {notation:'compact', maximumFractionDigits:1}).format(value)} : {}), ...a.axisLabel },
       axisLine: { lineStyle: { color: p.grid } }, splitLine: { lineStyle: { color: p.grid }, ...a.splitLine } });
+    // Touch screens: drag/pinch zoom would hijack page scroll, and a cross-hair needs hover.
+    const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
     const result = { animation: false, backgroundColor: 'transparent',
       textStyle: { fontFamily: 'JetBrains Mono, ui-monospace, monospace', color: p.text },
       grid: { left: 24, right: 24, top: 58, bottom: 62, containLabel: true },
-      tooltip: { trigger: 'axis', renderMode: 'richText', confine: true, backgroundColor: p.bg, textStyle: { color: p.text }, axisPointer: { type: 'cross' } },
-      aria: { enabled: true }, dataZoom: [{ type: 'inside', filterMode: 'none' }, { type: 'slider', height: 15, bottom: 10, borderColor: p.grid }], ...option };
+      tooltip: { trigger: 'axis', renderMode: 'richText', confine: true, backgroundColor: p.bg, textStyle: { color: p.text }, axisPointer: { type: coarse ? 'line' : 'cross' } },
+      aria: { enabled: true }, dataZoom: [{ type: 'inside', filterMode: 'none', disabled: coarse || undefined }, { type: 'slider', height: coarse ? 28 : 15, bottom: 10, borderColor: p.grid }], ...option };
     result.legend = {type:'scroll',top:5,...option.legend,textStyle:{color:p.text,fontSize:option.terminalLegendFontSize || 10}};
     for (const key of ['xAxis', 'yAxis', 'xAxis3D', 'yAxis3D', 'zAxis3D']) {
       if (option[key]) result[key] = Array.isArray(option[key]) ? option[key].map(a => axis(a, key === 'yAxis')) : axis(option[key], key === 'yAxis');

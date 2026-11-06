@@ -3,3 +3,6 @@
 # (duckdb powers the not-yet-wired-in warehouse.py analytics module).
 pytest
 duckdb
+# Mobile layout suite (tests/test_mobile_layout.py). Browsers are installed
+# separately: `python -m playwright install chromium webkit`.
+playwright

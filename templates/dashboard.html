@@ -27,13 +27,13 @@
   </div>
   {% else %}
   <section class="mb-8 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-    <div class="flex items-baseline justify-between mb-3">
+    <div class="flex flex-wrap items-baseline justify-between gap-x-3 mb-3">
       <h2 class="text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Notable moves</h2>
       <span class="text-[11px] text-zinc-400">{{ cards|length }} published · as of {{ generated_at }}</span>
     </div>
     {% if cards %}
     <div class="overflow-x-auto">
-      <table class="w-full text-sm">
+      <table class="stack-mobile w-full text-sm">
         <thead>
           <tr class="text-left text-[11px] uppercase tracking-wider text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
             <th class="py-2 pr-4 font-medium">Ticker</th>
@@ -53,21 +53,21 @@
               <span class="ml-1.5 text-[10px] text-zinc-400">{{ c.depth }}</span>
             </td>
             {% if c.return_fmt %}
-            <td class="py-2 pr-4 text-right font-mono font-semibold {% if c.direction == 'up' %}text-emerald-500{% elif c.direction == 'down' %}text-rose-500{% else %}text-zinc-400{% endif %}" title="session {{ c.session_date }}">{{ c.return_fmt }}</td>
+            <td data-label="Session" class="py-2 pr-4 text-right font-mono font-semibold {% if c.direction == 'up' %}text-emerald-500{% elif c.direction == 'down' %}text-rose-500{% else %}text-zinc-400{% endif %}" title="session {{ c.session_date }}">{{ c.return_fmt }}</td>
             {% else %}
-            <td class="py-2 pr-4 text-right text-xs italic text-zinc-400">{{ c.return_missing }}</td>
+            <td data-label="Session" class="py-2 pr-4 text-right text-xs italic text-zinc-400">{{ c.return_missing }}</td>
             {% endif %}
             {% if c.z_fmt %}
-            <td class="py-2 pr-4 text-right font-mono">{{ c.z_fmt }}</td>
+            <td data-label="Move z" class="py-2 pr-4 text-right font-mono">{{ c.z_fmt }}</td>
             {% else %}
-            <td class="py-2 pr-4 text-right text-xs italic text-zinc-400">{{ c.z_missing }}</td>
+            <td data-label="Move z" class="py-2 pr-4 text-right text-xs italic text-zinc-400">{{ c.z_missing }}</td>
             {% endif %}
             {% if c.volume_fmt %}
-            <td class="py-2 pr-4 text-right font-mono">{{ c.volume_fmt }}</td>
+            <td data-label="Volume" class="py-2 pr-4 text-right font-mono">{{ c.volume_fmt }}</td>
             {% else %}
-            <td class="py-2 pr-4 text-right text-xs italic text-zinc-400">{{ c.volume_missing }}</td>
+            <td data-label="Volume" class="py-2 pr-4 text-right text-xs italic text-zinc-400">{{ c.volume_missing }}</td>
             {% endif %}
-            <td class="py-2 pr-4 text-xs">
+            <td data-label="Significance" class="py-2 pr-4 text-xs">
               {% if c.significance_note == 'notable' %}
               <span class="rounded border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5">notable</span>
               {% elif c.significance_note == 'elevated' %}
@@ -78,8 +78,8 @@
               <span class="text-xs italic text-zinc-400">{{ c.z_missing }}</span>
               {% endif %}
             </td>
-            <td class="py-2 pr-4 text-xs {% if not c.earnings_note %}italic text-zinc-400{% endif %}">{{ c.earnings_note or 'no recent print' }}</td>
-            <td class="py-2 text-right text-[10px] text-zinc-400 whitespace-nowrap">
+            <td data-label="Earnings" class="py-2 pr-4 text-xs {% if not c.earnings_note %}italic text-zinc-400{% endif %}">{{ c.earnings_note or 'no recent print' }}</td>
+            <td data-label="Prices as of" class="py-2 text-right text-[10px] text-zinc-400 whitespace-nowrap">
               {{ c.as_of or 'no cached data' }}
             </td>
           </tr>

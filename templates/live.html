@@ -53,6 +53,7 @@
 {% endblock %}
 
 {% block content %}
+{% include "_desktop_banner.html" %}
 <div class="space-y-6">
   <!-- Header Bar -->
   <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm">
@@ -237,7 +238,7 @@
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
       
       <!-- Trades Feed (Left 3 columns) -->
-      <div class="lg:col-span-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm flex flex-col h-[600px] overflow-hidden">
+      <div class="lg:col-span-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm flex flex-col h-[440px] lg:h-[600px] overflow-hidden">
         <div class="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-900/50">
           <h2 class="text-sm font-bold text-zinc-900 dark:text-zinc-50">Trades Feed</h2>
           <span id="trades-velocity-label" class="text-[10px] uppercase font-bold text-zinc-400">0.0 t/s</span>
@@ -261,7 +262,7 @@
       </div>
       
       <!-- L2 Order Book (Middle 5 columns) -->
-      <div class="lg:col-span-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm flex flex-col h-[600px] overflow-hidden">
+      <div class="lg:col-span-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm flex flex-col h-[440px] lg:h-[600px] overflow-hidden">
         <div class="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 flex justify-between items-center">
           <h2 class="text-sm font-bold text-zinc-900 dark:text-zinc-50">{{ metric('Level 2 Depth (Order Book)', 'order_book') }}</h2>
           <div class="flex gap-2">
@@ -350,7 +351,7 @@
     </div>
 
     <!-- Market Depth (full-width row) -->
-    <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm flex flex-col h-[380px]">
+    <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm flex flex-col h-[320px] sm:h-[380px]">
       <div class="flex items-center justify-between mb-3">
         <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-50">{{ metric('Market Depth', 'market_depth') }}</h3>
         <span class="text-[10px] uppercase font-bold text-zinc-400">Cumulative size · <span id="depth-levels-label">15</span> levels / side</span>
@@ -609,6 +610,13 @@
       }
     };
   }
+
+  // Mobile browsers suspend background tabs and drop the socket; reconnect on return.
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible' && hasKey && (!socket || socket.readyState !== WebSocket.OPEN)) {
+      connectWebSocket();
+    }
+  });
 
   function startSessionWatcher() {
     if (marketSessionInterval) return;

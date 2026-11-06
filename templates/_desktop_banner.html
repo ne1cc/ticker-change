@@ -1,0 +1,6 @@
+{# Tier-3 notice: dense pages work on phones but are built for wide screens.
+   static/mobile.js removes it once dismissed (localStorage desktop_banner_dismissed). #}
+<div id="desktop-banner" class="md:hidden mx-4 mt-4 flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
+  <p class="flex-1">This page is built for wide screens. It works here, but a larger display is easier.</p>
+  <button type="button" data-dismiss aria-label="Dismiss" class="shrink-0 px-2 font-bold">&times;</button>
+</div>

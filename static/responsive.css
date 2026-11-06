@@ -1,9 +1,19 @@
 /* Shared responsive behavior for the dense dashboard layouts. */
 
-html,
-body {
+html {
   max-width: 100%;
   overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* clip, not hidden: hidden makes body a scroll container and silently
+   breaks position:sticky. */
+body {
+  max-width: 100%;
+  overflow-x: clip;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 img,
@@ -114,6 +124,37 @@ button {
     overflow-wrap: anywhere;
   }
 
+  /* iOS Safari zooms the page when a focused input is under 16px. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* Pinned top bar and ticker sub-nav. */
+  body > nav {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+  }
+
+  #ticker-sub-nav {
+    position: sticky;
+    top: 4rem;
+    z-index: 30;
+  }
+
+  #sub-nav-desc {
+    display: none;
+  }
+
+  /* An open menu (~20 links) is taller than the screen: scroll it inside the pinned bar. */
+  #mobile-nav-menu {
+    max-height: calc(100vh - 4rem);
+    max-height: calc(100dvh - 4rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
 }
 
 @media (max-width: 420px) {
@@ -124,13 +165,114 @@ button {
 
 /* Shared, compact chart controls in the terminal palette. */
 .terminal-chart { width: 100%; min-width: 0; position: relative; }
-.chart-controls { display: flex; gap: .35rem; align-items: center; justify-content: flex-end; flex-wrap: wrap; margin: .4rem 0; font: 11px ui-monospace, monospace; }
+.chart-controls { display: flex; gap: .35rem; align-items: center; justify-content: flex-end; flex-wrap: wrap; margin: .4rem 0; font: 12px ui-monospace, monospace; }
 .chart-controls button, .chart-controls select { color: inherit; background: transparent; border: 1px solid #a1a1aa55; border-radius: 3px; padding: .35rem .55rem; cursor: pointer; }
 .chart-controls button:hover, .chart-controls button[aria-pressed="true"] { border-color: #b45309; color: #b45309; }
 .dark .chart-controls button:hover, .dark .chart-controls button[aria-pressed="true"] { color: #fbbf24; border-color: #fbbf24; }
 .chart-controls button:focus-visible, .chart-controls select:focus-visible { outline: 2px solid #b45309; outline-offset: 2px; }
 .stock-chart-controls { justify-content: flex-start; }
 .stock-chart { width: 100%; height: 460px; }
-.chart-readout, .chart-attribution { font: 11px ui-monospace, monospace; color: #71717a; line-height: 1.7; margin: .5rem 0; min-height: 1.7em; }
+.chart-readout, .chart-attribution { font: 12px ui-monospace, monospace; color: #71717a; line-height: 1.7; margin: .5rem 0; min-height: 1.7em; }
 .chart-attribution a { text-decoration: underline; }
-@media (max-width: 767px) { .stock-chart { height: 320px; } .stock-chart-controls button { min-height: 38px; } }
+@media (max-width: 767px) { .stock-chart { height: 320px; } }
+
+/* Open state for the tap-to-open definition popovers (static/mobile.js). Specificity beats .opacity-0. */
+[data-tip][data-open] > [role="tooltip"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (max-width: 767px) {
+  /* Edge-fade hint: more content to the right of a scrolling table/tab strip. */
+  .overflow-x-auto.has-more,
+  .responsive-table.has-more {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+            mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+}
+
+@media (hover: none) {
+  /* Invisible 44px hit area for the 12px definition icon without moving layout. */
+  .tip-hit { position: relative; }
+  .tip-hit::after { content: ""; position: absolute; inset: -16px; }
+}
+
+@media (max-width: 767px) {
+  /* ---- Tables (recipes: sticky-first, fit, stack-mobile) ---- */
+  /* Scroll in place instead of crushing columns; opt out with .fit for prose tables. */
+  .overflow-x-auto > table:not(.fit):not(.stack-mobile),
+  .responsive-table > table:not(.fit):not(.stack-mobile) {
+    min-width: max-content;
+  }
+
+  .sticky-first { --sticky-bg: #fff; --sticky-edge: #e4e4e7; }
+  .dark .sticky-first { --sticky-bg: #18181b; --sticky-edge: #3f3f46; }
+  html.excel .sticky-first { --sticky-bg: #fff; --sticky-edge: #cbd5e1; }
+  .sticky-first > table :is(th, td):first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--sticky-bg);
+    box-shadow: 1px 0 0 var(--sticky-edge);
+  }
+
+  /* Row-per-card for lists you read rather than compare (front door, brief). */
+  .stack-mobile, .stack-mobile tbody { display: block; width: 100%; }
+  .stack-mobile thead { display: none; }
+  .stack-mobile tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25rem 0.75rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--stack-edge, #e4e4e7);
+  }
+  .dark .stack-mobile tr { --stack-edge: #27272a; }
+  .stack-mobile td { display: block; padding: 0 !important; text-align: left !important; }
+  .stack-mobile td:first-child { grid-column: 1 / -1; }
+  .stack-mobile td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font: normal 500 12px/1.4 ui-sans-serif, system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #71717a;
+  }
+
+  /* Label/value pairs (brief): term and value share a line, the receipt wraps beneath. */
+  .stack-pairs tr { grid-template-columns: 1fr auto; }
+  .stack-pairs td:first-child { grid-column: auto; }
+  .stack-pairs td:nth-child(2) { text-align: right !important; align-self: center; }
+  .stack-pairs td:last-child { grid-column: 1 / -1; white-space: normal !important; overflow-wrap: anywhere; }
+
+  /* ---- Touch floors: 12px text, 44px targets ---- */
+  [class*="text-[9px]"], [class*="text-[10px]"], [class*="text-[11px]"] { font-size: 12px !important; }
+
+  button, select, summary, [role="button"], body > nav a, a.sub-nav-pill, .mobile-nav-link,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"]) {
+    min-height: 44px !important;  /* a floor: page-level <style> blocks must not undercut it */
+  }
+  input[type="range"] { height: 44px; }  /* the track stays thin; the hit area is what grows */
+  /* WebKit ignores min-height on native selects, so give them a real height. */
+  select { height: 44px; }
+  #theme-toggle, #nav-settings, #mobile-nav-toggle {
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .sub-nav-pill, .chart-controls button { display: inline-flex; align-items: center; }
+}
+
+/* One shared height for chart mounts on phones (use instead of fixed pixel heights). */
+@media (max-width: 767px) { .chart-h { height: clamp(260px, 72vw, 420px); } }
+
+/* Top bar budget: brand + search + theme + menu must fit in one 64px row. Settings lives in the menu. */
+@media (max-width: 767px) {
+  #nav-settings { display: none; }
+  #top-nav-search-input { width: 6.5rem; }
+  #brand-link { min-width: 44px; }
+  #brand-link > span { font-size: 1rem; }
+}
+@media (max-width: 369px) {
+  #brand-link > span { display: none; }
+}

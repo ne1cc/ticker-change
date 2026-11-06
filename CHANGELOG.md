@@ -1,5 +1,28 @@
 # Ticker-Change - Development Session Log
 
+## November 5, 2026 - Mobile Browser Support
+
+**Session Summary:** Made every page usable on phone browsers and installable to the home screen
+
+---
+
+### ✨ New Features
+
+#### Mobile layout port
+**Description:** Responsive-in-place layout for all routes, with no separate mobile site
+**Implementation:**
+- Shared classes in `static/responsive.css` (`sticky-first`, `fit`, `stack-mobile`, `stack-pairs`, `chart-h`) and 12px text / 44px tap-target floors
+- `static/mobile.js` for tap-to-open definitions, scroll hints, theme-color sync, and the dismissible desktop-recommended banner on `/live`, `/options`, and Signal Lab
+- Web app manifest, icons, and `theme-color` meta so the app installs to the home screen (no service worker)
+- `tests/test_mobile_layout.py` runs Chromium and WebKit at phone sizes against every route; `tests/mobile_known.py` is empty
+
+**Files Changed:**
+- `static/responsive.css`, `static/mobile.js`, `static/manifest.webmanifest`, `static/icons/*`
+- `templates/base.html` and per-page templates
+- `tests/test_mobile_layout.py`, `tests/test_pwa_manifest.py`
+
+---
+
 ## January 11, 2026 - UI Enhancements and Documentation
 
 **Session Summary:** Added shiny card hover effect, updated button styling, and created documentation
