@@ -2,11 +2,14 @@
 {% block title %}Today — ticker/change{% endblock %}
 
 {% block content %}
+{% macro local_time(value) -%}
+<time class="dashboard-local-time" datetime="{{ value[:16].replace(' ', 'T') }}:00Z">{{ value[:16].replace('T', ' ') }} UTC</time>
+{%- endmacro %}
 <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
   <h1 class="text-2xl font-semibold tracking-tight mb-1">What changed today</h1>
   <p class="text-xs text-zinc-400 mb-6">
     The universe front door, assembled from published nightly briefs — never fetches on load.
-    {% if progress %}· Warming pass {{ progress.done }}/{{ progress.total }} published{% if progress.updated %} · updated {{ progress.updated[:16].replace('T', ' ') }}{% endif %}{% endif %}
+    {% if progress %}· Warming pass {{ progress.done }}/{{ progress.total }} published{% if progress.updated %} · updated {{ local_time(progress.updated) }}{% endif %}{% endif %}
   </p>
 
   <form id="dashboard-search-form" onsubmit="return dashboardSearch(event)"
@@ -29,7 +32,7 @@
   <section class="mb-8 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
     <div class="flex flex-wrap items-baseline justify-between gap-x-3 mb-3">
       <h2 class="text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Notable moves</h2>
-      <span class="text-[11px] text-zinc-400">{{ cards|length }} published · as of {{ generated_at }}</span>
+      <span class="text-[11px] text-zinc-400">{{ cards|length }} published · as of {{ local_time(generated_at) }}</span>
     </div>
     {% if cards %}
     <div class="overflow-x-auto">
@@ -80,7 +83,7 @@
             </td>
             <td data-label="Earnings" class="py-2 pr-4 text-xs {% if not c.earnings_note %}italic text-zinc-400{% endif %}">{{ c.earnings_note or 'no recent print' }}</td>
             <td data-label="Prices as of" class="py-2 text-right text-[10px] text-zinc-400 whitespace-nowrap">
-              {{ c.as_of or 'no cached data' }}
+              {% if c.as_of %}{{ local_time(c.as_of) }}{% else %}no cached data{% endif %}
             </td>
           </tr>
           {% endfor %}
@@ -113,6 +116,13 @@
 
 {% block scripts %}
 <script>
+  document.querySelectorAll('.dashboard-local-time').forEach((element) => {
+    const date = new Date(element.dateTime);
+    if (!Number.isNaN(date.getTime())) {
+      element.textContent = date.toLocaleString(undefined, {dateStyle: 'short', timeStyle: 'short'});
+    }
+  });
+
   function dashboardSearch(e) {
     e.preventDefault();
     const input = document.getElementById('dashboard-search-input');

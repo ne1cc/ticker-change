@@ -84,6 +84,16 @@ def _poison_network(stack):
 
 
 class TestColdDashboard(_IsolatedDB, unittest.TestCase):
+    def test_dashboard_timestamps_identify_utc_for_local_display(self):
+        db.cache_set("brief", "warm_progress",
+                     {"done": 1, "total": 1, "updated": "2026-10-14T05:00:00"})
+        with patch.object(app_module.radar, "universe_symbols", return_value=[]), \
+             patch.object(app_module.brief, "now_iso", return_value="2026-10-14T05:00:00"):
+            html = self._client().get("/").get_data(as_text=True)
+        self.assertEqual(html.count('datetime="2026-10-14T05:00:00Z"'), 2)
+        self.assertIn('2026-10-14 05:00 UTC', html)
+        self.assertIn('toLocaleString', html)
+
     def test_cold_renders_skeleton_200_and_kicks_warmer(self):
         with patch.object(app_module, "_warm_brief_universe") as warm:
             resp = self._client().get("/")
@@ -107,6 +117,13 @@ class TestColdDashboard(_IsolatedDB, unittest.TestCase):
 
 
 class TestPublicationsOnly(_IsolatedDB, unittest.TestCase):
+    def test_price_refresh_is_marked_as_utc(self):
+        _seed("AAA")
+        app_module.publish_brief("AAA")
+        html = self._client().get("/").get_data(as_text=True)
+        self.assertIn('class="dashboard-local-time" datetime=', html)
+        self.assertIn(' UTC</time>', html)
+
     def test_render_touches_no_network(self):
         for t in ("AAA", "BBB"):
             _seed(t)
